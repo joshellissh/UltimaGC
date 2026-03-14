@@ -1,0 +1,7 @@
+config BR2_PACKAGE_ULTIMA_APP
+	bool "ultima-app"
+	depends on BR2_PACKAGE_QT5BASE
+	depends on BR2_PACKAGE_QT5DECLARATIVE
+	help
+	  Ultima fullscreen Qt5 QML application.
+	  Displays a hello world greeting and live clock.
