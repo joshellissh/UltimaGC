@@ -1,0 +1,23 @@
+#!/bin/sh
+#
+# Mount the boot (FAT32) partition for debug log access from macOS
+#
+
+case "$1" in
+    start)
+        echo "Mounting boot partition..."
+        mkdir -p /boot
+        mount -t vfat /dev/mmcblk0p1 /boot
+        ;;
+    stop)
+        umount /boot 2>/dev/null
+        ;;
+    restart)
+        "$0" stop
+        "$0" start
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+        ;;
+esac

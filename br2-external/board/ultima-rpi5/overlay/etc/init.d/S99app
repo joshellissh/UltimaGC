@@ -1,0 +1,52 @@
+#!/bin/sh
+#
+# Launch Ultima Qt app
+#
+
+LOG="/boot/ultima-debug.log"
+APP_LOG="/boot/ultima-app.log"
+
+case "$1" in
+    start)
+        echo "Starting Ultima app..."
+        echo "=== S99app start: $(date) ===" >> "$LOG"
+
+        echo "--- DRM devices ---" >> "$LOG"
+        ls -la /dev/dri/ >> "$LOG" 2>&1
+
+        echo "--- dmesg DRM ---" >> "$LOG"
+        dmesg | grep -i drm >> "$LOG" 2>&1
+
+        echo "--- Input devices ---" >> "$LOG"
+        ls -la /dev/input/ >> "$LOG" 2>&1
+
+        export QT_QPA_PLATFORM=eglfs
+        export QT_QPA_EGLFS_KMS_CONFIG=/etc/qt-kms.conf
+        export QT_QPA_EGLFS_INTEGRATION=eglfs_kms
+        export XDG_RUNTIME_DIR=/tmp/runtime
+        export QT_LOGGING_RULES="*=true"
+        export QT_QPA_EGLFS_DEBUG=1
+
+        echo "--- Environment ---" >> "$LOG"
+        env | grep -E "^(QT_|XDG_|DISPLAY|WAYLAND)" >> "$LOG" 2>&1
+
+        mkdir -p "$XDG_RUNTIME_DIR"
+
+        echo "--- Launching ultima-app ---" >> "$LOG"
+        /root/app/ultima-app >> "$APP_LOG" 2>&1 &
+        echo "ultima-app PID: $!" >> "$LOG"
+        ;;
+    stop)
+        echo "Stopping Ultima app..."
+        killall -q ultima-app 2>/dev/null
+        ;;
+    restart)
+        "$0" stop
+        sleep 1
+        "$0" start
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+        ;;
+esac

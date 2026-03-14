@@ -1,0 +1,13 @@
+# RPi5 boot config
+arm_64bit=1
+kernel=Image
+
+# GPU/Display - KMS driver (RPi5)
+dtoverlay=vc4-kms-v3d-pi5
+
+# Fast boot
+disable_splash=1
+boot_delay=0
+
+# Serial console
+enable_uart=1
