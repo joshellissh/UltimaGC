@@ -3,70 +3,70 @@ import QtQuick.Window 2.15
 
 Window {
     id: root
-    visibility: Window.FullScreen
+    width: 1600
+    height: 720
+    visibility: Window.Windowed
     color: "black"
 
-    // Hello title
-    Text {
-        id: title
-        text: "Hello, Ultima"
-        color: "white"
-        font.pixelSize: 72
-        font.weight: Font.Light
-        anchors.horizontalCenter: parent.horizontalCenter
-        anchors.top: parent.top
-        anchors.topMargin: parent.height * 0.25
+    SimEngine {
+        id: sim
     }
 
-    // Live clock
-    Text {
-        id: clock
-        color: "#aaaaaa"
-        font.pixelSize: 48
-        font.weight: Font.Light
-        anchors.horizontalCenter: parent.horizontalCenter
-        anchors.top: title.bottom
-        anchors.topMargin: 40
-
-        Timer {
-            interval: 1000
-            running: true
-            repeat: true
-            triggeredOnStart: true
-            onTriggered: {
-                var now = new Date()
-                clock.text = Qt.formatTime(now, "hh:mm:ss AP")
-            }
-        }
+    // Left gauge: Speedometer
+    CircularGauge {
+        id: speedGauge
+        x: 50
+        y: 30
+        width: 600
+        height: 600
+        value: sim.speed
+        minValue: 0
+        maxValue: 220
+        arcColor: "#FF8C00"
+        needleColor: "#FF8C00"
+        unitLabel: "km/h"
+        warningStart: 180
+        majorTicks: [0, 20, 40, 60, 80, 100, 120, 140, 160, 180, 200, 220]
+        minorTickCount: 3
     }
 
-    // Touch feedback
-    Text {
-        id: touchLabel
-        color: "#666666"
-        font.pixelSize: 24
-        anchors.horizontalCenter: parent.horizontalCenter
+    // Center decorative element
+    CenterLine {
+        x: 550
+        y: 60
+        width: 500
+        height: 560
+    }
+
+    // Right gauge: Fuel consumption
+    CircularGauge {
+        id: fuelGauge
+        x: 950
+        y: 30
+        width: 600
+        height: 600
+        value: sim.fuelConsumption
+        minValue: 0
+        maxValue: 25
+        arcColor: "#00CED1"
+        needleColor: "#00CED1"
+        unitLabel: "l/100km"
+        majorTicks: [0, 5, 10, 15, 20, 25]
+        minorTickCount: 4
+    }
+
+    // Bottom info bar
+    InfoBar {
+        anchors.left: parent.left
+        anchors.right: parent.right
         anchors.bottom: parent.bottom
-        anchors.bottomMargin: 60
-        opacity: 0
-
-        Behavior on opacity {
-            NumberAnimation { duration: 300 }
-        }
-    }
-
-    MouseArea {
-        anchors.fill: parent
-        onClicked: function(mouse) {
-            touchLabel.text = "Touch: " + Math.round(mouse.x) + ", " + Math.round(mouse.y)
-            touchLabel.opacity = 1.0
-            fadeTimer.restart()
-        }
-    }
-
-    Timer {
-        id: fadeTimer
-        interval: 2000
-        onTriggered: touchLabel.opacity = 0
+        height: 50
+        speed: sim.speed
+        fuelConsumption: sim.fuelConsumption
+        gear: sim.gear
+        totalOdo: sim.totalOdo
+        tripOdo: sim.tripOdo
+        outsideTemp: sim.outsideTemp
+        driveMode: sim.driveMode
     }
 }

@@ -3,22 +3,35 @@
 # Launch Ultima Qt app
 #
 
-LOG="/boot/ultima-debug.log"
-APP_LOG="/boot/ultima-app.log"
-
 case "$1" in
     start)
         echo "Starting Ultima app..."
+
+        # Mount boot partition for logs (derive from root device)
+        mkdir -p /boot
+        if ! mountpoint -q /boot 2>/dev/null; then
+            ROOT_DEV=$(awk '$2 == "/" {print $1}' /proc/mounts)
+            [ "$ROOT_DEV" = "/dev/root" ] && ROOT_DEV=$(readlink -f /dev/root 2>/dev/null)
+            BOOT_DEV=$(echo "$ROOT_DEV" | sed 's/2$/1/')
+            [ -b "$BOOT_DEV" ] && mount -t vfat "$BOOT_DEV" /boot 2>/dev/null
+        fi
+
+        if mountpoint -q /boot 2>/dev/null; then
+            LOG="/boot/ultima-debug.log"
+            APP_LOG="/boot/ultima-app.log"
+        else
+            LOG="/var/log/ultima-debug.log"
+            APP_LOG="/var/log/ultima-app.log"
+        fi
+
+        > "$LOG"
+        > "$APP_LOG"
+
         echo "=== S99app start: $(date) ===" >> "$LOG"
-
-        echo "--- DRM devices ---" >> "$LOG"
+        uname -a >> "$LOG"
         ls -la /dev/dri/ >> "$LOG" 2>&1
-
-        echo "--- dmesg DRM ---" >> "$LOG"
-        dmesg | grep -i drm >> "$LOG" 2>&1
-
-        echo "--- Input devices ---" >> "$LOG"
-        ls -la /dev/input/ >> "$LOG" 2>&1
+        lsmod >> "$LOG" 2>&1
+        dmesg | grep -iE 'drm|vc4|v3d|hdmi' >> "$LOG" 2>&1
 
         export QT_QPA_PLATFORM=eglfs
         export QT_QPA_EGLFS_KMS_CONFIG=/etc/qt-kms.conf
@@ -26,19 +39,28 @@ case "$1" in
         export XDG_RUNTIME_DIR=/tmp/runtime
         export QT_LOGGING_RULES="*=true"
         export QT_QPA_EGLFS_DEBUG=1
-
-        echo "--- Environment ---" >> "$LOG"
-        env | grep -E "^(QT_|XDG_|DISPLAY|WAYLAND)" >> "$LOG" 2>&1
-
         mkdir -p "$XDG_RUNTIME_DIR"
 
-        echo "--- Launching ultima-app ---" >> "$LOG"
         /root/app/ultima-app >> "$APP_LOG" 2>&1 &
-        echo "ultima-app PID: $!" >> "$LOG"
+        APP_PID=$!
+        echo "ultima-app PID: $APP_PID" >> "$LOG"
+
+        sleep 3
+        if ! kill -0 "$APP_PID" 2>/dev/null; then
+            wait "$APP_PID" 2>/dev/null
+            echo "APP CRASHED (exit $?)" >> "$LOG"
+            cat "$APP_LOG" >> "$LOG" 2>&1
+        else
+            echo "App running (PID $APP_PID)" >> "$LOG"
+        fi
+
+        dmesg > "$(dirname $LOG)/dmesg.log" 2>&1
+        sync
         ;;
     stop)
-        echo "Stopping Ultima app..."
         killall -q ultima-app 2>/dev/null
+        dmesg > /var/log/dmesg.log 2>&1
+        sync
         ;;
     restart)
         "$0" stop

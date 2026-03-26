@@ -23,18 +23,12 @@ fi
 
 echo "Boot partition mounted at: $MOUNT"
 
-echo ""
-echo "===== ultima-debug.log ====="
-if [ -f "$MOUNT/ultima-debug.log" ]; then
-    cat "$MOUNT/ultima-debug.log"
-else
-    echo "(not found)"
-fi
-
-echo ""
-echo "===== ultima-app.log ====="
-if [ -f "$MOUNT/ultima-app.log" ]; then
-    cat "$MOUNT/ultima-app.log"
-else
-    echo "(not found)"
-fi
+for log in ultima-debug.log ultima-app.log dmesg.log; do
+    echo ""
+    echo "===== $log ====="
+    if [ -f "$MOUNT/$log" ]; then
+        cat "$MOUNT/$log"
+    else
+        echo "(not found)"
+    fi
+done

@@ -15,30 +15,43 @@ fi
 echo "Image: $IMG_FILE ($(ls -lh "$IMG_FILE" | awk '{print $5}'))"
 echo ""
 
-# List available disks
-echo "Available disks:"
-diskutil list external physical 2>/dev/null || diskutil list
+# Find external physical disks
+DISKS=()
+while IFS= read -r line; do
+    DISKS+=("$line")
+done < <(diskutil list external physical 2>/dev/null | grep '^/dev/disk' | awk '{print $1}')
+
+if [ ${#DISKS[@]} -eq 0 ]; then
+    echo "No external disks found. Insert an SD card and try again."
+    exit 1
+fi
+
+echo "External disks:"
+echo ""
+for i in "${!DISKS[@]}"; do
+    disk="${DISKS[$i]}"
+    info=$(diskutil info "$disk" 2>/dev/null)
+    name=$(echo "$info" | grep 'Media Name' | sed 's/.*: *//')
+    size=$(echo "$info" | grep 'Disk Size' | sed 's/.*: *//' | sed 's/ (.*//')
+    printf "  [%d]  %s  —  %s  (%s)\n" "$((i+1))" "$disk" "${name:-Unknown}" "${size:-?}"
+done
 echo ""
 
-read -rp "Enter SD card device (e.g., /dev/disk4): " DISK
-
-if [ -z "$DISK" ]; then
-    echo "No device specified. Aborting."
-    exit 1
+if [ ${#DISKS[@]} -eq 1 ]; then
+    read -rp "Press Enter to flash ${DISKS[0]}: "
+    DISK="${DISKS[0]}"
+else
+    read -rp "Select disk [1-${#DISKS[@]}]: " choice
+    if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt ${#DISKS[@]} ]; then
+        echo "Invalid selection. Aborting."
+        exit 1
+    fi
+    DISK="${DISKS[$((choice-1))]}"
 fi
 
 # Safety check
 if [[ "$DISK" == "/dev/disk0" || "$DISK" == "/dev/disk1" ]]; then
     echo "ERROR: Refusing to write to $DISK (likely your system disk)."
-    exit 1
-fi
-
-echo ""
-echo "WARNING: This will ERASE ALL DATA on $DISK"
-read -rp "Are you sure? (yes/no): " CONFIRM
-
-if [ "$CONFIRM" != "yes" ]; then
-    echo "Aborting."
     exit 1
 fi
 
