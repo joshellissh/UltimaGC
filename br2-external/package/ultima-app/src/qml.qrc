@@ -1,5 +1,9 @@
 <RCC>
     <qresource prefix="/">
         <file>main.qml</file>
+        <file>CircularGauge.qml</file>
+        <file>SimEngine.qml</file>
+        <file>InfoBar.qml</file>
+        <file>CenterLine.qml</file>
     </qresource>
 </RCC>

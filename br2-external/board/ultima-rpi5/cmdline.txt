@@ -1,1 +1,1 @@
-root=/dev/mmcblk0p2 rootwait console=tty1 console=ttyAMA10,115200 vt.global_cursor_default=0
+root=/dev/sda2 rootwait console=tty1 console=ttyAMA10,115200 vt.global_cursor_default=0
