@@ -8,6 +8,10 @@ dtoverlay=vc4-kms-v3d-pi5
 # Fast boot
 disable_splash=1
 boot_delay=0
+force_turbo=1
+
+# Skip network install screen
+disable_net_install=1
 
 # Serial console
 enable_uart=1

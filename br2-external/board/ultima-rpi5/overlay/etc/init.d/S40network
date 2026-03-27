@@ -1,42 +1,22 @@
 #!/bin/sh
 #
-# Start WiFi networking
+# Start WiFi networking (backgrounded for fast boot)
 #
-
-LOG="/boot/ultima-debug.log"
 
 case "$1" in
     start)
-        echo "Starting WiFi..."
-        echo "=== S40network start: $(date) ===" >> "$LOG"
-
-        echo "--- dmesg brcmfmac/wifi ---" >> "$LOG"
-        dmesg | grep -iE "brcm|wifi|wlan|mmc|sdio|firm" >> "$LOG" 2>&1
-
-        echo "--- firmware files ---" >> "$LOG"
-        ls -la /lib/firmware/brcm/brcmfmac43455* >> "$LOG" 2>&1
-        ls -la /lib/firmware/cypress/cyfmac43455* >> "$LOG" 2>&1
-
-        echo "--- ip link ---" >> "$LOG"
-        ip link >> "$LOG" 2>&1
-
-        echo "--- Starting wpa_supplicant ---" >> "$LOG"
-        wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant.conf >> "$LOG" 2>&1
-        echo "wpa_supplicant exit code: $?" >> "$LOG"
-
-        sleep 2
-
-        echo "--- Starting udhcpc ---" >> "$LOG"
-        udhcpc -i wlan0 -b -q >> "$LOG" 2>&1
-        echo "udhcpc exit code: $?" >> "$LOG"
-
-        sleep 2
-
-        echo "--- ip addr ---" >> "$LOG"
-        ip addr >> "$LOG" 2>&1
+        (
+            modprobe brcmfmac 2>/dev/null
+            # Wait for wlan0 to appear
+            for i in $(seq 1 30); do
+                [ -d /sys/class/net/wlan0 ] && break
+                sleep 1
+            done
+            wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant.conf 2>/dev/null
+            udhcpc -i wlan0 -b -q 2>/dev/null
+        ) &
         ;;
     stop)
-        echo "Stopping WiFi..."
         killall -q wpa_supplicant 2>/dev/null
         killall -q udhcpc 2>/dev/null
         ifconfig wlan0 down 2>/dev/null
