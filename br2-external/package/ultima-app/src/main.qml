@@ -55,6 +55,16 @@ Window {
         minorTickCount: 4
     }
 
+    // Boot time indicator
+    Text {
+        text: "Boot: " + bootTime.toFixed(1) + "s"
+        color: "#888888"
+        font.pixelSize: 18
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.top: parent.top
+        anchors.topMargin: 10
+    }
+
     // Bottom info bar
     InfoBar {
         anchors.left: parent.left
