@@ -3,7 +3,7 @@
         <file>main.qml</file>
         <file>CircularGauge.qml</file>
         <file>SimEngine.qml</file>
-        <file>InfoBar.qml</file>
-        <file>CenterLine.qml</file>
+        <file>background.png</file>
+        <file>needle.png</file>
     </qresource>
 </RCC>

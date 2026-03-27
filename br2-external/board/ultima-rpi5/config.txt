@@ -6,6 +6,7 @@ kernel=Image
 dtoverlay=vc4-kms-v3d-pi5
 
 # Fast boot
+disable_splash=1
 boot_delay=0
 force_turbo=1
 
