@@ -8,75 +8,81 @@ Window {
     visibility: Window.Windowed
     color: "black"
 
+    // Background image
+    Image {
+        anchors.fill: parent
+        source: "qrc:/background.png"
+        fillMode: Image.PreserveAspectCrop
+    }
+
     SimEngine {
         id: sim
     }
 
-    // Left gauge: Speedometer
+    // Left gauge: Speedometer — pivot at (351, 342)
     CircularGauge {
         id: speedGauge
-        x: 50
-        y: 30
+        x: 351 - width / 2
+        y: 342 - height / 2
         width: 600
         height: 600
         value: sim.speed
         minValue: 0
         maxValue: 220
-        arcColor: "#FF8C00"
-        needleColor: "#FF8C00"
-        unitLabel: "km/h"
-        warningStart: 180
-        majorTicks: [0, 20, 40, 60, 80, 100, 120, 140, 160, 180, 200, 220]
-        minorTickCount: 3
+        startAngle: 216.5
+        endAngle: 450.5
     }
 
-    // Center decorative element
-    CenterLine {
-        x: 550
-        y: 60
-        width: 500
-        height: 560
-    }
-
-    // Right gauge: Fuel consumption
+    // Right gauge: Tachometer — pivot at (1251, 343)
     CircularGauge {
-        id: fuelGauge
-        x: 950
-        y: 30
+        id: rpmGauge
+        x: 1251 - width / 2
+        y: 343 - height / 2
         width: 600
         height: 600
-        value: sim.fuelConsumption
+        value: sim.rpm / 1000
         minValue: 0
-        maxValue: 25
-        arcColor: "#00CED1"
-        needleColor: "#00CED1"
-        unitLabel: "l/100km"
-        majorTicks: [0, 5, 10, 15, 20, 25]
-        minorTickCount: 4
+        maxValue: 8
+        startAngle: 270
+        endAngle: 503
     }
 
-    // Boot time indicator
-    Text {
-        text: "Boot: " + bootTime.toFixed(1) + "s"
-        color: "#888888"
-        font.pixelSize: 18
-        anchors.horizontalCenter: parent.horizontalCenter
-        anchors.top: parent.top
-        anchors.topMargin: 10
+    // Bottom-left: Fuel level — pivot at (149, 602)
+    CircularGauge {
+        id: fuelGauge
+        x: 149 - width / 2
+        y: 602 - height / 2
+        width: 200
+        height: 200
+        value: sim.fuelLevel
+        minValue: 0
+        maxValue: 1
+        startAngle: 217
+        endAngle: 307.5
+        needleWidth: 28
+        needleHeight: 100
+        pivotX: 14
+        pivotY: 74
     }
 
-    // Bottom info bar
-    InfoBar {
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        height: 50
-        speed: sim.speed
-        fuelConsumption: sim.fuelConsumption
-        gear: sim.gear
-        totalOdo: sim.totalOdo
-        tripOdo: sim.tripOdo
-        outsideTemp: sim.outsideTemp
-        driveMode: sim.driveMode
+    // Bottom-right: Coolant temp — pivot at (1453, 602)
+    CircularGauge {
+        id: coolantGauge
+        x: 1453 - width / 2
+        y: 602 - height / 2
+        width: 200
+        height: 200
+        value: sim.coolantTemp
+        minValue: 160
+        maxValue: 240
+        startAngle: 142
+        endAngle: 53.5
+        counterClockwise: true
+        needleWidth: 28
+        needleHeight: 100
+        pivotX: 14
+        pivotY: 74
     }
+
+
 }
