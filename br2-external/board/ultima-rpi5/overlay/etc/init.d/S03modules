@@ -1,8 +1,0 @@
-#!/bin/sh
-case "$1" in
-    start)
-        modprobe vc4 2>/dev/null
-        modprobe brcmfmac 2>/dev/null
-        sleep 1
-        ;;
-esac

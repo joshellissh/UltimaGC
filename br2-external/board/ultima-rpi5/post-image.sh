@@ -26,6 +26,14 @@ done
 # Add the kernel image
 FILES+=( "Image" )
 
+# Add EEPROM update files if present (one-time bootloader config)
+EEPROM_DIR="$BOARD_DIR/eeprom-update"
+if [ -f "$EEPROM_DIR/pieeprom.upd" ] && [ -f "$EEPROM_DIR/recovery.bin" ]; then
+    cp "$EEPROM_DIR/pieeprom.upd" "$BINARIES_DIR/"
+    cp "$EEPROM_DIR/recovery.bin" "$BINARIES_DIR/"
+    FILES+=( "pieeprom.upd" "recovery.bin" )
+fi
+
 # Generate genimage.cfg from the file list
 BOOT_FILES=$(printf '\t\t\t"%s",\n' "${FILES[@]}")
 cat > "${GENIMAGE_CFG}" << EOF

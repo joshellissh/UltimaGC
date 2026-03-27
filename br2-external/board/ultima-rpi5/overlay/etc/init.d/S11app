@@ -1,0 +1,41 @@
+#!/bin/sh
+#
+# Launch Ultima Qt app (early — before network/SSH)
+#
+
+case "$1" in
+    start)
+        # Mount boot partition for logs
+        mkdir -p /boot
+        if ! mountpoint -q /boot 2>/dev/null; then
+            ROOT_DEV=$(awk '$2 == "/" {print $1}' /proc/mounts)
+            [ "$ROOT_DEV" = "/dev/root" ] && ROOT_DEV=$(readlink -f /dev/root 2>/dev/null)
+            BOOT_DEV=$(echo "$ROOT_DEV" | sed 's/2$/1/')
+            [ -b "$BOOT_DEV" ] && mount -t vfat "$BOOT_DEV" /boot 2>/dev/null
+        fi
+
+        export QT_QPA_PLATFORM=eglfs
+        export QT_QPA_EGLFS_KMS_CONFIG=/etc/qt-kms.conf
+        export QT_QPA_EGLFS_INTEGRATION=eglfs_kms
+        export XDG_RUNTIME_DIR=/tmp/runtime
+        mkdir -p "$XDG_RUNTIME_DIR"
+
+        if mountpoint -q /boot 2>/dev/null; then
+            /root/app/ultima-app > /boot/ultima-app.log 2>&1 &
+        else
+            /root/app/ultima-app > /var/log/ultima-app.log 2>&1 &
+        fi
+        ;;
+    stop)
+        killall -q ultima-app 2>/dev/null
+        ;;
+    restart)
+        "$0" stop
+        sleep 1
+        "$0" start
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+        ;;
+esac
