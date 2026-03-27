@@ -17,6 +17,7 @@ case "$1" in
         export QT_QPA_PLATFORM=eglfs
         export QT_QPA_EGLFS_KMS_CONFIG=/etc/qt-kms.conf
         export QT_QPA_EGLFS_INTEGRATION=eglfs_kms
+        export QT_QPA_EGLFS_NO_LIBINPUT=1
         export XDG_RUNTIME_DIR=/tmp/runtime
         mkdir -p "$XDG_RUNTIME_DIR"
 
