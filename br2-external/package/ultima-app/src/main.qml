@@ -84,5 +84,33 @@ Window {
         pivotY: 74
     }
 
+    // Touch feedback dot
+    Rectangle {
+        id: touchDot
+        width: 30
+        height: 30
+        radius: 15
+        color: "#00ffff"
+        opacity: 0
+        z: 100
 
+        SequentialAnimation {
+            id: touchAnim
+            PropertyAction { target: touchDot; property: "opacity"; value: 1.0 }
+            PropertyAction { target: touchDot; property: "scale"; value: 0.5 }
+            ParallelAnimation {
+                NumberAnimation { target: touchDot; property: "scale"; to: 2.0; duration: 400; easing.type: Easing.OutQuad }
+                NumberAnimation { target: touchDot; property: "opacity"; to: 0; duration: 400; easing.type: Easing.OutQuad }
+            }
+        }
+    }
+
+    MouseArea {
+        anchors.fill: parent
+        onPressed: {
+            touchDot.x = mouse.x - touchDot.width / 2
+            touchDot.y = mouse.y - touchDot.height / 2
+            touchAnim.restart()
+        }
+    }
 }
