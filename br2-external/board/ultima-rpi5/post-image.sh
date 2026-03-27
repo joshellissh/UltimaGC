@@ -26,12 +26,6 @@ done
 # Add the kernel image
 FILES+=( "Image" )
 
-# Add splash screen if present
-if [ -f "$BOARD_DIR/splash.bmp" ]; then
-    cp "$BOARD_DIR/splash.bmp" "$BINARIES_DIR/"
-    FILES+=( "splash.bmp" )
-fi
-
 # Add EEPROM update files if present (one-time bootloader config)
 EEPROM_DIR="$BOARD_DIR/eeprom-update"
 if [ -f "$EEPROM_DIR/pieeprom.upd" ] && [ -f "$EEPROM_DIR/recovery.bin" ]; then

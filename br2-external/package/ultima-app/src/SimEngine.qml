@@ -4,12 +4,15 @@ Item {
     id: engine
 
     property real speed: 0
+    property real rpm: 0
     property real fuelConsumption: 3.5
     property int gear: 0
     property real totalOdo: 2347.0
     property real tripOdo: 0.0
     property real outsideTemp: 14.5
     property string driveMode: "ECO PRO"
+    property real fuelLevel: 0.7
+    property real coolantTemp: 190
 
     // Internal state
     property real _targetSpeed: 0
@@ -58,12 +61,28 @@ Item {
             else if (engine.speed < 140) engine.gear = 5
             else engine.gear = 6
 
+            // RPM derived from speed and gear
+            if (engine.gear === 0) {
+                engine.rpm = 800 + Math.random() * 100  // idle
+            } else {
+                var gearRatios = [0, 3.5, 2.5, 1.8, 1.4, 1.1, 0.9]
+                var baseRpm = engine.speed * gearRatios[engine.gear] * 30
+                engine.rpm = Math.max(800, Math.min(8000, baseRpm + (Math.random() - 0.5) * 200))
+            }
+
             // Trip odo increments based on speed (km/h -> km per tick)
             engine.tripOdo += engine.speed * dt / 3600.0
             engine.totalOdo += engine.speed * dt / 3600.0
 
             // Slight outside temp drift
             engine.outsideTemp += (Math.random() - 0.5) * 0.02
+
+            // Fuel slowly decreases
+            engine.fuelLevel = Math.max(0, engine.fuelLevel - engine.speed * dt / 360000.0)
+
+            // Coolant temp settles around 190-200, rises with RPM
+            var targetCoolant = 185 + engine.rpm / 2000 * 15 + (Math.random() - 0.5) * 2
+            engine.coolantTemp += (targetCoolant - engine.coolantTemp) * 0.01
         }
     }
 }
