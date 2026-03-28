@@ -9,6 +9,10 @@ dtoverlay=vc4-kms-v3d-pi5
 disable_splash=1
 boot_delay=0
 force_turbo=1
+dtparam=pciex1=off
+
+# Disable Bluetooth
+dtoverlay=disable-bt
 
 # Skip network install screen
 disable_net_install=1
