@@ -13,11 +13,23 @@ Item {
     property string driveMode: "ECO PRO"
     property real fuelLevel: 0.7
     property real coolantTemp: 190
+    property bool leftIndicator: false
+    property bool rightIndicator: false
 
     // Internal state
     property real _targetSpeed: 0
     property real _phaseTimer: 0
     property real _accel: 0
+
+    Timer {
+        interval: 1000
+        running: true
+        repeat: true
+        onTriggered: {
+            engine.leftIndicator = !engine.leftIndicator
+            engine.rightIndicator = !engine.rightIndicator
+        }
+    }
 
     Timer {
         interval: 60
