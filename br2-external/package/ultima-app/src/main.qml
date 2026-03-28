@@ -84,6 +84,23 @@ Window {
         pivotY: 74
     }
 
+    // Left turn signal indicator
+    Image {
+        x: 25
+        y: 23
+        source: "qrc:/left_indicator.png"
+        visible: sim.leftIndicator
+    }
+
+    // Right turn signal indicator (mirrored)
+    Image {
+        x: 1600 - 25 - width
+        y: 23
+        source: "qrc:/left_indicator.png"
+        visible: sim.rightIndicator
+        mirror: true
+    }
+
     // Touch feedback dot
     Rectangle {
         id: touchDot
