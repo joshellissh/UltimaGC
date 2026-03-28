@@ -8,10 +8,9 @@ case "$1" in
         # Mount boot partition for logs
         mkdir -p /boot
         if ! mountpoint -q /boot 2>/dev/null; then
-            ROOT_DEV=$(awk '$2 == "/" {print $1}' /proc/mounts)
-            [ "$ROOT_DEV" = "/dev/root" ] && ROOT_DEV=$(readlink -f /dev/root 2>/dev/null)
-            BOOT_DEV=$(echo "$ROOT_DEV" | sed 's/2$/1/')
-            [ -b "$BOOT_DEV" ] && mount -t vfat "$BOOT_DEV" /boot 2>/dev/null
+            for dev in /dev/mmcblk0p1 /dev/sda1; do
+                [ -b "$dev" ] && mount -t vfat "$dev" /boot 2>/dev/null && break
+            done
         fi
 
         export QT_QPA_PLATFORM=eglfs

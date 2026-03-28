@@ -34,4 +34,22 @@ done
 # Remove S41dhcpcd — redundant with S40network's udhcpc
 rm -f "$INITD/S41dhcpcd"
 
+# Install init timing wrapper — logs timestamps for each S* script
+cat > "$INITD/rcS" << 'RCSEOF'
+#!/bin/sh
+
+LOGFILE="/tmp/boot-timing.log"
+for i in /etc/init.d/S??*; do
+    [ ! -f "$i" ] && continue
+    [ ! -x "$i" ] && continue
+    name="${i##*/}"
+    uptime_start=$(cut -d' ' -f1 /proc/uptime)
+    echo "[$uptime_start] $name start" >> "$LOGFILE"
+    "$i" start
+    uptime_end=$(cut -d' ' -f1 /proc/uptime)
+    echo "[$uptime_end] $name done" >> "$LOGFILE"
+done
+RCSEOF
+chmod 755 "$INITD/rcS"
+
 echo "Post-build script complete."
