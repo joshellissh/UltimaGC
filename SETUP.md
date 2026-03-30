@@ -1,6 +1,6 @@
 # Ultima RPi5 — Complete Setup & Reproduction Guide
 
-A comprehensive guide for reproducing the Ultima project: a minimal Buildroot-based Linux image for Raspberry Pi 5 running a BMW-style gauge cluster Qt5 app with fast boot, WiFi, and touchscreen support.
+A comprehensive guide for reproducing the Ultima project: a minimal Buildroot-based Linux image for Raspberry Pi 5 running a fullscreen gauge cluster Qt5 app with fast boot, WiFi, and touchscreen support.
 
 ---
 
@@ -719,7 +719,7 @@ config BR2_PACKAGE_ULTIMA_APP
 	depends on BR2_PACKAGE_QT5DECLARATIVE
 	help
 	  Ultima fullscreen Qt5 QML application.
-	  BMW-style gauge cluster with persistent odometer.
+	  Fullscreen gauge cluster with persistent odometer.
 ```
 
 **File**: `br2-external/package/ultima-app/ultima-app.mk`
