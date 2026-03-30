@@ -37,16 +37,19 @@ A comprehensive guide for reproducing the Ultima project: a minimal Buildroot-ba
 - Boot-optimized init ordering: app launches before networking/SSH
 - WiFi connects in background after app is displayed
 - VC4 display driver built into kernel; brcmfmac WiFi as module
+- Read-only root filesystem (protects against SD card corruption from power cuts)
+- Separate writable `/data` partition for persistent odometer state
 - Image-based gauge rendering: background PNG + rotated needle PNG overlay
-- Dashboard warning indicators (ISO 7000 icons), gear indicator, odometer/trip odo
+- Dashboard warning indicators (ISO 7000 icons), gear indicator, odometer/trip odo with persistence
 
 **Boot sequence** (after EEPROM optimization):
 ```
-RPi5 Bootloader → Kernel → S10udev → S11app (Qt visible)
-                                       ↓ (background)
-                              S20* deferred services
-                              S40network (WiFi)
-                              S50dropbear (SSH)
+RPi5 Bootloader → Kernel → S00remountro (root → ro)
+                              → S10udev → S11app (mount /data, Qt visible)
+                                            ↓ (background)
+                                   S20* deferred services
+                                   S40network (WiFi)
+                                   S50dropbear (SSH)
 ```
 
 ---
@@ -146,11 +149,15 @@ br2-external/
 │   ├── kernel-fragments.cfg           # Kernel config fragments
 │   ├── genimage.cfg                   # Static genimage config (overridden by post-image.sh)
 │   ├── post-build.sh                  # Post-build: disable getty, reorder init scripts
-│   ├── post-image.sh                  # Post-image: dynamic genimage, EEPROM
+│   ├── post-image.sh                  # Post-image: creates data partition, dynamic genimage, EEPROM
 │   └── overlay/
+│       ├── boot/                      # Mountpoint for boot partition
+│       ├── data/                      # Mountpoint for persistent data partition
 │       ├── etc/
+│       │   ├── fstab                  # Mount table (adds /var tmpfs for ro root)
 │       │   ├── init.d/
-│       │   │   ├── S11app             # Qt app launcher (runs early)
+│       │   │   ├── S00remountro       # Remount root read-only after init setup
+│       │   │   ├── S11app             # Qt app launcher (mounts /data, runs early)
 │       │   │   └── S40network         # WiFi (backgrounded)
 │       │   ├── network/
 │       │   │   └── interfaces         # Network interface config
@@ -169,15 +176,18 @@ br2-external/
     ├── ultima-app.mk
     └── src/
         ├── ultima-app.pro
-        ├── main.cpp
-        ├── main.qml                   # Root layout: gauges, indicators, gear, odo
+        ├── main.cpp                   # App entry point + OdoStore setup + SIGTERM handler
+        ├── odostore.h                 # OdoStore class header (persistent odometer state)
+        ├── odostore.cpp               # OdoStore implementation (reads/writes /data/odometer.json)
+        ├── main.qml                   # Root layout: gauges, indicators, gear, odo, save timer
         ├── CircularGauge.qml          # Reusable needle gauge (rotates needle.png)
-        ├── SimEngine.qml              # Simulated driving data + indicator states
+        ├── SimEngine.qml              # Simulated driving data + loads odo from OdoStore
         ├── qml.qrc                    # Qt resource file
         ├── background.png             # 1600x720 gauge cluster background
         ├── needle.png                 # Gauge needle image
         ├── left_indicator.png         # Turn signal icon
-        ├── range.regular.ttf          # Font for gear/odo display
+        ├── range.regular.ttf          # Font for odometer display
+        ├── bahnschrift._semibold.ttf  # Font for gear indicator
         ├── icon_low_beam.png          # ISO 7000 low beam indicator
         ├── icon_high_beam.png         # ISO 7000 high beam indicator
         ├── icon_oil_pressure.png      # ISO 7000 oil pressure warning
@@ -211,7 +221,7 @@ scripts/
 | `BR2_LINUX_KERNEL_CUSTOM_TARBALL_LOCATION` | RPi Linux 6.6.y | Raspberry Pi kernel fork |
 | `BR2_LINUX_KERNEL_DEFCONFIG="bcm2712"` | RPi5 SoC | |
 | `BR2_PACKAGE_RPI_FIRMWARE_VARIANT_PI4_64` | Firmware variant | Covers RPi5 on Buildroot 2025.02 |
-| `BR2_TARGET_ROOTFS_EXT2_SIZE="256M"` | Root filesystem size | |
+| `BR2_TARGET_ROOTFS_EXT2_SIZE="320M"` | Root filesystem size | |
 | `BR2_PACKAGE_QT5BASE_PNG=y` | PNG image support | Required for background and needle images |
 | `BR2_PACKAGE_QT5BASE_DEFAULT_QPA="eglfs"` | Direct rendering | No X11/Wayland needed |
 | `BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_V3D=y` | GPU compute | |
@@ -259,7 +269,7 @@ BR2_PACKAGE_RPI_FIRMWARE_VARIANT_PI4_64=y
 # Filesystem
 BR2_TARGET_ROOTFS_EXT2=y
 BR2_TARGET_ROOTFS_EXT2_4=y
-BR2_TARGET_ROOTFS_EXT2_SIZE="256M"
+BR2_TARGET_ROOTFS_EXT2_SIZE="320M"
 BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_ULTIMA_PATH)/board/ultima-rpi5/overlay"
 BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_ULTIMA_PATH)/board/ultima-rpi5/post-build.sh"
 BR2_ROOTFS_POST_IMAGE_SCRIPT="$(BR2_EXTERNAL_ULTIMA_PATH)/board/ultima-rpi5/post-image.sh"
@@ -421,13 +431,14 @@ enable_uart=1
 **File**: `br2-external/board/ultima-rpi5/cmdline.txt`
 
 ```
-root=/dev/mmcblk0p2 rootwait quiet loglevel=0 logo.nologo console=tty3 vt.global_cursor_default=0
+root=/dev/mmcblk0p2 rootwait ro quiet loglevel=0 logo.nologo console=tty3 vt.global_cursor_default=0
 ```
 
 | Parameter | Purpose |
 |-----------|---------|
 | `root=/dev/mmcblk0p2` | SD card root. Change to `/dev/nvme0n1p2` for NVMe or `/dev/sda2` for USB |
 | `rootwait` | Wait for root device to appear |
+| `ro` | Mount root filesystem read-only (S00remountro ensures it stays ro) |
 | `quiet` | Suppress kernel log messages |
 | `loglevel=0` | Only show emergency messages |
 | `logo.nologo` | Disable Linux penguin logo |
@@ -444,8 +455,9 @@ BusyBox init runs `/etc/init.d/S*` scripts in alphabetical order. The boot has b
 
 | Script | Source | Purpose | Blocking? |
 |--------|--------|---------|-----------|
+| **S00remountro** | Custom overlay | Remount root read-only | Yes (instant) |
 | **S10udev** | Buildroot (eudev) | Device node creation | Yes |
-| **S11app** | Custom overlay | Launch Qt app | Yes (but app backgrounds) |
+| **S11app** | Custom overlay | Mount /data, launch Qt app | Yes (but app backgrounds) |
 | S20seedrng | Buildroot (renamed from S01) | Seed RNG | Deferred |
 | S20syslogd | Buildroot (renamed from S01) | System logger | Deferred |
 | S20klogd | Buildroot (renamed from S02) | Kernel logger | Deferred |
@@ -498,6 +510,48 @@ rm -f "$INITD/S41dhcpcd"
 echo "Post-build script complete."
 ```
 
+### S00remountro — Remount Root Read-Only
+
+**File**: `br2-external/board/ultima-rpi5/overlay/etc/init.d/S00remountro`
+
+Runs as the very first init script (S00). Remounts root read-only after BusyBox init has finished its sysinit setup (proc, sysfs, devtmpfs, etc. are already mounted). This protects the SD card from corruption due to unexpected power loss.
+
+```bash
+#!/bin/sh
+case "$1" in
+    start)
+        sync
+        mount -o remount,ro /
+        ;;
+    stop)
+        ;;
+esac
+```
+
+**Why S00 and not in inittab?** BusyBox inittab remounts root `rw` during sysinit. Removing that line breaks the boot sequence (sysfs, devpts, etc. fail to mount). Instead, we let inittab run normally, then S00remountro flips root back to `ro` before any other init script runs.
+
+Writable paths after remount:
+- `/tmp`, `/run`, `/var` — tmpfs (from fstab)
+- `/data` — separate ext4 partition (mounted by S11app)
+- `/dev` — devtmpfs
+
+### fstab — Filesystem Mount Table
+
+**File**: `br2-external/board/ultima-rpi5/overlay/etc/fstab`
+
+Identical to Buildroot's default fstab plus `/var` as tmpfs (needed because root is read-only):
+
+```
+/dev/root   /         ext2    rw,noauto                             0 1
+proc        /proc     proc    defaults                              0 0
+devpts      /dev/pts  devpts  defaults,gid=5,mode=620,ptmxmode=0666 0 0
+tmpfs       /dev/shm  tmpfs   mode=1777                             0 0
+tmpfs       /tmp      tmpfs   mode=1777                             0 0
+tmpfs       /run      tmpfs   mode=0755,nosuid,nodev                0 0
+tmpfs       /var      tmpfs   mode=0755,nosuid,nodev                0 0
+sysfs       /sys      sysfs   defaults                              0 0
+```
+
 ### S11app — Qt App Launcher
 
 **File**: `br2-external/board/ultima-rpi5/overlay/etc/init.d/S11app`
@@ -517,6 +571,10 @@ case "$1" in
                 [ -b "$dev" ] && mount -t vfat "$dev" /boot 2>/dev/null && break
             done
         fi
+
+        # Mount data partition for persistent odometer state
+        mkdir -p /data
+        mount -t ext4 /dev/mmcblk0p3 /data 2>/dev/null
 
         export QT_QPA_PLATFORM=eglfs
         export QT_QPA_EGLFS_KMS_CONFIG=/etc/qt-kms.conf
@@ -661,7 +719,7 @@ config BR2_PACKAGE_ULTIMA_APP
 	depends on BR2_PACKAGE_QT5DECLARATIVE
 	help
 	  Ultima fullscreen Qt5 QML application.
-	  Displays a hello world greeting and live clock.
+	  BMW-style gauge cluster with persistent odometer.
 ```
 
 **File**: `br2-external/package/ultima-app/ultima-app.mk`
@@ -695,7 +753,8 @@ $(eval $(generic-package))
 QT += qml quick
 CONFIG += c++17
 TARGET = ultima-app
-SOURCES += main.cpp
+HEADERS += odostore.h
+SOURCES += main.cpp odostore.cpp
 RESOURCES += qml.qrc
 ```
 
@@ -710,6 +769,7 @@ RESOURCES += qml.qrc
         <file>needle.png</file>
         <file>left_indicator.png</file>
         <file>range.regular.ttf</file>
+        <file>bahnschrift._semibold.ttf</file>
         <file>icon_oil_pressure.png</file>
         <file>icon_check_engine.png</file>
         <file>icon_battery.png</file>
@@ -720,56 +780,56 @@ RESOURCES += qml.qrc
 </RCC>
 ```
 
-**`main.cpp`**:
+**`main.cpp`** — creates `OdoStore` for persistent odometer, exposes it to QML, saves on SIGTERM/SIGINT:
 ```cpp
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <signal.h>
 
-static double readUptime() {
-    double t = 0;
-    QFile f("/proc/uptime");
-    if (f.open(QIODevice::ReadOnly)) {
-        t = QString(f.readAll()).split(' ').first().toDouble();
-        f.close();
-    }
-    return t;
+#include "odostore.h"
+
+static double readUptime() { /* reads /proc/uptime */ }
+
+static OdoStore *g_odoStore = nullptr;
+
+static void sigHandler(int) {
+    if (g_odoStore)
+        g_odoStore->save();
+    _exit(0);
 }
 
 int main(int argc, char *argv[])
 {
     double t0 = readUptime();
-    fprintf(stderr, "[%6.2f] app main() entered\n", t0);
-
     QGuiApplication app(argc, argv);
-    double t1 = readUptime();
-    fprintf(stderr, "[%6.2f] QGuiApplication created (+%.2fs)\n", t1, t1-t0);
+
+    OdoStore odoStore("/data/odometer.json");
+    g_odoStore = &odoStore;
+    signal(SIGTERM, sigHandler);
+    signal(SIGINT, sigHandler);
 
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("bootTime", t0);
+    engine.rootContext()->setContextProperty("odoStore", &odoStore);
     engine.load(QUrl(QStringLiteral("qrc:/main.qml")));
-    double t2 = readUptime();
-    fprintf(stderr, "[%6.2f] QML loaded (+%.2fs)\n", t2, t2-t1);
-
-    if (engine.rootObjects().isEmpty())
-        return -1;
-
-    double t3 = readUptime();
-    fprintf(stderr, "[%6.2f] ready to render (+%.2fs)\n", t3, t3-t2);
-    fprintf(stderr, "[%6.2f] total app startup: %.2fs\n", t3, t3-t0);
 
     return app.exec();
 }
 ```
 
+**`odostore.h` / `odostore.cpp`** — `OdoStore` is a `QObject` with `totalOdo` and `tripOdo` properties. Reads `/data/odometer.json` on construction (defaults to 2347.0 / 0.0 if missing). `save()` slot writes JSON. The 30s save timer in `main.qml` calls `odoStore.save()` periodically, and the SIGTERM handler saves on `init stop`.
+
 ### QML Files
 
 The app consists of 3 QML files, all in `br2-external/package/ultima-app/src/`:
 
-- **`main.qml`** — Root layout: 4 gauge needles over background image, turn signal indicators, beam indicators (top center), warning indicator row (oil, engine, battery, coolant), gear indicator (P/R/N/1-7), odometer + trip odometer with reset button, touch feedback dot
+- **`main.qml`** — Root layout: 4 gauge needles over background image, turn signal indicators, beam indicators (top center), flashing warning indicator row (oil, engine, battery, coolant — red icons flash at 300ms), gear indicator (Bahnschrift SemiBold font, P/R/N/1-7), odometer + trip odometer with reset button, touch feedback dot. Includes 30s periodic save timer for odometer persistence via `odoStore`
 - **`CircularGauge.qml`** — Reusable needle gauge component: rotates `needle.png` over a transparent item positioned at the gauge center. Configurable start/end angles, counter-clockwise mode, needle size/pivot, optional debug arc overlay
-- **`SimEngine.qml`** — Simulated driving data at 60ms intervals: speed wanders through city/suburban/highway/stop phases, RPM derived from gear ratios, automatic gear selection (P/R/N/1-7), fuel consumption, coolant temp, odometer. Dashboard indicator states: low/high beams, oil pressure, check engine, battery, coolant warnings
+- **`SimEngine.qml`** — Simulated driving data at 60ms intervals: speed wanders through city/suburban/highway/stop phases, RPM derived from gear ratios, automatic gear selection (P/R/N/1-7), fuel consumption, coolant temp. Loads initial odometer values from `odoStore` context property. Dashboard indicator states: low/high beams, oil pressure, check engine, battery, coolant warnings (with random toggles per phase)
 
 ### Asset Files
 
@@ -778,7 +838,8 @@ The app consists of 3 QML files, all in `br2-external/package/ultima-app/src/`:
 | `background.png` | 1600x720 gauge cluster face (speedometer, tachometer, fuel, coolant) |
 | `needle.png` | Gauge needle image (rotated by CircularGauge) |
 | `left_indicator.png` | Turn signal arrow icon (mirrored for right) |
-| `range.regular.ttf` | Font for gear indicator and odometer display |
+| `range.regular.ttf` | Font for odometer display |
+| `bahnschrift._semibold.ttf` | Bahnschrift SemiBold font for gear indicator |
 | `icon_*.png` | ISO 7000 dashboard warning icons (51x51, white on transparent) |
 
 ### Gauge Needle Alignment
@@ -874,9 +935,10 @@ scp ubuntu@orb:~/ultima/buildroot/output/images/sdcard.img ~/code/ultima/output/
 
 ### Output
 
-The build produces `sdcard.img` (~320MB) with:
+The build produces `sdcard.img` (~400MB) with:
 - 64MB FAT32 boot partition (kernel, DTB, config, firmware)
-- 256MB ext4 root partition
+- 320MB ext4 root partition (read-only)
+- 16MB ext4 data partition (persistent odometer state at `/data`)
 
 ---
 
@@ -1091,3 +1153,11 @@ The kernel Image and DTBs are at the root of the boot partition.
 ### 12. Boot Partition File Layout
 **Problem**: The `post-image.sh` script places config files under `rpi-firmware/` on the boot partition, not at the root.
 **Note**: The RPi5 bootloader handles this correctly. When editing files on a mounted boot partition, check both root and `rpi-firmware/` subdirectory.
+
+### 13. Read-Only Root Breaks Display If Done Wrong
+**Problem**: Modifying BusyBox inittab (removing `remount,rw /`) or replacing the default fstab without including sysfs/devpts/run prevents VC4 DRM from initializing, causing a black screen.
+**Fix**: Do NOT modify inittab. Instead, use `S00remountro` to remount root `ro` after init completes its sysinit setup. The fstab overlay must include ALL default entries plus `/var` as tmpfs. The `ro` cmdline flag ensures root starts read-only; inittab remounts it `rw` for setup; S00remountro flips it back to `ro` before any init scripts run.
+
+### 14. Odometer Data Loss Window
+**Problem**: Odometer state saves every 30 seconds. A power cut could lose up to 30 seconds of driving data.
+**Acceptable**: This is by design — more frequent saves would wear the SD card. The data partition uses ext4 journaling to protect against filesystem corruption.
