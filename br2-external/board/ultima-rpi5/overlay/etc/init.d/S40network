@@ -6,14 +6,29 @@
 case "$1" in
     start)
         (
-            modprobe brcmfmac 2>/dev/null
+            LOGFILE="/boot/wifi-debug.log"
+            echo "=== WiFi start $(cat /proc/uptime) ===" >> "$LOGFILE"
+            modprobe brcmfmac >> "$LOGFILE" 2>&1
+            echo "modprobe exit: $?" >> "$LOGFILE"
             # Wait for wlan0 to appear
             for i in $(seq 1 30); do
                 [ -d /sys/class/net/wlan0 ] && break
                 sleep 1
             done
-            wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant.conf 2>/dev/null
-            udhcpc -i wlan0 -b -q 2>/dev/null
+            if [ -d /sys/class/net/wlan0 ]; then
+                echo "wlan0 appeared after ${i}s" >> "$LOGFILE"
+            else
+                echo "ERROR: wlan0 never appeared after 30s" >> "$LOGFILE"
+                ls /lib/modules/*/kernel/drivers/net/wireless/broadcom/brcm80211/ >> "$LOGFILE" 2>&1
+                ls /lib/firmware/brcm/ >> "$LOGFILE" 2>&1
+                dmesg | grep -i "brcm\|firm\|wlan\|wifi" >> "$LOGFILE" 2>&1
+            fi
+            wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant.conf >> "$LOGFILE" 2>&1
+            echo "wpa_supplicant exit: $?" >> "$LOGFILE"
+            udhcpc -i wlan0 -b -q >> "$LOGFILE" 2>&1
+            echo "udhcpc exit: $?" >> "$LOGFILE"
+            ip addr show wlan0 >> "$LOGFILE" 2>&1
+            echo "=== WiFi done $(cat /proc/uptime) ===" >> "$LOGFILE"
         ) &
         ;;
     stop)

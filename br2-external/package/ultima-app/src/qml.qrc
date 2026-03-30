@@ -6,5 +6,12 @@
         <file>background.png</file>
         <file>needle.png</file>
         <file>left_indicator.png</file>
+        <file>range.regular.ttf</file>
+        <file>icon_oil_pressure.png</file>
+        <file>icon_check_engine.png</file>
+        <file>icon_battery.png</file>
+        <file>icon_coolant_warn.png</file>
+        <file>icon_low_beam.png</file>
+        <file>icon_high_beam.png</file>
     </qresource>
 </RCC>
