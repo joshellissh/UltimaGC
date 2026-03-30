@@ -1,0 +1,14 @@
+#!/bin/sh
+#
+# Remount root filesystem read-only after init completes setup.
+# Protects against SD card corruption from power cuts.
+# /tmp, /run, /var are already tmpfs. /data is a separate rw partition.
+#
+case "$1" in
+    start)
+        sync
+        mount -o remount,ro /
+        ;;
+    stop)
+        ;;
+esac

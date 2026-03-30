@@ -34,6 +34,10 @@ if [ -f "$EEPROM_DIR/pieeprom.upd" ] && [ -f "$EEPROM_DIR/recovery.bin" ]; then
     FILES+=( "pieeprom.upd" "recovery.bin" )
 fi
 
+# Create empty ext4 data partition image (16MB, journaled)
+dd if=/dev/zero of="${BINARIES_DIR}/data.ext4" bs=1M count=16 2>/dev/null
+mkfs.ext4 -F -L data "${BINARIES_DIR}/data.ext4" >/dev/null 2>&1
+
 # Generate genimage.cfg from the file list
 BOOT_FILES=$(printf '\t\t\t"%s",\n' "${FILES[@]}")
 cat > "${GENIMAGE_CFG}" << EOF
@@ -59,6 +63,11 @@ image sdcard.img {
 	partition rootfs {
 		partition-type = 0x83
 		image = "rootfs.ext4"
+	}
+
+	partition data {
+		partition-type = 0x83
+		image = "data.ext4"
 	}
 }
 EOF

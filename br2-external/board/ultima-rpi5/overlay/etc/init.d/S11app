@@ -13,6 +13,10 @@ case "$1" in
             done
         fi
 
+        # Mount data partition for persistent odometer state
+        mkdir -p /data
+        mount -t ext4 /dev/mmcblk0p3 /data 2>/dev/null
+
         export QT_QPA_PLATFORM=eglfs
         export QT_QPA_EGLFS_KMS_CONFIG=/etc/qt-kms.conf
         export QT_QPA_EGLFS_INTEGRATION=eglfs_kms

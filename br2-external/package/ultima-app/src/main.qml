@@ -19,6 +19,18 @@ Window {
         id: sim
     }
 
+    // Periodic odometer save (every 30s)
+    Timer {
+        interval: 30000
+        running: true
+        repeat: true
+        onTriggered: {
+            odoStore.totalOdo = sim.totalOdo
+            odoStore.tripOdo = sim.tripOdo
+            odoStore.save()
+        }
+    }
+
     // Left gauge: Speedometer — pivot at (351, 342)
     CircularGauge {
         id: speedGauge
@@ -113,39 +125,54 @@ Window {
         visible: sim.highBeams
     }
 
+    // Warning flash timer (300ms cycle)
+    property bool _warnFlash: true
+    Timer {
+        interval: 300
+        running: sim.oilPressureWarn || sim.batteryWarn || sim.coolantWarn
+        repeat: true
+        onTriggered: _warnFlash = !_warnFlash
+        onRunningChanged: if (running) _warnFlash = true
+    }
+
     // Dashboard warning indicators — row centered at y=495
     Image {
-        x: 720 - width / 2; y: 495 - height / 2
+        x: 720 - width / 2; y: 485 - height / 2
         source: "qrc:/icon_oil_pressure.png"
-        visible: sim.oilPressureWarn
+        visible: sim.oilPressureWarn && _warnFlash
     }
     Image {
-        x: 780 - width / 2; y: 495 - height / 2
+        x: 780 - width / 2; y: 485 - height / 2
         source: "qrc:/icon_check_engine.png"
         visible: sim.checkEngine
     }
     Image {
-        x: 840 - width / 2; y: 495 - height / 2
+        x: 840 - width / 2; y: 485 - height / 2
         source: "qrc:/icon_battery.png"
-        visible: sim.batteryWarn
+        visible: sim.batteryWarn && _warnFlash
     }
     Image {
-        x: 900 - width / 2; y: 495 - height / 2
+        x: 900 - width / 2; y: 485 - height / 2
         source: "qrc:/icon_coolant_warn.png"
-        visible: sim.coolantWarn
+        visible: sim.coolantWarn && _warnFlash
     }
 
-    // Gear indicator — centered at (798, 601)
+    // Fonts
     FontLoader {
         id: rangeFont
         source: "qrc:/range.regular.ttf"
     }
+    FontLoader {
+        id: bahnschriftFont
+        source: "qrc:/bahnschrift._semibold.ttf"
+    }
 
+    // Gear indicator — centered at (798, 601)
     Text {
         id: gearIndicator
         x: 798 - width / 2
         y: 586 - height / 2
-        font.family: rangeFont.name
+        font.family: bahnschriftFont.name
         font.pixelSize: 150
         color: "white"
         text: {
@@ -191,7 +218,11 @@ Window {
             id: tripResetArea
             anchors.fill: parent
             anchors.margins: -10
-            onClicked: sim.tripOdo = 0
+            onClicked: {
+                sim.tripOdo = 0
+                odoStore.tripOdo = 0
+                odoStore.save()
+            }
         }
     }
 
