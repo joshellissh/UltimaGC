@@ -1,6 +1,6 @@
 # Ultima RPi5 — Complete Setup & Reproduction Guide
 
-A comprehensive guide for reproducing the Ultima project: a minimal Buildroot-based Linux image for Raspberry Pi 5 running a skeleton gauge cluster Qt5 app with fast boot, WiFi, and touchscreen support.
+A comprehensive guide for reproducing the Ultima project: a minimal Buildroot-based Linux image for Raspberry Pi 5 running a BMW-style gauge cluster Qt5 app with fast boot, WiFi, and touchscreen support.
 
 ---
 
@@ -36,7 +36,9 @@ A comprehensive guide for reproducing the Ultima project: a minimal Buildroot-ba
 - Qt5 EGLFS backend (direct to DRM/KMS, no X11/Wayland)
 - Boot-optimized init ordering: app launches before networking/SSH
 - WiFi connects in background after app is displayed
-- vc4 display driver built into kernel; brcmfmac WiFi as module
+- VC4 display driver built into kernel; brcmfmac WiFi as module
+- Image-based gauge rendering: background PNG + rotated needle PNG overlay
+- Dashboard warning indicators (ISO 7000 icons), gear indicator, odometer/trip odo
 
 **Boot sequence** (after EEPROM optimization):
 ```
@@ -144,8 +146,7 @@ br2-external/
 │   ├── kernel-fragments.cfg           # Kernel config fragments
 │   ├── genimage.cfg                   # Static genimage config (overridden by post-image.sh)
 │   ├── post-build.sh                  # Post-build: disable getty, reorder init scripts
-│   ├── post-image.sh                  # Post-image: dynamic genimage, splash, EEPROM
-│   ├── splash.bmp                     # Black 1600x720 splash screen
+│   ├── post-image.sh                  # Post-image: dynamic genimage, EEPROM
 │   └── overlay/
 │       ├── etc/
 │       │   ├── init.d/
@@ -169,12 +170,20 @@ br2-external/
     └── src/
         ├── ultima-app.pro
         ├── main.cpp
-        ├── main.qml
-        ├── CircularGauge.qml
-        ├── SimEngine.qml
-        ├── InfoBar.qml
-        ├── CenterLine.qml
-        └── qml.qrc
+        ├── main.qml                   # Root layout: gauges, indicators, gear, odo
+        ├── CircularGauge.qml          # Reusable needle gauge (rotates needle.png)
+        ├── SimEngine.qml              # Simulated driving data + indicator states
+        ├── qml.qrc                    # Qt resource file
+        ├── background.png             # 1600x720 gauge cluster background
+        ├── needle.png                 # Gauge needle image
+        ├── left_indicator.png         # Turn signal icon
+        ├── range.regular.ttf          # Font for gear/odo display
+        ├── icon_low_beam.png          # ISO 7000 low beam indicator
+        ├── icon_high_beam.png         # ISO 7000 high beam indicator
+        ├── icon_oil_pressure.png      # ISO 7000 oil pressure warning
+        ├── icon_check_engine.png      # ISO 7000 check engine warning
+        ├── icon_battery.png           # ISO 7000 battery warning
+        └── icon_coolant_warn.png      # ISO 7000 coolant temp warning
 
 scripts/
 ├── setup-vm.sh      # VM dependency installation
@@ -203,6 +212,7 @@ scripts/
 | `BR2_LINUX_KERNEL_DEFCONFIG="bcm2712"` | RPi5 SoC | |
 | `BR2_PACKAGE_RPI_FIRMWARE_VARIANT_PI4_64` | Firmware variant | Covers RPi5 on Buildroot 2025.02 |
 | `BR2_TARGET_ROOTFS_EXT2_SIZE="256M"` | Root filesystem size | |
+| `BR2_PACKAGE_QT5BASE_PNG=y` | PNG image support | Required for background and needle images |
 | `BR2_PACKAGE_QT5BASE_DEFAULT_QPA="eglfs"` | Direct rendering | No X11/Wayland needed |
 | `BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_V3D=y` | GPU compute | |
 | `BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_VC4=y` | HDMI output | |
@@ -263,6 +273,7 @@ BR2_PACKAGE_HOST_MTOOLS=y
 BR2_PACKAGE_QT5=y
 BR2_PACKAGE_QT5BASE=y
 BR2_PACKAGE_QT5BASE_OPENGL_LIB=y
+BR2_PACKAGE_QT5BASE_PNG=y
 BR2_PACKAGE_QT5BASE_EGLFS=y
 BR2_PACKAGE_QT5BASE_FONTCONFIG=y
 BR2_PACKAGE_QT5BASE_DEFAULT_QPA="eglfs"
@@ -391,8 +402,13 @@ kernel=Image
 dtoverlay=vc4-kms-v3d-pi5
 
 # Fast boot
+disable_splash=1
 boot_delay=0
 force_turbo=1
+dtparam=pciex1=off
+
+# Disable Bluetooth
+dtoverlay=disable-bt
 
 # Skip network install screen
 disable_net_install=1
@@ -497,15 +513,15 @@ case "$1" in
         # Mount boot partition for logs
         mkdir -p /boot
         if ! mountpoint -q /boot 2>/dev/null; then
-            ROOT_DEV=$(awk '$2 == "/" {print $1}' /proc/mounts)
-            [ "$ROOT_DEV" = "/dev/root" ] && ROOT_DEV=$(readlink -f /dev/root 2>/dev/null)
-            BOOT_DEV=$(echo "$ROOT_DEV" | sed 's/2$/1/')
-            [ -b "$BOOT_DEV" ] && mount -t vfat "$BOOT_DEV" /boot 2>/dev/null
+            for dev in /dev/mmcblk0p1 /dev/sda1; do
+                [ -b "$dev" ] && mount -t vfat "$dev" /boot 2>/dev/null && break
+            done
         fi
 
         export QT_QPA_PLATFORM=eglfs
         export QT_QPA_EGLFS_KMS_CONFIG=/etc/qt-kms.conf
         export QT_QPA_EGLFS_INTEGRATION=eglfs_kms
+        export QT_QPA_EGLFS_NO_LIBINPUT=1
         export XDG_RUNTIME_DIR=/tmp/runtime
         mkdir -p "$XDG_RUNTIME_DIR"
 
@@ -543,14 +559,29 @@ esac
 case "$1" in
     start)
         (
-            modprobe brcmfmac 2>/dev/null
+            LOGFILE="/boot/wifi-debug.log"
+            echo "=== WiFi start $(cat /proc/uptime) ===" >> "$LOGFILE"
+            modprobe brcmfmac >> "$LOGFILE" 2>&1
+            echo "modprobe exit: $?" >> "$LOGFILE"
             # Wait for wlan0 to appear
             for i in $(seq 1 30); do
                 [ -d /sys/class/net/wlan0 ] && break
                 sleep 1
             done
-            wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant.conf 2>/dev/null
-            udhcpc -i wlan0 -b -q 2>/dev/null
+            if [ -d /sys/class/net/wlan0 ]; then
+                echo "wlan0 appeared after ${i}s" >> "$LOGFILE"
+            else
+                echo "ERROR: wlan0 never appeared after 30s" >> "$LOGFILE"
+                ls /lib/modules/*/kernel/drivers/net/wireless/broadcom/brcm80211/ >> "$LOGFILE" 2>&1
+                ls /lib/firmware/brcm/ >> "$LOGFILE" 2>&1
+                dmesg | grep -i "brcm\|firm\|wlan\|wifi" >> "$LOGFILE" 2>&1
+            fi
+            wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant.conf >> "$LOGFILE" 2>&1
+            echo "wpa_supplicant exit: $?" >> "$LOGFILE"
+            udhcpc -i wlan0 -b -q >> "$LOGFILE" 2>&1
+            echo "udhcpc exit: $?" >> "$LOGFILE"
+            ip addr show wlan0 >> "$LOGFILE" 2>&1
+            echo "=== WiFi done $(cat /proc/uptime) ===" >> "$LOGFILE"
         ) &
         ;;
     stop)
@@ -675,8 +706,16 @@ RESOURCES += qml.qrc
         <file>main.qml</file>
         <file>CircularGauge.qml</file>
         <file>SimEngine.qml</file>
-        <file>InfoBar.qml</file>
-        <file>CenterLine.qml</file>
+        <file>background.png</file>
+        <file>needle.png</file>
+        <file>left_indicator.png</file>
+        <file>range.regular.ttf</file>
+        <file>icon_oil_pressure.png</file>
+        <file>icon_check_engine.png</file>
+        <file>icon_battery.png</file>
+        <file>icon_coolant_warn.png</file>
+        <file>icon_low_beam.png</file>
+        <file>icon_high_beam.png</file>
     </qresource>
 </RCC>
 ```
@@ -688,24 +727,37 @@ RESOURCES += qml.qrc
 #include <QQmlContext>
 #include <QFile>
 
+static double readUptime() {
+    double t = 0;
+    QFile f("/proc/uptime");
+    if (f.open(QIODevice::ReadOnly)) {
+        t = QString(f.readAll()).split(' ').first().toDouble();
+        f.close();
+    }
+    return t;
+}
+
 int main(int argc, char *argv[])
 {
-    QGuiApplication app(argc, argv);
+    double t0 = readUptime();
+    fprintf(stderr, "[%6.2f] app main() entered\n", t0);
 
-    // Read kernel uptime (seconds since power on)
-    double bootTime = 0;
-    QFile uptime("/proc/uptime");
-    if (uptime.open(QIODevice::ReadOnly)) {
-        bootTime = QString(uptime.readAll()).split(' ').first().toDouble();
-        uptime.close();
-    }
+    QGuiApplication app(argc, argv);
+    double t1 = readUptime();
+    fprintf(stderr, "[%6.2f] QGuiApplication created (+%.2fs)\n", t1, t1-t0);
 
     QQmlApplicationEngine engine;
-    engine.rootContext()->setContextProperty("bootTime", bootTime);
+    engine.rootContext()->setContextProperty("bootTime", t0);
     engine.load(QUrl(QStringLiteral("qrc:/main.qml")));
+    double t2 = readUptime();
+    fprintf(stderr, "[%6.2f] QML loaded (+%.2fs)\n", t2, t2-t1);
 
     if (engine.rootObjects().isEmpty())
         return -1;
+
+    double t3 = readUptime();
+    fprintf(stderr, "[%6.2f] ready to render (+%.2fs)\n", t3, t3-t2);
+    fprintf(stderr, "[%6.2f] total app startup: %.2fs\n", t3, t3-t0);
 
     return app.exec();
 }
@@ -713,13 +765,30 @@ int main(int argc, char *argv[])
 
 ### QML Files
 
-The app consists of 5 QML files, all in `br2-external/package/ultima-app/src/`:
+The app consists of 3 QML files, all in `br2-external/package/ultima-app/src/`:
 
-- **`main.qml`** — Root layout: two gauges, center decoration, boot time display, info bar
-- **`CircularGauge.qml`** — Reusable Canvas-based gauge with glowing arcs, animated needles, lit tick marks, warning zones, value readout
-- **`SimEngine.qml`** — Simulated driving data: speed wanders through city/highway/stop phases, fuel consumption reacts to acceleration, gear derived from speed brackets, trip odometer increments
-- **`InfoBar.qml`** — Bottom bar: clock, total/trip odometer, temperature, drive mode (cyan "ECO PRO"), gear indicator
-- **`CenterLine.qml`** — Decorative cyan perspective grid lines between the two gauges
+- **`main.qml`** — Root layout: 4 gauge needles over background image, turn signal indicators, beam indicators (top center), warning indicator row (oil, engine, battery, coolant), gear indicator (P/R/N/1-7), odometer + trip odometer with reset button, touch feedback dot
+- **`CircularGauge.qml`** — Reusable needle gauge component: rotates `needle.png` over a transparent item positioned at the gauge center. Configurable start/end angles, counter-clockwise mode, needle size/pivot, optional debug arc overlay
+- **`SimEngine.qml`** — Simulated driving data at 60ms intervals: speed wanders through city/suburban/highway/stop phases, RPM derived from gear ratios, automatic gear selection (P/R/N/1-7), fuel consumption, coolant temp, odometer. Dashboard indicator states: low/high beams, oil pressure, check engine, battery, coolant warnings
+
+### Asset Files
+
+| File | Purpose |
+|------|---------|
+| `background.png` | 1600x720 gauge cluster face (speedometer, tachometer, fuel, coolant) |
+| `needle.png` | Gauge needle image (rotated by CircularGauge) |
+| `left_indicator.png` | Turn signal arrow icon (mirrored for right) |
+| `range.regular.ttf` | Font for gear indicator and odometer display |
+| `icon_*.png` | ISO 7000 dashboard warning icons (51x51, white on transparent) |
+
+### Gauge Needle Alignment
+
+| Gauge | Pivot (px) | Start Angle | End Angle | Direction | Needle Size | Needle Pivot |
+|-------|-----------|-------------|-----------|-----------|-------------|-------------|
+| Speedometer | 351, 342 | 216.5 | 450.5 | CW | 98x350 | 48, 259 |
+| Tachometer | 1251, 343 | 270 | 503 | CW | 98x350 | 48, 259 |
+| Fuel level | 149, 602 | 217 | 307.5 | CW | 28x100 | 14, 74 |
+| Coolant temp | 1453, 602 | 142 | 53.5 | CCW | 28x100 | 14, 74 |
 
 ### App Rebuild Shortcut
 
@@ -1011,6 +1080,14 @@ The kernel Image and DTBs are at the root of the boot partition.
 **Problem**: The `recovery.bin` from the rpi-eeprom GitHub repo may not match your board revision, causing silent failure.
 **Fix**: Use Raspberry Pi OS with `rpi-eeprom-config --edit` instead.
 
-### 10. Boot Partition File Layout
+### 10. PNG Images Not Showing
+**Problem**: Background or needle images don't render on the device.
+**Fix**: Ensure `BR2_PACKAGE_QT5BASE_PNG=y` is set in the defconfig. BMP is built-in to Qt but PNG requires explicit enablement.
+
+### 11. Touchscreen Not Responding
+**Problem**: USB touchscreen (Waveshare) detected but Qt doesn't receive touch events via libinput.
+**Fix**: Set `QT_QPA_EGLFS_NO_LIBINPUT=1` in S11app to use evdev touch handler instead. Also add udev rule `99-input.rules` with `SUBSYSTEM=="input", MODE="0666"`.
+
+### 12. Boot Partition File Layout
 **Problem**: The `post-image.sh` script places config files under `rpi-firmware/` on the boot partition, not at the root.
 **Note**: The RPi5 bootloader handles this correctly. When editing files on a mounted boot partition, check both root and `rpi-firmware/` subdirectory.

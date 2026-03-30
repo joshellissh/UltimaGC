@@ -101,6 +101,100 @@ Window {
         mirror: true
     }
 
+    // Beam indicators — top center (shared position)
+    Image {
+        x: 800 - width / 2; y: 23
+        source: "qrc:/icon_low_beam.png"
+        visible: sim.lowBeams && !sim.highBeams
+    }
+    Image {
+        x: 800 - width / 2; y: 23
+        source: "qrc:/icon_high_beam.png"
+        visible: sim.highBeams
+    }
+
+    // Dashboard warning indicators — row centered at y=495
+    Image {
+        x: 720 - width / 2; y: 495 - height / 2
+        source: "qrc:/icon_oil_pressure.png"
+        visible: sim.oilPressureWarn
+    }
+    Image {
+        x: 780 - width / 2; y: 495 - height / 2
+        source: "qrc:/icon_check_engine.png"
+        visible: sim.checkEngine
+    }
+    Image {
+        x: 840 - width / 2; y: 495 - height / 2
+        source: "qrc:/icon_battery.png"
+        visible: sim.batteryWarn
+    }
+    Image {
+        x: 900 - width / 2; y: 495 - height / 2
+        source: "qrc:/icon_coolant_warn.png"
+        visible: sim.coolantWarn
+    }
+
+    // Gear indicator — centered at (798, 601)
+    FontLoader {
+        id: rangeFont
+        source: "qrc:/range.regular.ttf"
+    }
+
+    Text {
+        id: gearIndicator
+        x: 798 - width / 2
+        y: 586 - height / 2
+        font.family: rangeFont.name
+        font.pixelSize: 150
+        color: "white"
+        text: {
+            var g = sim.gear
+            if (g === -2) return "P"
+            if (g === -1) return "R"
+            if (g === 0) return "N"
+            return g.toString()
+        }
+    }
+
+    // Odometer (left of center)
+    Text {
+        x: 450 - width / 2
+        y: 670
+        font.family: rangeFont.name
+        font.pixelSize: 32
+        color: "#aaaaaa"
+        text: sim.totalOdo.toFixed(1) + " mi"
+    }
+
+    // Trip odometer (right of center)
+    Text {
+        id: tripText
+        x: 1150 - width / 2
+        y: 670
+        font.family: rangeFont.name
+        font.pixelSize: 32
+        color: "#aaaaaa"
+        text: "TRIP  " + sim.tripOdo.toFixed(1) + " mi"
+    }
+
+    // Trip reset button
+    Text {
+        x: tripText.x + tripText.width + 8
+        y: tripText.y
+        font.pixelSize: 32
+        color: tripResetArea.pressed ? "#ffffff" : "#aaaaaa"
+        text: "\u21BA"
+        z: 200
+
+        MouseArea {
+            id: tripResetArea
+            anchors.fill: parent
+            anchors.margins: -10
+            onClicked: sim.tripOdo = 0
+        }
+    }
+
     // Touch feedback dot
     Rectangle {
         id: touchDot

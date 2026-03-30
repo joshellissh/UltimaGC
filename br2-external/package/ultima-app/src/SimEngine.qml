@@ -6,7 +6,7 @@ Item {
     property real speed: 0
     property real rpm: 0
     property real fuelConsumption: 3.5
-    property int gear: 0
+    property int gear: -2  // -2=P, -1=R, 0=N, 1-7=forward
     property real totalOdo: 2347.0
     property real tripOdo: 0.0
     property real outsideTemp: 14.5
@@ -15,6 +15,12 @@ Item {
     property real coolantTemp: 190
     property bool leftIndicator: false
     property bool rightIndicator: false
+    property bool lowBeams: false
+    property bool highBeams: false
+    property bool oilPressureWarn: false
+    property bool checkEngine: false
+    property bool batteryWarn: false
+    property bool coolantWarn: false
 
     // Internal state
     property real _targetSpeed: 0
@@ -51,6 +57,12 @@ Item {
                 var phase = phases[Math.floor(Math.random() * phases.length)]
                 engine._targetSpeed = phase.target
                 engine._phaseTimer = phase.dur
+
+                // Toggle warning indicators on phase change
+                engine.highBeams = engine.speed > 50 && Math.random() < 0.3
+                if (Math.random() < 0.3) engine.oilPressureWarn = !engine.oilPressureWarn
+                if (Math.random() < 0.4) engine.checkEngine = !engine.checkEngine
+                if (Math.random() < 0.3) engine.batteryWarn = !engine.batteryWarn
             }
 
             // Smooth approach to target + slight noise
@@ -64,20 +76,30 @@ Item {
             var targetFuel = speedFactor + accelFactor + (Math.random() - 0.5) * 1.5
             engine.fuelConsumption += (Math.max(0, Math.min(25, targetFuel)) - engine.fuelConsumption) * 0.08
 
-            // Gear from speed brackets
-            if (engine.speed < 3) engine.gear = 0       // neutral
+            // Gear from speed brackets (-2=P, -1=R, 0=N, 1-7=forward)
+            if (engine.speed < 3) {
+                // When stopped, cycle through P/R/N
+                if (engine._targetSpeed === 0) {
+                    var stopGears = [-2, -2, -2, 0, -1]  // mostly P, sometimes N or R
+                    if (engine.gear > 0) engine.gear = 0  // downshift to N first
+                    else if (engine._phaseTimer < 1) engine.gear = stopGears[Math.floor(Math.random() * stopGears.length)]
+                } else {
+                    engine.gear = 0
+                }
+            }
             else if (engine.speed < 20) engine.gear = 1
             else if (engine.speed < 40) engine.gear = 2
             else if (engine.speed < 65) engine.gear = 3
             else if (engine.speed < 100) engine.gear = 4
             else if (engine.speed < 140) engine.gear = 5
-            else engine.gear = 6
+            else if (engine.speed < 170) engine.gear = 6
+            else engine.gear = 7
 
             // RPM derived from speed and gear
-            if (engine.gear === 0) {
-                engine.rpm = 800 + Math.random() * 100  // idle
+            if (engine.gear <= 0) {
+                engine.rpm = 800 + Math.random() * 100  // idle / P / R / N
             } else {
-                var gearRatios = [0, 3.5, 2.5, 1.8, 1.4, 1.1, 0.9]
+                var gearRatios = [0, 3.5, 2.5, 1.8, 1.4, 1.1, 0.9, 0.75]
                 var baseRpm = engine.speed * gearRatios[engine.gear] * 30
                 engine.rpm = Math.max(800, Math.min(8000, baseRpm + (Math.random() - 0.5) * 200))
             }
@@ -95,6 +117,10 @@ Item {
             // Coolant temp settles around 190-200, rises with RPM
             var targetCoolant = 185 + engine.rpm / 2000 * 15 + (Math.random() - 0.5) * 2
             engine.coolantTemp += (targetCoolant - engine.coolantTemp) * 0.01
+
+            // Dashboard indicators
+            engine.lowBeams = engine.speed > 5
+            engine.coolantWarn = engine.coolantTemp > 220
         }
     }
 }
