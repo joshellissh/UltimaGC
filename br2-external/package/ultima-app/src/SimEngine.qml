@@ -7,8 +7,8 @@ Item {
     property real rpm: 0
     property real fuelConsumption: 3.5
     property int gear: -2  // -2=P, -1=R, 0=N, 1-7=forward
-    property real totalOdo: 2347.0
-    property real tripOdo: 0.0
+    property real totalOdo: odoStore.totalOdo
+    property real tripOdo: odoStore.tripOdo
     property real outsideTemp: 14.5
     property string driveMode: "ECO PRO"
     property real fuelLevel: 0.7
@@ -63,6 +63,7 @@ Item {
                 if (Math.random() < 0.3) engine.oilPressureWarn = !engine.oilPressureWarn
                 if (Math.random() < 0.4) engine.checkEngine = !engine.checkEngine
                 if (Math.random() < 0.3) engine.batteryWarn = !engine.batteryWarn
+                if (Math.random() < 0.15) engine.coolantWarn = !engine.coolantWarn
             }
 
             // Smooth approach to target + slight noise

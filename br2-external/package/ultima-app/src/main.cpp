@@ -2,6 +2,11 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <signal.h>
+
+#include "odostore.h"
 
 static double readUptime() {
     double t = 0;
@@ -13,6 +18,14 @@ static double readUptime() {
     return t;
 }
 
+static OdoStore *g_odoStore = nullptr;
+
+static void sigHandler(int) {
+    if (g_odoStore)
+        g_odoStore->save();
+    _exit(0);
+}
+
 int main(int argc, char *argv[])
 {
     double t0 = readUptime();
@@ -22,8 +35,14 @@ int main(int argc, char *argv[])
     double t1 = readUptime();
     fprintf(stderr, "[%6.2f] QGuiApplication created (+%.2fs)\n", t1, t1-t0);
 
+    OdoStore odoStore("/data/odometer.json");
+    g_odoStore = &odoStore;
+    signal(SIGTERM, sigHandler);
+    signal(SIGINT, sigHandler);
+
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("bootTime", t0);
+    engine.rootContext()->setContextProperty("odoStore", &odoStore);
     engine.load(QUrl(QStringLiteral("qrc:/main.qml")));
     double t2 = readUptime();
     fprintf(stderr, "[%6.2f] QML loaded (+%.2fs)\n", t2, t2-t1);
