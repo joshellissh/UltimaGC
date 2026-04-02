@@ -96,6 +96,61 @@ Window {
         pivotY: 74
     }
 
+    // Boost gauge — trapezoid black overlay that recedes upward with boost
+    Canvas {
+        x: 350
+        y: 460
+        width: 897   // 1247 - 350
+        height: 207  // 667 - 460
+
+        property real boost: sim.boost
+        onBoostChanged: requestPaint()
+
+        onPaint: {
+            var ctx = getContext("2d")
+            ctx.clearRect(0, 0, width, height)
+
+            var f = Math.min(1, Math.max(0, boost / 30))
+            var h = height * (1 - f)  // black area height from top
+            if (h <= 0) return
+
+            // Trapezoid edges: top is narrow (350..554), bottom is wide (0..897)
+            var tlx = 350  // 700 - 350
+            var trx = 554  // 904 - 350
+            var t = h / height
+            var blx = tlx * (1 - t)
+            var brx = trx + t * (897 - trx)
+
+            ctx.fillStyle = "black"
+            ctx.beginPath()
+            ctx.moveTo(tlx, 0)
+            ctx.lineTo(trx, 0)
+            ctx.lineTo(brx, h)
+            ctx.lineTo(blx, h)
+            ctx.closePath()
+            ctx.fill()
+        }
+    }
+
+    // Boost PSI readout
+    Text {
+        x: 800 - width / 2
+        y: 475 - height / 2
+        z: 10
+        font.family: rangeFont.name
+        font.pixelSize: 22
+        color: "white"
+        text: Math.round(sim.boost) + " PSI"
+    }
+
+    // Boost gauge scale lines overlay (above black trapezoid)
+    Image {
+        x: 0
+        y: 0
+        z: 1
+        source: "qrc:/boost_lines_overlay.png"
+    }
+
     // Left turn signal indicator
     Image {
         x: 25
@@ -113,18 +168,6 @@ Window {
         mirror: true
     }
 
-    // Beam indicators — top center (shared position)
-    Image {
-        x: 800 - width / 2; y: 23
-        source: "qrc:/icon_low_beam.png"
-        visible: sim.lowBeams && !sim.highBeams
-    }
-    Image {
-        x: 800 - width / 2; y: 23
-        source: "qrc:/icon_high_beam.png"
-        visible: sim.highBeams
-    }
-
     // Warning flash timer (300ms cycle)
     property bool _warnFlash: true
     Timer {
@@ -135,24 +178,34 @@ Window {
         onRunningChanged: if (running) _warnFlash = true
     }
 
-    // Dashboard warning indicators — row centered at y=495
+    // Top indicator row — evenly spaced at 80px intervals, centered at x=800
     Image {
-        x: 720 - width / 2; y: 485 - height / 2
+        x: 640 - width / 2; y: 23
         source: "qrc:/icon_oil_pressure.png"
         visible: sim.oilPressureWarn && _warnFlash
     }
     Image {
-        x: 780 - width / 2; y: 485 - height / 2
+        x: 720 - width / 2; y: 23
         source: "qrc:/icon_check_engine.png"
         visible: sim.checkEngine
     }
     Image {
-        x: 840 - width / 2; y: 485 - height / 2
+        x: 800 - width / 2; y: 23
+        source: "qrc:/icon_low_beam.png"
+        visible: sim.lowBeams && !sim.highBeams
+    }
+    Image {
+        x: 800 - width / 2; y: 23
+        source: "qrc:/icon_high_beam.png"
+        visible: sim.highBeams
+    }
+    Image {
+        x: 880 - width / 2; y: 23
         source: "qrc:/icon_battery.png"
         visible: sim.batteryWarn && _warnFlash
     }
     Image {
-        x: 900 - width / 2; y: 485 - height / 2
+        x: 960 - width / 2; y: 23
         source: "qrc:/icon_coolant_warn.png"
         visible: sim.coolantWarn && _warnFlash
     }
@@ -170,8 +223,8 @@ Window {
     // Gear indicator — centered at (798, 601)
     Text {
         id: gearIndicator
-        x: 798 - width / 2
-        y: 586 - height / 2
+        x: 803 - width / 2
+        y: 279 - height / 2
         font.family: bahnschriftFont.name
         font.pixelSize: 150
         color: "white"

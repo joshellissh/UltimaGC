@@ -5,6 +5,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <signal.h>
+#include <unistd.h>
 
 #include "odostore.h"
 

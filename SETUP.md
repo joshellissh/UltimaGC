@@ -40,7 +40,7 @@ A comprehensive guide for reproducing the Ultima project: a minimal Buildroot-ba
 - Read-only root filesystem (protects against SD card corruption from power cuts)
 - Separate writable `/data` partition for persistent odometer state
 - Image-based gauge rendering: background PNG + rotated needle PNG overlay
-- Dashboard warning indicators (ISO 7000 icons), gear indicator, odometer/trip odo with persistence
+- Dashboard warning indicators (ISO 7000 icons), boost gauge, gear indicator, odometer/trip odo with persistence
 
 **Boot sequence** (after EEPROM optimization):
 ```
@@ -186,7 +186,8 @@ br2-external/
         ├── background.png             # 1600x720 gauge cluster background
         ├── needle.png                 # Gauge needle image
         ├── left_indicator.png         # Turn signal icon
-        ├── range.regular.ttf          # Font for odometer display
+        ├── boost_lines_overlay.png     # Boost gauge scale lines overlay
+        ├── range.regular.ttf          # Font for odometer and boost PSI display
         ├── bahnschrift._semibold.ttf  # Font for gear indicator
         ├── icon_low_beam.png          # ISO 7000 low beam indicator
         ├── icon_high_beam.png         # ISO 7000 high beam indicator
@@ -774,6 +775,7 @@ RESOURCES += qml.qrc
         <file>icon_check_engine.png</file>
         <file>icon_battery.png</file>
         <file>icon_coolant_warn.png</file>
+        <file>boost_lines_overlay.png</file>
         <file>icon_low_beam.png</file>
         <file>icon_high_beam.png</file>
     </qresource>
@@ -827,18 +829,19 @@ int main(int argc, char *argv[])
 
 The app consists of 3 QML files, all in `br2-external/package/ultima-app/src/`:
 
-- **`main.qml`** — Root layout: 4 gauge needles over background image, turn signal indicators, beam indicators (top center), flashing warning indicator row (oil, engine, battery, coolant — red icons flash at 300ms), gear indicator (Bahnschrift SemiBold font, P/R/N/1-7), odometer + trip odometer with reset button, touch feedback dot. Includes 30s periodic save timer for odometer persistence via `odoStore`
+- **`main.qml`** — Root layout: 4 gauge needles over background image, boost gauge (trapezoid black overlay with PSI readout), turn signal indicators, top indicator row (oil, check engine, beams, battery, coolant — warnings flash at 300ms), gear indicator (Bahnschrift SemiBold font, P/R/N/1-7), odometer + trip odometer with reset button, touch feedback dot. Includes 30s periodic save timer for odometer persistence via `odoStore`
 - **`CircularGauge.qml`** — Reusable needle gauge component: rotates `needle.png` over a transparent item positioned at the gauge center. Configurable start/end angles, counter-clockwise mode, needle size/pivot, optional debug arc overlay
-- **`SimEngine.qml`** — Simulated driving data at 60ms intervals: speed wanders through city/suburban/highway/stop phases, RPM derived from gear ratios, automatic gear selection (P/R/N/1-7), fuel consumption, coolant temp. Loads initial odometer values from `odoStore` context property. Dashboard indicator states: low/high beams, oil pressure, check engine, battery, coolant warnings (with random toggles per phase)
+- **`SimEngine.qml`** — Simulated driving data at 60ms intervals: speed wanders through city/suburban/highway/stop phases, RPM derived from gear ratios, automatic gear selection (P/R/N/1-7), fuel consumption, coolant temp, boost pressure (0-30 PSI, builds with throttle at higher RPM). Loads initial odometer values from `odoStore` context property. Dashboard indicator states: low/high beams, oil pressure, check engine, battery, coolant warnings (with random toggles per phase)
 
 ### Asset Files
 
 | File | Purpose |
 |------|---------|
-| `background.png` | 1600x720 gauge cluster face (speedometer, tachometer, fuel, coolant) |
+| `background.png` | 1600x720 gauge cluster face (speedometer, tachometer, fuel, coolant, boost) |
 | `needle.png` | Gauge needle image (rotated by CircularGauge) |
+| `boost_lines_overlay.png` | Boost gauge scale lines overlay |
 | `left_indicator.png` | Turn signal arrow icon (mirrored for right) |
-| `range.regular.ttf` | Font for odometer display |
+| `range.regular.ttf` | Font for odometer and boost PSI display |
 | `bahnschrift._semibold.ttf` | Bahnschrift SemiBold font for gear indicator |
 | `icon_*.png` | ISO 7000 dashboard warning icons (51x51, white on transparent) |
 

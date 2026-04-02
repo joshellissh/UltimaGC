@@ -21,6 +21,7 @@ Item {
     property bool checkEngine: false
     property bool batteryWarn: false
     property bool coolantWarn: false
+    property real boost: 0  // 0-30 PSI
 
     // Internal state
     property real _targetSpeed: 0
@@ -118,6 +119,13 @@ Item {
             // Coolant temp settles around 190-200, rises with RPM
             var targetCoolant = 185 + engine.rpm / 2000 * 15 + (Math.random() - 0.5) * 2
             engine.coolantTemp += (targetCoolant - engine.coolantTemp) * 0.01
+
+            // Boost: builds with throttle at higher RPM
+            var boostTarget = 0
+            if (engine.speed > 20 && engine._accel > 0) {
+                boostTarget = Math.min(30, engine._accel * 200 + engine.rpm / 300)
+            }
+            engine.boost += (boostTarget - engine.boost) * 0.05
 
             // Dashboard indicators
             engine.lowBeams = engine.speed > 5
