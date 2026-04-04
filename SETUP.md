@@ -42,14 +42,18 @@ A comprehensive guide for reproducing the Ultima project: a minimal Buildroot-ba
 - Image-based gauge rendering: background PNG + rotated needle PNG overlay
 - Dashboard warning indicators (ISO 7000 icons), boost gauge, gear indicator, odometer/trip odo with persistence
 
+**Boot timing** (power to app visible): ~11.1s
+- Bootloader: ~7.7s (fixed hardware init — SDRAM, RP1 firmware, PCI)
+- Kernel + init → app render: ~3.4s
+
 **Boot sequence** (after EEPROM optimization):
 ```
-RPi5 Bootloader → Kernel → S00remountro (root → ro)
-                              → S10udev → S11app (mount /data, Qt visible)
-                                            ↓ (background)
-                                   S20* deferred services
-                                   S40network (WiFi)
-                                   S50dropbear (SSH)
+RPi5 Bootloader → Kernel → S00remountro (root → ro, mount /data & /boot, launch Qt app)
+                              → S10udev
+                                → S11app (stub — app already running)
+                                  → S20* deferred services
+                                    → S40network (WiFi, backgrounded)
+                                      → S50dropbear (SSH)
 ```
 
 ---
@@ -147,8 +151,9 @@ br2-external/
 │   ├── config.txt                     # RPi5 boot config
 │   ├── cmdline.txt                    # Kernel command line
 │   ├── kernel-fragments.cfg           # Kernel config fragments
+│   ├── disable-usb0.dts               # DT overlay to disable unused USB controller
 │   ├── genimage.cfg                   # Static genimage config (overridden by post-image.sh)
-│   ├── post-build.sh                  # Post-build: disable getty, reorder init scripts
+│   ├── post-build.sh                  # Post-build: disable getty, reorder init scripts, compile DT overlays
 │   ├── post-image.sh                  # Post-image: creates data partition, dynamic genimage, EEPROM
 │   └── overlay/
 │       ├── boot/                      # Mountpoint for boot partition
@@ -156,8 +161,8 @@ br2-external/
 │       ├── etc/
 │       │   ├── fstab                  # Mount table (adds /var tmpfs for ro root)
 │       │   ├── init.d/
-│       │   │   ├── S00remountro       # Remount root read-only after init setup
-│       │   │   ├── S11app             # Qt app launcher (mounts /data, runs early)
+│       │   │   ├── S00remountro       # Remount root ro, mount partitions, launch app (before udev)
+│       │   │   ├── S11app             # Stub: stop/restart only (app launched by S00remountro)
 │       │   │   └── S40network         # WiFi (backgrounded)
 │       │   ├── network/
 │       │   │   └── interfaces         # Network interface config
@@ -343,52 +348,49 @@ BR2_ENABLE_LOCALE_PURGE=y
 
 **File**: `br2-external/board/ultima-rpi5/kernel-fragments.cfg`
 
-These fragments override the bcm2712 defconfig:
+These fragments override the bcm2712 defconfig. The full file includes display/WiFi requirements plus extensive boot time optimizations:
 
+**Display & WiFi (required)**:
 ```
-# Disable module compression (BusyBox modprobe can't handle .ko.xz)
-CONFIG_MODULE_COMPRESS_NONE=y
-# CONFIG_MODULE_COMPRESS_XZ is not set
-
-# Sound — required by DRM_VC4 (depends on SND && SND_SOC)
-CONFIG_SOUND=y
-CONFIG_SND=y
-CONFIG_SND_SOC=y
-
-# DRM/KMS — VC4 display driver + dependencies (must all be =y for built-in)
-CONFIG_DRM=y
-CONFIG_DRM_KMS_HELPER=y
-CONFIG_DRM_GEM_DMA_HELPER=y
-CONFIG_DRM_DISPLAY_HELPER=y
-CONFIG_DRM_DISPLAY_DP_HELPER=y
-CONFIG_DRM_DISPLAY_HDMI_HELPER=y
-CONFIG_DRM_PANEL_BRIDGE=y
-CONFIG_DRM_V3D=y
-CONFIG_DRM_VC4=y
-
-# USB HID for touchscreen
-CONFIG_HID=y
-CONFIG_USB_HID=y
-CONFIG_INPUT_EVDEV=y
-CONFIG_INPUT_TOUCHSCREEN=y
-CONFIG_TOUCHSCREEN_USB_COMPOSITE=y
-
-# WiFi — brcmfmac as module (needs rootfs mounted for firmware files)
-CONFIG_WIRELESS=y
-CONFIG_RFKILL=y
-CONFIG_CFG80211=y
-CONFIG_MAC80211=y
-CONFIG_BRCMUTIL=m
-CONFIG_BRCMFMAC=m
-CONFIG_BRCMFMAC_SDIO=y
-
-# FAT/VFAT filesystem — needed to mount boot partition for debug logs
-CONFIG_NLS=y
-CONFIG_NLS_CODEPAGE_437=y
-CONFIG_NLS_ISO8859_1=y
-CONFIG_FAT_FS=y
-CONFIG_VFAT_FS=y
+CONFIG_MODULE_COMPRESS_NONE=y          # BusyBox modprobe can't handle .ko.xz
+CONFIG_SOUND=y / CONFIG_SND=y / CONFIG_SND_SOC=y  # VC4 depends on SND && SND_SOC
+CONFIG_DRM_VC4=y / CONFIG_DRM_V3D=y    # Display driver (built-in)
+CONFIG_HID=y / CONFIG_USB_HID=y        # USB touchscreen
+CONFIG_BRCMFMAC=m / CONFIG_BRCMUTIL=m  # WiFi as module (needs rootfs for firmware)
+CONFIG_FAT_FS=y / CONFIG_VFAT_FS=y     # Mount boot partition for logs
 ```
+
+**Boot optimizations (disabled unused features)**:
+```
+# CONFIG_KVM is not set              # No virtualization
+# CONFIG_BT is not set               # Bluetooth disabled in config.txt
+# CONFIG_NFS_FS is not set            # No network filesystems
+# CONFIG_SCSI is not set              # No SCSI
+# CONFIG_RC_CORE is not set           # No CEC/IR remote
+# CONFIG_MEDIA_SUPPORT is not set     # No camera/video codec
+# CONFIG_MACB is not set              # No wired ethernet
+# CONFIG_FTRACE is not set            # No function tracing
+# CONFIG_RANDOMIZE_BASE is not set    # No KASLR (avoids KPTI overhead)
+# CONFIG_FB_SIMPLE is not set         # No simple-framebuffer (vc4 takes over)
+# CONFIG_VGA_ARB is not set           # No VGA hardware
+# CONFIG_USB_DWC2 is not set          # No OTG USB
+# CONFIG_TASKSTATS is not set         # No taskstats/audit
+# CONFIG_PROFILING is not set         # No profiling/perf
+# CONFIG_DEBUG_FS is not set          # No debugfs
+# CONFIG_KALLSYMS is not set          # No symbol tables
+# CONFIG_IOSCHED_BFQ is not set       # Only mq-deadline scheduler
+```
+
+**Embedded optimizations**:
+```
+CONFIG_EMBEDDED=y                      # Enable embedded options
+CONFIG_CC_OPTIMIZE_FOR_SIZE=y          # -Os (smaller kernel, ~net neutral on boot)
+CONFIG_HZ_100=y / CONFIG_HZ=100       # Lower tick rate
+CONFIG_SLAB_MERGE_DEFAULT=y            # Merge similar slabs
+CONFIG_BASE_SMALL=1                    # Smaller hash tables
+```
+
+See `br2-external/board/ultima-rpi5/kernel-fragments.cfg` for the complete file.
 
 ### Critical Kernel Notes
 
@@ -409,8 +411,8 @@ CONFIG_VFAT_FS=y
 arm_64bit=1
 kernel=Image
 
-# GPU/Display - KMS driver (RPi5)
-dtoverlay=vc4-kms-v3d-pi5
+# GPU/Display - KMS driver (RPi5), disable unused HDMI1
+dtoverlay=vc4-kms-v3d-pi5,nohdmi1
 
 # Fast boot
 disable_splash=1
@@ -420,6 +422,9 @@ dtparam=pciex1=off
 
 # Disable Bluetooth
 dtoverlay=disable-bt
+
+# Disable unused USB controller (rp1_usb0) — touchscreen is on usb1
+dtoverlay=disable-usb0
 
 # Skip network install screen
 disable_net_install=1
@@ -431,8 +436,14 @@ enable_uart=1
 ### cmdline.txt
 **File**: `br2-external/board/ultima-rpi5/cmdline.txt`
 
+**Production** (quiet boot):
 ```
-root=/dev/mmcblk0p2 rootwait ro quiet loglevel=0 logo.nologo console=tty3 vt.global_cursor_default=0
+root=/dev/mmcblk0p2 rootwait ro quiet loglevel=0 logo.nologo console=tty3 vt.global_cursor_default=0 numa=off nokaslr
+```
+
+**Debug/profiling** (verbose UART console — current setting):
+```
+root=/dev/mmcblk0p2 rootwait ro console=ttyAMA10,115200 printk.time=1 loglevel=7 logo.nologo vt.global_cursor_default=0 numa=off nokaslr
 ```
 
 | Parameter | Purpose |
@@ -440,25 +451,28 @@ root=/dev/mmcblk0p2 rootwait ro quiet loglevel=0 logo.nologo console=tty3 vt.glo
 | `root=/dev/mmcblk0p2` | SD card root. Change to `/dev/nvme0n1p2` for NVMe or `/dev/sda2` for USB |
 | `rootwait` | Wait for root device to appear |
 | `ro` | Mount root filesystem read-only (S00remountro ensures it stays ro) |
-| `quiet` | Suppress kernel log messages |
-| `loglevel=0` | Only show emergency messages |
+| `quiet` | Suppress kernel log messages (production) |
+| `loglevel=0` | Only show emergency messages (production) |
 | `logo.nologo` | Disable Linux penguin logo |
-| `console=tty3` | Send console to invisible virtual terminal |
+| `console=tty3` | Send console to invisible virtual terminal (production) |
+| `console=ttyAMA10,115200` | UART debug console on JST-SH header (debug) |
 | `vt.global_cursor_default=0` | Hide blinking cursor |
+| `numa=off` | Disable NUMA — saves ~50ms on single-node SoC |
+| `nokaslr` | Disable kernel address space randomization — avoids forced KPTI overhead |
 
 ---
 
 ## Init System & Boot Optimization
 
-BusyBox init runs `/etc/init.d/S*` scripts in alphabetical order. The boot has been optimized so only **two scripts** run before the app:
+BusyBox init runs `/etc/init.d/S*` scripts in alphabetical order. The boot has been optimized so the app launches in **S00remountro** — before udev, saving ~0.5s:
 
 ### Final Boot Order
 
 | Script | Source | Purpose | Blocking? |
 |--------|--------|---------|-----------|
-| **S00remountro** | Custom overlay | Remount root read-only | Yes (instant) |
+| **S00remountro** | Custom overlay | Remount root ro, mount /data & /boot, **launch Qt app** | Yes |
 | **S10udev** | Buildroot (eudev) | Device node creation | Yes |
-| **S11app** | Custom overlay | Mount /data, launch Qt app | Yes (but app backgrounds) |
+| **S11app** | Custom overlay | Stub (app already running); handles stop/restart | No |
 | S20seedrng | Buildroot (renamed from S01) | Seed RNG | Deferred |
 | S20syslogd | Buildroot (renamed from S01) | System logger | Deferred |
 | S20klogd | Buildroot (renamed from S02) | Kernel logger | Deferred |
@@ -511,11 +525,11 @@ rm -f "$INITD/S41dhcpcd"
 echo "Post-build script complete."
 ```
 
-### S00remountro — Remount Root Read-Only
+### S00remountro — Remount Read-Only + Launch App
 
 **File**: `br2-external/board/ultima-rpi5/overlay/etc/init.d/S00remountro`
 
-Runs as the very first init script (S00). Remounts root read-only after BusyBox init has finished its sysinit setup (proc, sysfs, devtmpfs, etc. are already mounted). This protects the SD card from corruption due to unexpected power loss.
+Runs as the very first init script (S00). Remounts root read-only, mounts /data and /boot partitions, and launches the Qt app immediately — **before udev (S10)**. This saves ~0.5s because the kernel has already created `/dev/dri/*` and `/dev/input/*` device nodes by this point.
 
 ```bash
 #!/bin/sh
@@ -523,17 +537,44 @@ case "$1" in
     start)
         sync
         mount -o remount,ro /
+
+        # Mount data partition for persistent odometer state
+        mkdir -p /data
+        mount -t ext4 /dev/mmcblk0p3 /data 2>/dev/null
+
+        # Mount boot partition for logs
+        mkdir -p /boot
+        for dev in /dev/mmcblk0p1 /dev/sda1; do
+            [ -b "$dev" ] && mount -t vfat "$dev" /boot 2>/dev/null && break
+        done
+
+        # Launch Qt app immediately (before udev)
+        export QT_QPA_PLATFORM=eglfs
+        export QT_QPA_EGLFS_KMS_CONFIG=/etc/qt-kms.conf
+        export QT_QPA_EGLFS_INTEGRATION=eglfs_kms
+        export QT_QPA_EGLFS_NO_LIBINPUT=1
+        export XDG_RUNTIME_DIR=/tmp/runtime
+        mkdir -p "$XDG_RUNTIME_DIR"
+
+        if mountpoint -q /boot 2>/dev/null; then
+            /root/app/ultima-app > /boot/ultima-app.log 2>&1 &
+        else
+            /root/app/ultima-app > /var/log/ultima-app.log 2>&1 &
+        fi
         ;;
     stop)
+        killall -q ultima-app 2>/dev/null
         ;;
 esac
 ```
 
 **Why S00 and not in inittab?** BusyBox inittab remounts root `rw` during sysinit. Removing that line breaks the boot sequence (sysfs, devpts, etc. fail to mount). Instead, we let inittab run normally, then S00remountro flips root back to `ro` before any other init script runs.
 
+**Why launch app before udev?** The vc4 DRM driver is built into the kernel (not a module), so `/dev/dri/card1` already exists when S00 runs. udev's coldplug re-scans devices but isn't needed for the app to start rendering.
+
 Writable paths after remount:
 - `/tmp`, `/run`, `/var` — tmpfs (from fstab)
-- `/data` — separate ext4 partition (mounted by S11app)
+- `/data` — separate ext4 partition (mounted here)
 - `/dev` — devtmpfs
 
 ### fstab — Filesystem Mount Table
@@ -553,42 +594,22 @@ tmpfs       /var      tmpfs   mode=0755,nosuid,nodev                0 0
 sysfs       /sys      sysfs   defaults                              0 0
 ```
 
-### S11app — Qt App Launcher
+### S11app — App Stub (Stop/Restart Only)
 
 **File**: `br2-external/board/ultima-rpi5/overlay/etc/init.d/S11app`
+
+The app is now launched by S00remountro. S11app is a stub that only handles `stop` and `restart`:
 
 ```bash
 #!/bin/sh
 #
-# Launch Ultima Qt app (early — before network/SSH)
+# App is now launched by S00remountro (before udev) for fastest startup.
+# This script only handles stop/restart.
 #
 
 case "$1" in
     start)
-        # Mount boot partition for logs
-        mkdir -p /boot
-        if ! mountpoint -q /boot 2>/dev/null; then
-            for dev in /dev/mmcblk0p1 /dev/sda1; do
-                [ -b "$dev" ] && mount -t vfat "$dev" /boot 2>/dev/null && break
-            done
-        fi
-
-        # Mount data partition for persistent odometer state
-        mkdir -p /data
-        mount -t ext4 /dev/mmcblk0p3 /data 2>/dev/null
-
-        export QT_QPA_PLATFORM=eglfs
-        export QT_QPA_EGLFS_KMS_CONFIG=/etc/qt-kms.conf
-        export QT_QPA_EGLFS_INTEGRATION=eglfs_kms
-        export QT_QPA_EGLFS_NO_LIBINPUT=1
-        export XDG_RUNTIME_DIR=/tmp/runtime
-        mkdir -p "$XDG_RUNTIME_DIR"
-
-        if mountpoint -q /boot 2>/dev/null; then
-            /root/app/ultima-app > /boot/ultima-app.log 2>&1 &
-        else
-            /root/app/ultima-app > /var/log/ultima-app.log 2>&1 &
-        fi
+        # App already launched by S00remountro
         ;;
     stop)
         killall -q ultima-app 2>/dev/null
@@ -596,7 +617,18 @@ case "$1" in
     restart)
         "$0" stop
         sleep 1
-        "$0" start
+        # Re-launch with proper env
+        export QT_QPA_PLATFORM=eglfs
+        export QT_QPA_EGLFS_KMS_CONFIG=/etc/qt-kms.conf
+        export QT_QPA_EGLFS_INTEGRATION=eglfs_kms
+        export QT_QPA_EGLFS_NO_LIBINPUT=1
+        export XDG_RUNTIME_DIR=/tmp/runtime
+        mkdir -p "$XDG_RUNTIME_DIR"
+        if mountpoint -q /boot 2>/dev/null; then
+            /root/app/ultima-app > /boot/ultima-app.log 2>&1 &
+        else
+            /root/app/ultima-app > /var/log/ultima-app.log 2>&1 &
+        fi
         ;;
     *)
         echo "Usage: $0 {start|stop|restart}"
@@ -866,6 +898,24 @@ After changing only overlay/init scripts:
 ssh ubuntu@orb "cd ~/ultima/buildroot && make -j\$(nproc) HOSTCC=gcc-14 HOSTCXX=g++-14"
 ```
 
+### Hot-Deploy to Pi (skip reflash)
+
+Push just the binary to the Pi and restart without reflashing the SD card:
+
+```bash
+# Build on VM
+ssh ubuntu@orb "cd ~/ultima/buildroot && make ultima-app-dirclean && make -j\$(nproc) HOSTCC=gcc-14 HOSTCXX=g++-14"
+
+# Copy binary from VM
+scp ubuntu@orb:~/ultima/buildroot/output/target/root/app/ultima-app /tmp/ultima-app
+
+# Push to Pi and restart
+scp -O /tmp/ultima-app root@192.168.50.139:/root/app/ultima-app
+ssh root@192.168.50.139 "/etc/init.d/S11app restart"
+```
+
+**Important**: Deploy to `/root/app/ultima-app` — that's where the init scripts launch from.
+
 ---
 
 ## Display Configuration
@@ -889,14 +939,17 @@ ssh ubuntu@orb "cd ~/ultima/buildroot && make -j\$(nproc) HOSTCC=gcc-14 HOSTCXX=
 
 **Critical**: Must be `card1`, not `card0`. On RPi5, V3D registers as `card0` (GPU compute only) and VC4 registers as `card1` (HDMI output).
 
-### Qt Environment Variables (set by S11app)
+### Qt Environment Variables (set by S00remountro)
 
 ```
 QT_QPA_PLATFORM=eglfs
 QT_QPA_EGLFS_KMS_CONFIG=/etc/qt-kms.conf
 QT_QPA_EGLFS_INTEGRATION=eglfs_kms
+QT_QPA_EGLFS_NO_LIBINPUT=1
 XDG_RUNTIME_DIR=/tmp/runtime
 ```
+
+`QT_QPA_EGLFS_NO_LIBINPUT=1` forces Qt to use evdev for touch input instead of libinput, which is more reliable with the Waveshare touchscreen.
 
 ---
 
@@ -995,7 +1048,7 @@ sudo rpi-eeprom-config --edit
 ```
 [all]
 BOOT_UART=0
-BOOT_ORDER=0xf41
+BOOT_ORDER=0xf1
 NET_INSTALL_AT_POWER_ON=0
 HDMI_DELAY=0
 DISPLAY_DIAG=0
@@ -1003,11 +1056,13 @@ DISPLAY_DIAG=0
 
 | Setting | Value | Purpose |
 |---------|-------|---------|
-| `BOOT_UART=0` | Disable serial debug output from bootloader |
-| `BOOT_ORDER=0xf41` | SD first (1), then USB (4), then restart (f). Read right-to-left |
+| `BOOT_UART=0` | Disable serial debug output from bootloader. Set to `1` for UART profiling |
+| `BOOT_ORDER=0xf1` | SD only (1), then restart (f). Saves ~0.4s by skipping USB probe |
 | `NET_INSTALL_AT_POWER_ON=0` | Disable the pink "Network Install" screen |
 | `HDMI_DELAY=0` | No HDMI initialization delay |
 | `DISPLAY_DIAG=0` | Suppress bootloader diagnostics on HDMI |
+
+**Note**: For UART boot profiling, temporarily set `BOOT_UART=1`. The RPi5 UART debug output is on the JST-SH header between the HDMI ports (NOT GPIO 14/15). Use a USB UART adapter at 115200 baud.
 
 ### Boot Order Codes
 
@@ -1019,6 +1074,7 @@ DISPLAY_DIAG=0
 | `f` | Restart loop |
 
 **Examples**:
+- SD only → restart: `0xf1` (fastest — recommended)
 - SD → USB → restart: `0xf41`
 - NVMe → SD → USB: `0xf146`
 - USB → SD → restart: `0xf14`
@@ -1161,6 +1217,19 @@ The kernel Image and DTBs are at the root of the boot partition.
 **Problem**: Modifying BusyBox inittab (removing `remount,rw /`) or replacing the default fstab without including sysfs/devpts/run prevents VC4 DRM from initializing, causing a black screen.
 **Fix**: Do NOT modify inittab. Instead, use `S00remountro` to remount root `ro` after init completes its sysinit setup. The fstab overlay must include ALL default entries plus `/var` as tmpfs. The `ro` cmdline flag ensures root starts read-only; inittab remounts it `rw` for setup; S00remountro flips it back to `ro` before any init scripts run.
 
-### 14. Odometer Data Loss Window
+### 14. Disable USB0 Device Tree Overlay
+**File**: `br2-external/board/ultima-rpi5/disable-usb0.dts`
+
+The RPi5 has two USB controllers (rp1_usb0 and rp1_usb1). The touchscreen is on usb1, so usb0 is disabled via a custom DT overlay to save boot time. The overlay is compiled by `post-build.sh` using the host DTC.
+
+### 15. CMA Cannot Go Below 320MB
+**Problem**: Setting `cma=64M` in cmdline.txt causes `raspberrypi-clk: probe failed with error -12 (ENOMEM)`, breaking the vc4 DRM display driver entirely.
+**Fix**: Leave CMA at its default 320MB. The RPi5 firmware clock driver allocates from CMA during probe.
+
+### 16. App-as-PID-1 Does Not Work
+**Problem**: Running the Qt app as PID 1 (replacing BusyBox init) fails because vc4 DRM needs udev coldplug to complete device node creation. The app starts before `/dev/dri/card1` exists, and since PID 1 can't exit, the kernel panics.
+**Fix**: Use BusyBox init with early app launch in S00remountro (before udev). This is nearly as fast without the fragility.
+
+### 17. Odometer Data Loss Window
 **Problem**: Odometer state saves every 30 seconds. A power cut could lose up to 30 seconds of driving data.
 **Acceptable**: This is by design — more frequent saves would wear the SD card. The data partition uses ext4 journaling to protect against filesystem corruption.
