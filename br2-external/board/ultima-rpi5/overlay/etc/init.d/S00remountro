@@ -1,14 +1,39 @@
 #!/bin/sh
 #
-# Remount root filesystem read-only after init completes setup.
-# Protects against SD card corruption from power cuts.
-# /tmp, /run, /var are already tmpfs. /data is a separate rw partition.
+# Remount root filesystem read-only, mount /data, launch app immediately.
+# Runs before udev (S10) to shave ~0.5s off app startup.
+# The kernel has already created /dev/dri/* and /dev/input/* by this point.
 #
 case "$1" in
     start)
         sync
         mount -o remount,ro /
+
+        # Mount data partition for persistent odometer state
+        mkdir -p /data
+        mount -t ext4 /dev/mmcblk0p3 /data 2>/dev/null
+
+        # Mount boot partition for logs
+        mkdir -p /boot
+        for dev in /dev/mmcblk0p1 /dev/sda1; do
+            [ -b "$dev" ] && mount -t vfat "$dev" /boot 2>/dev/null && break
+        done
+
+        # Launch Qt app immediately (before udev)
+        export QT_QPA_PLATFORM=eglfs
+        export QT_QPA_EGLFS_KMS_CONFIG=/etc/qt-kms.conf
+        export QT_QPA_EGLFS_INTEGRATION=eglfs_kms
+        export QT_QPA_EGLFS_NO_LIBINPUT=1
+        export XDG_RUNTIME_DIR=/tmp/runtime
+        mkdir -p "$XDG_RUNTIME_DIR"
+
+        if mountpoint -q /boot 2>/dev/null; then
+            /root/app/ultima-app > /boot/ultima-app.log 2>&1 &
+        else
+            /root/app/ultima-app > /var/log/ultima-app.log 2>&1 &
+        fi
         ;;
     stop)
+        killall -q ultima-app 2>/dev/null
         ;;
 esac
