@@ -2,8 +2,8 @@
 arm_64bit=1
 kernel=Image
 
-# GPU/Display - KMS driver (RPi5)
-dtoverlay=vc4-kms-v3d-pi5
+# GPU/Display - KMS driver (RPi5), disable unused HDMI1
+dtoverlay=vc4-kms-v3d-pi5,nohdmi1
 
 # Fast boot
 disable_splash=1
