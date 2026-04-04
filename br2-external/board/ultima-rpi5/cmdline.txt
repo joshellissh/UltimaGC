@@ -1,1 +1,1 @@
-root=/dev/mmcblk0p2 rootwait ro console=ttyAMA10,115200 printk.time=1 loglevel=7 logo.nologo vt.global_cursor_default=0 numa=off
+root=/dev/mmcblk0p2 rootwait ro console=ttyAMA10,115200 printk.time=1 loglevel=7 logo.nologo vt.global_cursor_default=0 numa=off nokaslr
