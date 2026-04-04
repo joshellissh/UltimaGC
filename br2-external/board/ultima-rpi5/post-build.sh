@@ -52,4 +52,12 @@ done
 RCSEOF
 chmod 755 "$INITD/rcS"
 
+# Compile custom device tree overlay (disable unused USB controller)
+DTC="$TARGET_DIR/../host/bin/dtc"
+if [ -x "$DTC" ] && [ -f "$BOARD_DIR/disable-usb0.dts" ]; then
+    "$DTC" -@ -I dts -O dtb -o "$TARGET_DIR/../images/rpi-firmware/overlays/disable-usb0.dtbo" \
+        "$BOARD_DIR/disable-usb0.dts"
+    echo "Compiled disable-usb0.dtbo"
+fi
+
 echo "Post-build script complete."
