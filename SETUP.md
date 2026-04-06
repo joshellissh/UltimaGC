@@ -460,11 +460,10 @@ root=/dev/mmcblk0p2 rootwait ro console=ttyAMA10,115200 printk.time=1 loglevel=7
 | `root=/dev/mmcblk0p2` | SD card root. Change to `/dev/nvme0n1p2` for NVMe or `/dev/sda2` for USB |
 | `rootwait` | Wait for root device to appear |
 | `ro` | Mount root filesystem read-only (S00remountro ensures it stays ro) |
-| `quiet` | Suppress kernel log messages (production) |
-| `loglevel=0` | Only show emergency messages (production) |
+| `quiet` | Suppress kernel log messages during boot |
+| `loglevel=1` | Only show emergency/alert messages (use `7` for debug) |
 | `logo.nologo` | Disable Linux penguin logo |
-| `console=tty3` | Send console to invisible virtual terminal (production) |
-| `console=ttyAMA10,115200` | UART debug console on JST-SH header (debug) |
+| `console=ttyAMA10,115200` | UART console on JST-SH header (kept for APP_LAUNCH marker and SSH) |
 | `vt.global_cursor_default=0` | Hide blinking cursor |
 | `numa=off` | Disable NUMA — saves ~50ms on single-node SoC |
 | `nokaslr` | Disable kernel address space randomization — avoids forced KPTI overhead |
@@ -473,7 +472,7 @@ root=/dev/mmcblk0p2 rootwait ro console=ttyAMA10,115200 printk.time=1 loglevel=7
 
 ## Init System & Boot Optimization
 
-BusyBox init runs `/etc/init.d/S*` scripts in alphabetical order. The boot has been optimized so the app launches in **S00remountro** — before udev, saving ~0.5s:
+BusyBox init runs `/etc/init.d/S*` scripts in alphabetical order. The boot has been optimized so the app launches in **S00remountro** — before udev:
 
 ### Final Boot Order
 
@@ -1226,8 +1225,8 @@ The kernel Image and DTBs are at the root of the boot partition.
 **Note**: The RPi5 bootloader handles this correctly. When editing files on a mounted boot partition, check both root and `rpi-firmware/` subdirectory.
 
 ### 13. Read-Only Root Breaks Display If Done Wrong
-**Problem**: Modifying BusyBox inittab (removing `remount,rw /`) or replacing the default fstab without including sysfs/devpts/run prevents VC4 DRM from initializing, causing a black screen.
-**Fix**: Do NOT modify inittab. Instead, use `S00remountro` to remount root `ro` after init completes its sysinit setup. The fstab overlay must include ALL default entries plus `/var` as tmpfs. The `ro` cmdline flag ensures root starts read-only; inittab remounts it `rw` for setup; S00remountro flips it back to `ro` before any init scripts run.
+**Problem**: Removing the `mount -a` (which includes `remount,rw /`) from inittab's sysinit or replacing the default fstab without including sysfs/devpts/run prevents VC4 DRM from initializing, causing a black screen.
+**Fix**: The inittab overlay must keep `mount -a` in sysinit — this temporarily remounts root `rw` so sysfs/devpts/run can mount. S00remountro then flips root back to `ro` before any init scripts run. The fstab overlay must include ALL default entries plus `/var` as tmpfs. Removing `swapon -a` and getty entries is safe (no swap or interactive console needed).
 
 ### 14. Disable USB0 Device Tree Overlay
 **File**: `br2-external/board/ultima-rpi5/disable-usb0.dts`
