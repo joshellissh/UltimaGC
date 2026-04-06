@@ -27,6 +27,9 @@ case "$1" in
         export XDG_RUNTIME_DIR=/tmp/runtime
         mkdir -p "$XDG_RUNTIME_DIR"
 
+        # Timing marker on UART (visible even with quiet console)
+        echo "[APP_LAUNCH] $(cut -d' ' -f1 /proc/uptime)" > /dev/ttyAMA10 2>/dev/null
+
         if mountpoint -q /boot 2>/dev/null; then
             /root/app/ultima-app > /boot/ultima-app.log 2>&1 &
         else
