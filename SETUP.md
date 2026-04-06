@@ -42,19 +42,22 @@ A comprehensive guide for reproducing the Ultima project: a minimal Buildroot-ba
 - Image-based gauge rendering: background PNG + rotated needle PNG overlay
 - Dashboard warning indicators (ISO 7000 icons), boost gauge, gear indicator, odometer/trip odo with persistence
 
-**Boot timing** (power to app visible): ~11.1s
-- Bootloader: ~7.7s (fixed hardware init — SDRAM, RP1 firmware, PCI)
-- Kernel + init → app render: ~3.4s
+**Boot timing** (power to app visible): ~9.2s
+- Bootloader: ~7.8s (fixed hardware init — SDRAM, RP1 firmware, PCI)
+- Kernel + init → app launch: ~0.77s
+- App init (Qt/EGL/QML): ~0.68s
 
-**Boot sequence** (after EEPROM optimization):
+**Boot sequence**:
 ```
-RPi5 Bootloader → Kernel → S00remountro (root → ro, mount /data & /boot, launch Qt app)
-                              → S10udev
-                                → S11app (stub — app already running)
-                                  → S20* deferred services
-                                    → S40network (WiFi, backgrounded)
-                                      → S50dropbear (SSH)
+RPi5 Bootloader → Kernel (quiet) → S00remountro (root → ro, mount /data & /boot, launch Qt app)
+                                      → S10udev
+                                        → S11app (stub — app already running)
+                                          → S20* deferred services
+                                            → S40network (WiFi, backgrounded)
+                                              → S50dropbear (SSH)
 ```
+
+All init script output is silenced (redirected to `/dev/null` in rcS) to avoid serial console overhead.
 
 ---
 
@@ -160,7 +163,9 @@ br2-external/
 │       ├── data/                      # Mountpoint for persistent data partition
 │       ├── etc/
 │       │   ├── fstab                  # Mount table (adds /var tmpfs for ro root)
+│       │   ├── inittab                # Silenced inittab (no swapon, no getty)
 │       │   ├── init.d/
+│       │   │   ├── rcS                # Init runner — silences all script output (> /dev/null)
 │       │   │   ├── S00remountro       # Remount root ro, mount partitions, launch app (before udev)
 │       │   │   ├── S11app             # Stub: stop/restart only (app launched by S00remountro)
 │       │   │   └── S40network         # WiFi (backgrounded)
@@ -355,6 +360,7 @@ These fragments override the bcm2712 defconfig. The full file includes display/W
 CONFIG_MODULE_COMPRESS_NONE=y          # BusyBox modprobe can't handle .ko.xz
 CONFIG_SOUND=y / CONFIG_SND=y / CONFIG_SND_SOC=y  # VC4 depends on SND && SND_SOC
 CONFIG_DRM_VC4=y / CONFIG_DRM_V3D=y    # Display driver (built-in)
+CONFIG_I2C=y / CONFIG_I2C_BRCMSTB=y    # I2C built-in for HDMI DDC (avoids ~1s deferred probe)
 CONFIG_HID=y / CONFIG_USB_HID=y        # USB touchscreen
 CONFIG_BRCMFMAC=m / CONFIG_BRCMUTIL=m  # WiFi as module (needs rootfs for firmware)
 CONFIG_FAT_FS=y / CONFIG_VFAT_FS=y     # Mount boot partition for logs
@@ -395,6 +401,7 @@ See `br2-external/board/ultima-rpi5/kernel-fragments.cfg` for the complete file.
 ### Critical Kernel Notes
 
 - **VC4 depends on SND && SND_SOC** — without `CONFIG_SOUND=y`, `CONFIG_SND=y`, `CONFIG_SND_SOC=y`, the VC4 driver gets forced to `=m` and display won't work
+- **I2C_BRCMSTB must be built-in** (`=y`) — the VC4 HDMI driver needs the DDC I2C adapter for EDID. If I2C is a module (default RPi defconfig), HDMI returns `-EPROBE_DEFER` causing ~1s of component framework retry cycles (18+ bind/unbind cycles)
 - **DRM device ordering**: V3D = `/dev/dri/card0` (GPU compute only), VC4 = `/dev/dri/card1` (HDMI). Qt KMS config must target `card1`
 - **Module compression**: `CONFIG_MODULE_COMPRESS_NONE=y` is mandatory — BusyBox modprobe can't decompress `.ko.xz` files
 - **brcmfmac must be a module** (`=m`), not built-in (`=y`). Built-in loads before rootfs is mounted, so it can't find firmware files in `/lib/firmware/brcm/`
@@ -436,15 +443,17 @@ enable_uart=1
 ### cmdline.txt
 **File**: `br2-external/board/ultima-rpi5/cmdline.txt`
 
-**Production** (quiet boot):
+**Production** (quiet boot — current setting):
 ```
-root=/dev/mmcblk0p2 rootwait ro quiet loglevel=0 logo.nologo console=tty3 vt.global_cursor_default=0 numa=off nokaslr
+root=/dev/mmcblk0p2 rootwait ro console=ttyAMA10,115200 loglevel=1 quiet logo.nologo vt.global_cursor_default=0 numa=off nokaslr
 ```
 
-**Debug/profiling** (verbose UART console — current setting):
+**Debug/profiling** (verbose UART console):
 ```
 root=/dev/mmcblk0p2 rootwait ro console=ttyAMA10,115200 printk.time=1 loglevel=7 logo.nologo vt.global_cursor_default=0 numa=off nokaslr
 ```
+
+**Important**: The verbose console adds ~1.7s to boot time. When the UART console is enabled with `loglevel=7`, the kernel flushes ~6KB of buffered early-boot messages over 115200 baud serial (~0.7s), and printk calls block throughout boot. Use `loglevel=1 quiet` for production — this keeps the UART console registered (for init script markers and SSH) but suppresses all but emergency kernel messages.
 
 | Parameter | Purpose |
 |-----------|---------|
@@ -555,6 +564,9 @@ case "$1" in
         export QT_QPA_EGLFS_NO_LIBINPUT=1
         export XDG_RUNTIME_DIR=/tmp/runtime
         mkdir -p "$XDG_RUNTIME_DIR"
+
+        # Timing marker on UART (visible even with quiet console)
+        echo "[APP_LAUNCH] $(cut -d' ' -f1 /proc/uptime)" > /dev/ttyAMA10 2>/dev/null
 
         if mountpoint -q /boot 2>/dev/null; then
             /root/app/ultima-app > /boot/ultima-app.log 2>&1 &
@@ -1230,6 +1242,14 @@ The RPi5 has two USB controllers (rp1_usb0 and rp1_usb1). The touchscreen is on 
 **Problem**: Running the Qt app as PID 1 (replacing BusyBox init) fails because vc4 DRM needs udev coldplug to complete device node creation. The app starts before `/dev/dri/card1` exists, and since PID 1 can't exit, the kernel panics.
 **Fix**: Use BusyBox init with early app launch in S00remountro (before udev). This is nearly as fast without the fragility.
 
-### 17. Odometer Data Loss Window
+### 17. VC4 HDMI Deferred Probe Without Built-in I2C
+**Problem**: The RPi5 defconfig has `CONFIG_I2C_BRCMSTB=m` (module). The VC4 HDMI driver calls `of_find_i2c_adapter_by_node()` for the DDC bus during `vc4_hdmi_bind()`, which returns `-EPROBE_DEFER` if the I2C module hasn't been loaded yet. This causes the component framework to bind HVS, fail on HDMI, unbind, and retry — 18+ cycles over ~1 second.
+**Fix**: Set `CONFIG_I2C=y` and `CONFIG_I2C_BRCMSTB=y` in kernel fragments. The I2C adapter registers during early platform init, and VC4 binds on the first attempt.
+
+### 18. Serial Console Adds ~1.7s to Boot
+**Problem**: With `console=ttyAMA10,115200 loglevel=7`, the kernel flushes ~6KB of buffered early-boot printk messages over 115200 baud serial when the PL011 console is registered (~0.7s). Additionally, every subsequent printk blocks on serial transmission throughout boot, adding another ~1s cumulatively.
+**Fix**: Use `loglevel=1 quiet` to suppress non-emergency messages. The UART console remains registered for userspace output (e.g., APP_LAUNCH marker). Higher baud rates (460800, 921600) are not supported by the RPi5 JST-SH debug probe.
+
+### 19. Odometer Data Loss Window
 **Problem**: Odometer state saves every 30 seconds. A power cut could lose up to 30 seconds of driving data.
 **Acceptable**: This is by design — more frequent saves would wear the SD card. The data partition uses ext4 journaling to protect against filesystem corruption.
