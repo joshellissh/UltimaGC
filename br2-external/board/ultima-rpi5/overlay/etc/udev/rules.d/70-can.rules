@@ -1,0 +1,6 @@
+# ODrive USB-CAN adapter (gs_usb / candleLight class, VID:PID 1d50:606f)
+# Bring up can0 at 1 Mbit/s on plug-in. Syvecs S7+ CAN2 runs at 1M on this car
+# (verified in SCal: Datastreams → CAN2 Bus Speed).
+SUBSYSTEM=="net", ACTION=="add", DEVPATH=="*/usb*", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="606f", \
+  RUN+="/sbin/ip link set %k type can bitrate 1000000", \
+  RUN+="/sbin/ip link set %k up"
