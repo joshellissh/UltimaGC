@@ -1,0 +1,341 @@
+VERSION ""
+
+NS_ :
+	NS_DESC_
+	CM_
+	BA_DEF_
+	BA_
+	VAL_
+	CAT_DEF_
+	CAT_
+	FILTER
+	BA_DEF_DEF_
+	EV_DATA_
+	ENVVAR_DATA_
+	SGTYPE_
+	SGTYPE_VAL_
+	BA_DEF_SGTYPE_
+	BA_SGTYPE_
+	SIG_TYPE_REF_
+	VAL_TABLE_
+	SIG_GROUP_
+	SIG_VALTYPE_
+	SIGTYPE_VALTYPE_
+	BO_TX_BU_
+	BA_DEF_REL_
+	BA_REL_
+	BA_DEF_DEF_REL_
+	BU_SG_REL_
+	BU_EV_REL_
+	BU_BO_REL_
+
+BS_:
+
+BU_: 
+VAL_TABLE_ brakeLight 0 "Off" 1 "On" ;
+VAL_TABLE_ launchSwitch 0 "Off" 1 "On" ;
+VAL_TABLE_ changeLightState 0 "Off" 1 "On" 2 "Timeout" ;
+VAL_TABLE_ runMode 0 "Intial" 1 "Preinject" 2 "Stop" 3 "Crank" 4 "Run" ;
+VAL_TABLE_ loggingActive 0 "Off" 1 "On" ;
+VAL_TABLE_ gear 0 "Unknown " 1 "Reverse" 2 "Neutral" 3 "First" 4 "Second" 5 "Third" 6 "Fourth" 7 "Fifth" 8 "Six" 9 "Seventh" 10 "Eigth" ;
+VAL_TABLE_ trqFuelSevSrc 0 "None" 1 "Gear Cut" 2 "Rev Limit" 3 "Overun" 4 "Pit Limit" 5 "Map Limit" 6 "Turbo Speed Limit" 7 "Traction Control" 8 "High Fuel Pressure" 9 "Launch Limit" 10 "AntiLag" 11 "Torque Limit" 12 "TPS Cut" 13 "Emissions" 14 "Engine enable" 15 "Gearblip" 16 "DW" 17 "CM" ;
+VAL_TABLE_ knockWarning 0 "Off" 1 "On" ;
+VAL_TABLE_ tpsClosed 0 "Off" 1 "On" ;
+VAL_TABLE_ idleControlActive 0 "Off" 1 "On" ;
+VAL_TABLE_ n2oSwitch 0 "Off" 1 "On" ;
+VAL_TABLE_ fuelPump1 0 "Off" 1 "On" ;
+VAL_TABLE_ fuelPump2 0 "Off" 1 "On" ;
+VAL_TABLE_ fuelPump3 0 "Off" 1 "On" ;
+VAL_TABLE_ fan1 0 "Off" 1 "On" ;
+VAL_TABLE_ fan2 0 "Off" 1 "On" ;
+VAL_TABLE_ fan4 0 "Off" 1 "On" ;
+VAL_TABLE_ fan5 0 "Off" 1 "On" ;
+VAL_TABLE_ limpMode 0 "Off" 1 "Limp Switch On" 2 "Ect Cold" 3 "EOT Cold" 4 "Sensor Warning Level" 5 "Auto Trans" 100 "EOP Trip" 101 "CCP Trip" 102 "Knock Shutdown" 103 "EOT Trip" 104 "ECT Trip" 105 "FP Trip" 106 "PreIgn Shutdown" 107 "Time On Load Trip" 108 "Trq Lim Trip" 109 "VVT Fail" 110 "Vbat Trip" 111 "Lean Trip" 112 "ACT Trip" 113 "ECP Trip" ;
+VAL_TABLE_ sensorWarningLevel 0 "OK" 1 "Minor" 2 "Moderate" 3 "Critical" ;
+VAL_TABLE_ cruiseActive 0 "Off" 1 "On" ;
+VAL_TABLE_ airConCtl 0 "Off" 1 "On" ;
+VAL_TABLE_ airConSwitch 0 "Off" 1 "On" ;
+VAL_TABLE_ calSelect 0 "Cal1" 1 "Cal2" 2 "Cal3" 3 "Cal4" 4 "Cal5" 5 "Cal6" 6 "Cal7" 7 "Cal8" 8 "Cal9" 9 "Cal10" 10 "Cal11" 11 "Cal12" ;
+VAL_TABLE_ tcSelect 0 "TC1" 1 "TC2" 2 "TC3" 3 "TC4" 4 "TC5" 5 "TC6" 6 "TC7" 7 "TC8" 8 "TC9" 9 "TC10" 10 "TC11" 11 "TC12" ;
+VAL_TABLE_ launchSelect 0 "LC1" 1 "LC2" 2 "LC3" 3 "LC4" 4 "LC5" 5 "LC6" 6 "LC7" 7 "LC8" 8 "LC9" 9 "LC10" 10 "LC11" 11 "LC12" ;
+VAL_TABLE_ alsSelect 0 "ALS1" 1 "ALS2" 2 "ALS3" 3 "ALS4" 4 "ALS5" 5 "ALS6" 6 "ALS7" 7 "ALS8" 8 "ALS9" 9 "ALS10" 10 "ALS11" 11 "ALS12" ;
+VAL_TABLE_ launchInStage 0 "OFF" 1 "On" ;
+VAL_TABLE_ pitSwitch 0 "Off" 1 "On" ;
+VAL_TABLE_ pitLimitActive 0 "Off" 1 "On" ;
+
+
+BO_ 1536 SyvecsS7_01_600h: 8 Vector__XXX
+ SG_ rpm : 7|16@0- (1,0) [0|10000] "rpm" Vector__XXX
+ SG_ ppsFinal : 23|16@0- (0.012207,0) [-25|125] "%" Vector__XXX
+ SG_ tpsMax : 39|16@0- (0.012207,0) [-25|125] "%" Vector__XXX
+ SG_ dipDuty : 55|16@0- (0.012207,0) [-25|125] "%" Vector__XXX
+
+BO_ 1537 SyvecsS7_02_601h: 8 Vector__XXX
+ SG_ engTrqEstOutputEXT : 7|16@0- (0.1,0) [-100|2500] "Nm" Vector__XXX
+ SG_ engTrqEstOutputPot : 23|16@0- (0.1,0) [-100|2500] "Nm" Vector__XXX
+ SG_ engTrqDmdPps : 39|16@0- (0.1,0) [-100|2500] "Nm" Vector__XXX
+ SG_ engTrqEstFriction : 55|16@0- (0.1,0) [-100|2500] "Nm" Vector__XXX
+
+BO_ 1538 SyvecsS7_03_602h: 8 Vector__XXX
+ SG_ bp01Duty : 7|16@0- (0.012207,0) [0|100] "%" Vector__XXX
+ SG_ bp02Duty : 23|16@0- (0.012207,0) [0|100] "%" Vector__XXX
+ SG_ clPwm01DutyFinal : 39|16@0- (0.012207,0) [0|100] "%" Vector__XXX
+ SG_ dpcDuty : 55|16@0- (0.012207,0) [0|100] "%" Vector__XXX
+
+BO_ 1539 SyvecsS7_04_603h: 8 Vector__XXX
+ SG_ brakeLight : 7|16@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ launchSwitch : 23|16@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ changeLightState : 39|16@0+ (1,0) [0|2] "" Vector__XXX
+ SG_ vinTx : 55|16@0+ (1,0) [0|65535] "" Vector__XXX
+
+BO_ 1540 SyvecsS7_05_604h: 8 Vector__XXX
+ SG_ fan3Duty : 7|16@0- (0.012207,0) [0|100] "%" Vector__XXX
+ SG_ fan6Duty : 23|16@0- (0.012207,0) [0|100] "%" Vector__XXX
+ SG_ fan7Duty : 39|16@0- (0.012207,0) [0|100] "%" Vector__XXX
+ SG_ fan8Duty : 55|16@0- (0.012207,0) [0|100] "%" Vector__XXX
+
+BO_ 1541 SyvecsS7_06_605h: 8 Vector__XXX
+ SG_ custSen_U01 : 7|16@0+ (1,0) [0|65535] "" Vector__XXX
+ SG_ custSen_U02 : 23|16@0+ (1,0) [0|65535] "" Vector__XXX
+ SG_ custSen_U03 : 39|16@0+ (1,0) [0|65535] "" Vector__XXX
+ SG_ custSen_U04 : 55|16@0+ (1,0) [0|65535] "" Vector__XXX
+
+BO_ 1542 SyvecsS7_07_606h: 8 Vector__XXX
+ SG_ rpmDTR : 7|16@0- (1,0) [-2000|2000] "rpm/s" Vector__XXX
+ SG_ map1DT : 23|16@0- (1,0) [-1000|1000] "" Vector__XXX
+ SG_ tps1DT : 39|16@0- (1,0) [-32767|32767] "" Vector__XXX
+ SG_ dip1 : 55|16@0- (0.1,0) [0|5000] "kpa" Vector__XXX
+
+BO_ 1543 SyvecsS7_08_607h: 8 Vector__XXX
+ SG_ runMode : 7|16@0+ (1,0) [0|4] "" Vector__XXX
+ SG_ runTimeLR : 23|16@0+ (0.1,0) [0|300] "s" Vector__XXX
+ SG_ highLoadTimer : 39|16@0+ (0.1,0) [0|300] "s" Vector__XXX
+ SG_ loggingActive : 55|16@0+ (1,0) [0|1] "" Vector__XXX
+
+BO_ 1544 SyvecsS7_09_608h: 8 Vector__XXX
+ SG_ vehicleSpeed : 7|16@0- (0.036,0) [0|500] "km/h" Vector__XXX
+ SG_ drivenSpeed : 23|16@0- (0.036,0) [0|500] "km/h" Vector__XXX
+ SG_ ecu_gpsSpeed : 39|16@0- (0.036,0) [0|500] "km/h" Vector__XXX
+
+BO_ 1545 SyvecsS7_10_609h: 8 Vector__XXX
+ SG_ flSpeed : 7|16@0- (0.036,0) [0|500] "km/h" Vector__XXX
+ SG_ frSpeed : 23|16@0- (0.036,0) [0|500] "km/h" Vector__XXX
+ SG_ rlSpeed : 39|16@0- (0.036,0) [0|500] "km/h" Vector__XXX
+ SG_ rrSpeed : 55|16@0- (0.036,0) [0|500] "km/h" Vector__XXX
+
+BO_ 1546 SyvecsS7_11_60Ah: 8 Vector__XXX
+ SG_ mapMax : 7|16@0- (0.1,0) [0|1000] "kPa" Vector__XXX
+ SG_ wgMapTarg1 : 23|16@0- (0.1,0) [0|1000] "kPa" Vector__XXX
+ SG_ wgMapLimit1 : 39|16@0- (0.1,0) [0|3000] "kPa" Vector__XXX
+ SG_ clutchSwitch : 55|8@0+ (1,0) [0|1] "" Vector__XXX
+
+BO_ 1547 SyvecsS7_12_60Bh: 8 Vector__XXX
+ SG_ lam1 : 7|16@0- (0.001,0) [0.5|1.5] "LA" Vector__XXX
+ SG_ lam2 : 23|16@0- (0.001,0) [0.5|1.5] "LA" Vector__XXX
+ SG_ fuelMltCll1 : 39|16@0- (0.000244141,0) [0.5|1.5] "ratio" Vector__XXX
+ SG_ fuelMltCll2 : 55|16@0- (0.000244141,0) [0.5|1.5] "ratio" Vector__XXX
+
+BO_ 1548 SyvecsS7_13_60Ch: 8 Vector__XXX
+ SG_ fuelFinalPri1 : 7|16@0+ (0.001,0) [0|30] "ms" Vector__XXX
+ SG_ fuelFinalSec1 : 23|16@0+ (0.001,0) [0|30] "ms" Vector__XXX
+ SG_ fuelDutyPri1 : 39|16@0- (0.0244141,0) [0|100] "%" Vector__XXX
+ SG_ fuelDutySec1 : 55|16@0- (0.0244141,0) [0|100] "%" Vector__XXX
+
+BO_ 1549 SyvecsS7_14_60Dh: 8 Vector__XXX
+ SG_ fuelConsVolHR : 7|16@0- (0.1,0) [0|1000] "l" Vector__XXX
+ SG_ fuelConsVolRate : 23|16@0- (1,0) [0|30000] "cc/min" Vector__XXX
+ SG_ n2oFinal : 39|16@0- (0.012207,0) [0|100] "%" Vector__XXX
+ SG_ fuelEndAngle : 55|16@0- (0.0322581,0) [-1057.0011627|1057.0011627] "deg" Vector__XXX
+
+BO_ 1550 SyvecsS7_15_60Eh: 8 Vector__XXX
+ SG_ longG : 7|16@0- (0.001,0) [-10|10] "G" Vector__XXX
+ SG_ latG : 23|16@0- (0.001,0) [-10|10] "G" Vector__XXX
+ SG_ yaw : 39|16@0- (0.1,0) [-720|720] "deg/s" Vector__XXX
+ SG_ pitch : 55|16@0+ (0.1,0) [-720|720] "deg/s" Vector__XXX
+
+BO_ 1551 SyvecsS7_16_60Fh: 8 Vector__XXX
+ SG_ ect1 : 7|16@0- (0.1,0) [-25|150] "C" Vector__XXX
+ SG_ act1 : 23|16@0- (0.1,0) [-25|150] "C" Vector__XXX
+ SG_ eot : 39|16@0- (0.1,0) [-25|150] "C" Vector__XXX
+ SG_ ft1 : 55|16@0- (0.1,0) [-25|150] "C" Vector__XXX
+
+BO_ 1552 SyvecsS7_17_610h: 8 Vector__XXX
+ SG_ eop1 : 7|16@0- (0.1,0) [0|1000] "kPa" Vector__XXX
+ SG_ relFp11 : 23|16@0- (0.1,0) [0|1000] "kPa" Vector__XXX
+ SG_ ecp : 39|16@0- (0.1,0) [0|1000] "kPa" Vector__XXX
+ SG_ ccp1 : 55|16@0- (0.1,0) [0|110] "kPa" Vector__XXX
+
+BO_ 1553 SyvecsS7_18_611h: 8 Vector__XXX
+ SG_ trqFuelSev : 7|16@0+ (0.5,0) [0|100] "%" Vector__XXX
+ SG_ trqIgnSev : 23|16@0+ (0.5,0) [0|100] "%" Vector__XXX
+ SG_ trqIgnRtd : 39|16@0+ (0.0322581,0) [0|50] "deg" Vector__XXX
+ SG_ ignFinalPri1 : 55|16@0- (0.0322581,0) [-10|50] "deg" Vector__XXX
+
+BO_ 1554 SyvecsS7_19_612h: 8 Vector__XXX
+ SG_ launchRpm : 7|16@0- (1,0) [0|10000] "rpm" Vector__XXX
+ SG_ revLimitRpm : 23|16@0- (1,0) [0|10000] "rpm" Vector__XXX
+ SG_ revCutRpm : 39|16@0- (1,0) [0|10000] "rpm" Vector__XXX
+ SG_ flvlA : 55|16@0+ (0.012207,0) [0|100] "%" Vector__XXX
+
+BO_ 1555 SyvecsS7_20_613h: 8 Vector__XXX
+ SG_ gear : 7|16@0- (1,0) [0|10] "" Vector__XXX
+ SG_ fuelComp : 23|16@0- (0.1,0) [0|100] "%" Vector__XXX
+ SG_ idleTarg : 39|16@0- (1,0) [0|3000] "rpm" Vector__XXX
+ SG_ trqFuelSevSrc : 55|16@0+ (1,0) [0|17] "" Vector__XXX
+
+BO_ 1556 SyvecsS7_21_614h: 8 Vector__XXX
+ SG_ knockWarning : 7|16@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ tpsClosed : 23|16@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ idleControlActive : 39|16@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ n2oSwitch : 55|16@0+ (1,0) [0|1] "" Vector__XXX
+
+BO_ 1557 SyvecsS7_22_615h: 8 Vector__XXX
+ SG_ cm201 : 7|16@0+ (1,0) [-32768|32767] "" Vector__XXX
+ SG_ cm202 : 23|16@0+ (1,0) [-32768|32767] "" Vector__XXX
+ SG_ cm203 : 39|16@0+ (1,0) [-32768|32767] "" Vector__XXX
+ SG_ cm204 : 55|16@0+ (1,0) [-32768|32767] "" Vector__XXX
+
+BO_ 1558 SyvecsS7_23_616h: 8 Vector__XXX
+ SG_ cm301 : 7|16@0+ (0.012207,0) [-32768|32767] "" Vector__XXX
+ SG_ cm302 : 23|16@0+ (0.012207,0) [-32768|32767] "" Vector__XXX
+ SG_ cm303 : 39|16@0+ (0.012207,0) [-32768|32767] "" Vector__XXX
+ SG_ cm304 : 55|16@0+ (0.012207,0) [-32768|32767] "" Vector__XXX
+
+BO_ 1559 SyvecsS7_24_617h: 8 Vector__XXX
+ SG_ custSen_U05 : 7|16@0- (0.012207,0) [0|100] "%" Vector__XXX
+ SG_ custSen_U06 : 23|16@0- (0.012207,0) [0|100] "%" Vector__XXX
+ SG_ custSen_U07 : 39|16@0- (0.1,0) [-3276.7|3276.7] "kPa" Vector__XXX
+ SG_ custSen_U08 : 55|16@0+ (1,0) [0|254] "" Vector__XXX
+
+BO_ 1560 SyvecsS7_25_618h: 8 Vector__XXX
+ SG_ fuelPump1Duty : 7|16@0- (0.012207,0) [0|100] "%" Vector__XXX
+ SG_ fuelPump1 : 23|16@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ fuelPump2 : 39|16@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ fuelPump3 : 55|16@0+ (1,0) [0|1] "" Vector__XXX
+
+BO_ 1561 SyvecsS7_26_619h: 8 Vector__XXX
+ SG_ dbw1Duty : 7|16@0- (0.012207,0) [0|100] "%" Vector__XXX
+ SG_ dbw1Targ : 23|16@0- (0.012207,0) [0|100] "%" Vector__XXX
+ SG_ egt1 : 39|16@0- (0.1,0) [0|1250] "C" Vector__XXX
+ SG_ egt2 : 55|16@0- (0.1,0) [0|1250] "C" Vector__XXX
+
+BO_ 1562 SyvecsS7_27_61Ah: 8 Vector__XXX
+ SG_ vvt1In : 7|16@0- (0.0322581,0) [-90|90] "deg" Vector__XXX
+ SG_ vvt1Ex : 23|16@0- (0.0322581,0) [-90|90] "deg" Vector__XXX
+ SG_ vvtInTarg : 39|16@0- (0.0322581,0) [-90|90] "deg" Vector__XXX
+ SG_ vvtExTarg : 55|16@0- (0.0322581,0) [-90|90] "deg" Vector__XXX
+
+BO_ 1563 SyvecsS7_28_61Bh: 8 Vector__XXX
+ SG_ fan1 : 7|16@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ fan2 : 23|16@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ fan4 : 39|16@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ fan5 : 55|16@0+ (1,0) [0|1] "" Vector__XXX
+
+BO_ 1564 SyvecsS7_29_61Ch: 8 Vector__XXX
+ SG_ limpMode : 7|16@0+ (1,0) [0|113] "" Vector__XXX
+ SG_ sensorWarningLevel : 23|16@0+ (1,0) [0|3] "" Vector__XXX
+ SG_ errorFlagsH : 39|16@0+ (1,0) [0|65535] "" Vector__XXX
+ SG_ errorFlagsL : 55|16@0+ (1,0) [0|65535] "" Vector__XXX
+
+BO_ 1565 SyvecsS7_30_61Dh: 8 Vector__XXX
+ SG_ cruiseActive : 7|16@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ bap : 23|16@0+ (0.1,0) [70|110] "kPa" Vector__XXX
+ SG_ airConCtl : 39|16@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ airConSwitch : 55|16@0+ (1,0) [0|1] "" Vector__XXX
+
+BO_ 1566 SyvecsS7_31_61Eh: 8 Vector__XXX
+ SG_ carCode1 : 7|16@0+ (1,0) [0|65535] "" Vector__XXX
+ SG_ carCode2 : 23|16@0+ (1,0) [0|65535] "" Vector__XXX
+ SG_ carCode3 : 39|16@0+ (1,0) [0|65535] "" Vector__XXX
+ SG_ carCode4 : 55|16@0+ (1,0) [0|65535] "" Vector__XXX
+
+BO_ 1567 SyvecsS7_32_61Fh: 8 Vector__XXX
+ SG_ calSelect : 7|16@0- (1,0) [0|11] "" Vector__XXX
+ SG_ tcSelect : 23|16@0- (1,0) [0|11] "" Vector__XXX
+ SG_ launchSelect : 39|16@0- (1,0) [0|11] "" Vector__XXX
+ SG_ alsSelect : 55|16@0- (1,0) [0|11] "" Vector__XXX
+
+BO_ 1568 SyvecsS7_33_620h: 8 Vector__XXX
+ SG_ carCode5 : 7|16@0+ (1,0) [0|65535] "" Vector__XXX
+ SG_ carCode6 : 23|16@0+ (1,0) [0|65535] "" Vector__XXX
+ SG_ atSelect : 39|16@0+ (1,0) [0|0] "" Vector__XXX
+
+BO_ 1569 SyvecsS7_34_621h: 8 Vector__XXX
+ SG_ wgFinalDuty : 7|16@0+ (0.012,0) [0|100] "%" Vector__XXX
+ SG_ launchInStage : 23|16@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ turboSpeed1 : 39|16@0+ (0.01,0) [0|65535] "" Vector__XXX
+ SG_ n20p : 55|16@0+ (0.01,0) [0|5000] "kpa" Vector__XXX
+
+BO_ 1570 SyvecsS7_33_622h: 8 Vector__XXX
+ SG_ cruiseSetSpeed : 7|16@0+ (0.036,0) [0|500] "kph" Vector__XXX
+ SG_ vBat : 23|16@0+ (0.001,0) [0|65.535] "V" Vector__XXX
+ SG_ pitSwitch : 39|16@0+ (1,0) [0|1] "" Vector__XXX
+ SG_ pitLimitActive : 55|16@0+ (1,0) [0|1] "" Vector__XXX
+
+
+BA_DEF_ SG_  "SignalType" STRING ;
+BA_DEF_ BO_  "VFrameFormat" ENUM  "StandardCAN","ExtendedCAN","reserved","J1939PG";
+BA_DEF_DEF_  "SignalType" "";
+BA_ "SignalType" SG_ 1539 brakeLight "ENM";
+BA_ "SignalType" SG_ 1539 launchSwitch "ENM";
+BA_ "SignalType" SG_ 1539 changeLightState "ENM";
+BA_ "SignalType" SG_ 1543 runMode "ENM";
+BA_ "SignalType" SG_ 1543 loggingActive "ENM";
+BA_ "SignalType" SG_ 1555 gear "ENM";
+BA_ "SignalType" SG_ 1555 trqFuelSevSrc "ENM";
+BA_ "SignalType" SG_ 1556 knockWarning "ENM";
+BA_ "SignalType" SG_ 1556 tpsClosed "ENM";
+BA_ "SignalType" SG_ 1556 idleControlActive "ENM";
+BA_ "SignalType" SG_ 1556 n2oSwitch "ENM";
+BA_ "SignalType" SG_ 1560 fuelPump1 "ENM";
+BA_ "SignalType" SG_ 1560 fuelPump2 "ENM";
+BA_ "SignalType" SG_ 1560 fuelPump3 "ENM";
+BA_ "SignalType" SG_ 1563 fan1 "ENM";
+BA_ "SignalType" SG_ 1563 fan2 "ENM";
+BA_ "SignalType" SG_ 1563 fan4 "ENM";
+BA_ "SignalType" SG_ 1563 fan5 "ENM";
+BA_ "SignalType" SG_ 1564 limpMode "ENM";
+BA_ "SignalType" SG_ 1564 sensorWarningLevel "ENM";
+BA_ "SignalType" SG_ 1565 cruiseActive "ENM";
+BA_ "SignalType" SG_ 1565 airConCtl "ENM";
+BA_ "SignalType" SG_ 1565 airConSwitch "ENM";
+BA_ "SignalType" SG_ 1567 calSelect "ENM";
+BA_ "SignalType" SG_ 1567 tcSelect "ENM";
+BA_ "SignalType" SG_ 1567 launchSelect "ENM";
+BA_ "SignalType" SG_ 1567 alsSelect "ENM";
+BA_ "SignalType" SG_ 1569 launchInStage "ENM";
+BA_ "SignalType" SG_ 1570 pitSwitch "ENM";
+BA_ "SignalType" SG_ 1570 pitLimitActive "ENM";
+VAL_ 1539 brakeLight 0 "Off" 1 "On" ;
+VAL_ 1539 launchSwitch 0 "Off" 1 "On" ;
+VAL_ 1539 changeLightState 0 "Off" 1 "On" 2 "Timeout" ;
+VAL_ 1543 runMode 0 "Intial" 1 "Preinject" 2 "Stop" 3 "Crank" 4 "Run" ;
+VAL_ 1543 loggingActive 0 "Off" 1 "On" ;
+VAL_ 1555 gear 0 "Unknown " 1 "Reverse" 2 "Neutral" 3 "First" 4 "Second" 5 "Third" 6 "Fourth" 7 "Fifth" 8 "Six" 9 "Seventh" 10 "Eigth" ;
+VAL_ 1555 trqFuelSevSrc 0 "None" 1 "Gear Cut" 2 "Rev Limit" 3 "Overun" 4 "Pit Limit" 5 "Map Limit" 6 "Turbo Speed Limit" 7 "Traction Control" 8 "High Fuel Pressure" 9 "Launch Limit" 10 "AntiLag" 11 "Torque Limit" 12 "TPS Cut" 13 "Emissions" 14 "Engine enable" 15 "Gearblip" 16 "DW" 17 "CM" ;
+VAL_ 1556 knockWarning 0 "Off" 1 "On" ;
+VAL_ 1556 tpsClosed 0 "Off" 1 "On" ;
+VAL_ 1556 idleControlActive 0 "Off" 1 "On" ;
+VAL_ 1556 n2oSwitch 0 "Off" 1 "On" ;
+VAL_ 1560 fuelPump1 0 "Off" 1 "On" ;
+VAL_ 1560 fuelPump2 0 "Off" 1 "On" ;
+VAL_ 1560 fuelPump3 0 "Off" 1 "On" ;
+VAL_ 1563 fan1 0 "Off" 1 "On" ;
+VAL_ 1563 fan2 0 "Off" 1 "On" ;
+VAL_ 1563 fan4 0 "Off" 1 "On" ;
+VAL_ 1563 fan5 0 "Off" 1 "On" ;
+VAL_ 1564 limpMode 0 "Off" 1 "Limp Switch On" 2 "Ect Cold" 3 "EOT Cold" 4 "Sensor Warning Level" 5 "Auto Trans" 100 "EOP Trip" 101 "CCP Trip" 102 "Knock Shutdown" 103 "EOT Trip" 104 "ECT Trip" 105 "FP Trip" 106 "PreIgn Shutdown" 107 "Time On Load Trip" 108 "Trq Lim Trip" 109 "VVT Fail" 110 "Vbat Trip" 111 "Lean Trip" 112 "ACT Trip" 113 "ECP Trip" ;
+VAL_ 1564 sensorWarningLevel 0 "OK" 1 "Minor" 2 "Moderate" 3 "Critical" ;
+VAL_ 1565 cruiseActive 0 "Off" 1 "On" ;
+VAL_ 1565 airConCtl 0 "Off" 1 "On" ;
+VAL_ 1565 airConSwitch 0 "Off" 1 "On" ;
+VAL_ 1567 calSelect 0 "Cal1" 1 "Cal2" 2 "Cal3" 3 "Cal4" 4 "Cal5" 5 "Cal6" 6 "Cal7" 7 "Cal8" 8 "Cal9" 9 "Cal10" 10 "Cal11" 11 "Cal12" ;
+VAL_ 1567 tcSelect 0 "TC1" 1 "TC2" 2 "TC3" 3 "TC4" 4 "TC5" 5 "TC6" 6 "TC7" 7 "TC8" 8 "TC9" 9 "TC10" 10 "TC11" 11 "TC12" ;
+VAL_ 1567 launchSelect 0 "LC1" 1 "LC2" 2 "LC3" 3 "LC4" 4 "LC5" 5 "LC6" 6 "LC7" 7 "LC8" 8 "LC9" 9 "LC10" 10 "LC11" 11 "LC12" ;
+VAL_ 1567 alsSelect 0 "ALS1" 1 "ALS2" 2 "ALS3" 3 "ALS4" 4 "ALS5" 5 "ALS6" 6 "ALS7" 7 "ALS8" 8 "ALS9" 9 "ALS10" 10 "ALS11" 11 "ALS12" ;
+VAL_ 1569 launchInStage 0 "OFF" 1 "On" ;
+VAL_ 1570 pitSwitch 0 "Off" 1 "On" ;
+VAL_ 1570 pitLimitActive 0 "Off" 1 "On" ;
+
+
+

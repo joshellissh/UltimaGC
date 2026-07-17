@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include "odostore.h"
+#include "canbus.h"
 
 static double readUptime() {
     double t = 0;
@@ -20,9 +21,12 @@ static double readUptime() {
 }
 
 static OdoStore *g_odoStore = nullptr;
+static CanBus *g_canBus = nullptr;
 
 static void sigHandler(int) {
-    if (g_odoStore)
+    if (g_canBus)
+        g_canBus->save();        // pushes latest odometer into OdoStore + persists
+    else if (g_odoStore)
         g_odoStore->save();
     _exit(0);
 }
@@ -38,12 +42,17 @@ int main(int argc, char *argv[])
 
     OdoStore odoStore("/data/odometer.json");
     g_odoStore = &odoStore;
+
+    CanBus canBus(&odoStore);
+    g_canBus = &canBus;
+
     signal(SIGTERM, sigHandler);
     signal(SIGINT, sigHandler);
 
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("bootTime", t0);
     engine.rootContext()->setContextProperty("odoStore", &odoStore);
+    engine.rootContext()->setContextProperty("sim", &canBus);
     engine.load(QUrl(QStringLiteral("qrc:/main.qml")));
     double t2 = readUptime();
     fprintf(stderr, "[%6.2f] QML loaded (+%.2fs)\n", t2, t2-t1);
