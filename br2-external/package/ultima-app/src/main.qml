@@ -15,20 +15,13 @@ Window {
         fillMode: Image.PreserveAspectCrop
     }
 
-    SimEngine {
-        id: sim
-    }
-
-    // Periodic odometer save (every 30s)
+    // Periodic odometer save (every 30s) — CanBus owns integration and pushes
+    // the latest values into OdoStore.
     Timer {
         interval: 30000
         running: true
         repeat: true
-        onTriggered: {
-            odoStore.totalOdo = sim.totalOdo
-            odoStore.tripOdo = sim.tripOdo
-            odoStore.save()
-        }
+        onTriggered: sim.save()
     }
 
     // Left gauge: Speedometer — pivot at (351, 342)
@@ -273,8 +266,7 @@ Window {
             anchors.margins: -10
             onClicked: {
                 sim.tripOdo = 0
-                odoStore.tripOdo = 0
-                odoStore.save()
+                sim.save()
             }
         }
     }

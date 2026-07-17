@@ -17,13 +17,14 @@ A comprehensive guide for reproducing the Ultima project: a minimal Buildroot-ba
 9. [Init System & Boot Optimization](#init-system--boot-optimization)
 10. [WiFi & Networking](#wifi--networking)
 11. [Qt5 Application](#qt5-application)
-12. [Display Configuration](#display-configuration)
-13. [Build Process](#build-process)
-14. [Flashing](#flashing)
-15. [RPi5 EEPROM Configuration](#rpi5-eeprom-configuration)
-16. [SSH Access](#ssh-access)
-17. [Debugging](#debugging)
-18. [Known Issues & Workarounds](#known-issues--workarounds)
+12. [CAN Bus Integration (Syvecs S7+)](#can-bus-integration-syvecs-s7)
+13. [Display Configuration](#display-configuration)
+14. [Build Process](#build-process)
+15. [Flashing](#flashing)
+16. [RPi5 EEPROM Configuration](#rpi5-eeprom-configuration)
+17. [SSH Access](#ssh-access)
+18. [Debugging](#debugging)
+19. [Known Issues & Workarounds](#known-issues--workarounds)
 
 ---
 
@@ -173,6 +174,9 @@ br2-external/
 │       │   │   └── interfaces         # Network interface config
 │       │   ├── wpa_supplicant/
 │       │   │   └── wpa_supplicant.conf
+│       │   ├── udev/rules.d/
+│       │   │   ├── 99-input.rules     # Touchscreen input device rules
+│       │   │   └── 70-can.rules       # Auto-configures can0 (bitrate + up) on CAN adapter plug-in
 │       │   └── qt-kms.conf            # Qt KMS display config
 │       ├── lib/firmware/brcm/
 │       │   ├── brcmfmac43455-sdio.bin
@@ -184,14 +188,18 @@ br2-external/
 └── package/ultima-app/
     ├── Config.in
     ├── ultima-app.mk
+    ├── can/
+    │   └── syvecs_s7_fixed_stream_v3.dbc  # Reference DBC (CAN1 fixed stream — see CAN Bus Integration)
     └── src/
         ├── ultima-app.pro
-        ├── main.cpp                   # App entry point + OdoStore setup + SIGTERM handler
+        ├── main.cpp                   # App entry point + OdoStore/CanBus setup + SIGTERM handler
         ├── odostore.h                 # OdoStore class header (persistent odometer state)
         ├── odostore.cpp               # OdoStore implementation (reads/writes /data/odometer.json)
+        ├── canbus.h                   # CanBus class header (live CAN2 data source, exposed as `sim`)
+        ├── canbus.cpp                 # CanBus implementation: SocketCAN reader + frame decoder + macOS sim fallback
         ├── main.qml                   # Root layout: gauges, indicators, gear, odo, save timer
         ├── CircularGauge.qml          # Reusable needle gauge (rotates needle.png)
-        ├── SimEngine.qml              # Simulated driving data + loads odo from OdoStore
+        ├── SimEngine.qml              # Unused at runtime — reference/potential --demo fallback (see below)
         ├── qml.qrc                    # Qt resource file
         ├── background.png             # 1600x720 gauge cluster background
         ├── needle.png                 # Gauge needle image
@@ -797,8 +805,8 @@ $(eval $(generic-package))
 QT += qml quick
 CONFIG += c++17
 TARGET = ultima-app
-HEADERS += odostore.h
-SOURCES += main.cpp odostore.cpp
+HEADERS += odostore.h canbus.h
+SOURCES += main.cpp odostore.cpp canbus.cpp
 RESOURCES += qml.qrc
 ```
 
@@ -825,56 +833,59 @@ RESOURCES += qml.qrc
 </RCC>
 ```
 
-**`main.cpp`** — creates `OdoStore` for persistent odometer, exposes it to QML, saves on SIGTERM/SIGINT:
+**`main.cpp`** — creates `OdoStore` for persistent odometer and `CanBus` as the live gauge data source, exposes both to QML, saves odometer state on SIGTERM/SIGINT:
 ```cpp
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
-#include <QFile>
-#include <QJsonDocument>
-#include <QJsonObject>
 #include <signal.h>
 
 #include "odostore.h"
-
-static double readUptime() { /* reads /proc/uptime */ }
+#include "canbus.h"
 
 static OdoStore *g_odoStore = nullptr;
+static CanBus *g_canBus = nullptr;
 
 static void sigHandler(int) {
-    if (g_odoStore)
+    if (g_canBus)
+        g_canBus->save();        // pushes latest odometer into OdoStore + persists
+    else if (g_odoStore)
         g_odoStore->save();
     _exit(0);
 }
 
 int main(int argc, char *argv[])
 {
-    double t0 = readUptime();
     QGuiApplication app(argc, argv);
 
     OdoStore odoStore("/data/odometer.json");
     g_odoStore = &odoStore;
+
+    CanBus canBus(&odoStore);
+    g_canBus = &canBus;
     signal(SIGTERM, sigHandler);
     signal(SIGINT, sigHandler);
 
     QQmlApplicationEngine engine;
-    engine.rootContext()->setContextProperty("bootTime", t0);
     engine.rootContext()->setContextProperty("odoStore", &odoStore);
+    engine.rootContext()->setContextProperty("sim", &canBus);   // QML binds to `sim` — see CAN Bus Integration
     engine.load(QUrl(QStringLiteral("qrc:/main.qml")));
 
     return app.exec();
 }
 ```
 
-**`odostore.h` / `odostore.cpp`** — `OdoStore` is a `QObject` with `totalOdo` and `tripOdo` properties. Reads `/data/odometer.json` on construction (defaults to 2347.0 / 0.0 if missing). `save()` slot writes JSON. The 30s save timer in `main.qml` calls `odoStore.save()` periodically, and the SIGTERM handler saves on `init stop`.
+**`odostore.h` / `odostore.cpp`** — `OdoStore` is a `QObject` with `totalOdo` and `tripOdo` properties. Reads `/data/odometer.json` on construction (defaults to 2347.0 / 0.0 if missing). `save()` slot writes JSON. The 30s save timer in `main.qml` calls `sim.save()` periodically (routed through `CanBus::save()`, which flushes into `OdoStore` — see below), and the SIGTERM handler saves on `init stop`.
+
+**`canbus.h` / `canbus.cpp`** — `CanBus` is the live gauge data source, exposed to QML as the `sim` context property (a drop-in replacement for `SimEngine.qml`'s property set, so `main.qml` didn't need to change). Full details — hardware, frame map, debugging — are in [CAN Bus Integration](#can-bus-integration-syvecs-s7) below. Summary: on Linux it opens a raw `PF_CAN` socket on `can0`, retrying every 1s until the interface exists (the app launches before udev), and decodes Syvecs S7+ CAN2 frames via a `QSocketNotifier`. On non-Linux (macOS dev builds), `#ifdef __linux__` compiles out all of the SocketCAN code and instead runs `simulateTick()` — a `QTimer`-driven simulator that reproduces `SimEngine.qml`'s phase-based driving profile (city/stop/suburban/highway/spirited legs) directly on `CanBus`'s member state, so the gauges animate without real CAN hardware. This is what backs the local macOS dev build (see [App Rebuild Shortcut](#app-rebuild-shortcut) and `scripts/dev-build.sh`).
 
 ### QML Files
 
 The app consists of 3 QML files, all in `br2-external/package/ultima-app/src/`:
 
-- **`main.qml`** — Root layout: 4 gauge needles over background image, boost gauge (trapezoid black overlay with PSI readout), turn signal indicators, top indicator row (oil, check engine, beams, battery, coolant — warnings flash at 300ms), gear indicator (Bahnschrift SemiBold font, P/R/N/1-7), odometer + trip odometer with reset button, touch feedback dot. Includes 30s periodic save timer for odometer persistence via `odoStore`
+- **`main.qml`** — Root layout: 4 gauge needles over background image, boost gauge (trapezoid black overlay with PSI readout), turn signal indicators, top indicator row (oil, check engine, beams, battery, coolant — warnings flash at 300ms), gear indicator (Bahnschrift SemiBold font, P/R/N/1-7), odometer + trip odometer with reset button, touch feedback dot. Includes 30s periodic save timer for odometer persistence via `sim.save()`. All gauge values bind to the `sim` context property, which is the `CanBus` C++ object, not this file's `SimEngine.qml`
 - **`CircularGauge.qml`** — Reusable needle gauge component: rotates `needle.png` over a transparent item positioned at the gauge center. Configurable start/end angles, counter-clockwise mode, needle size/pivot, optional debug arc overlay
-- **`SimEngine.qml`** — Simulated driving data at 60ms intervals: speed wanders through city/suburban/highway/stop phases, RPM derived from gear ratios, automatic gear selection (P/R/N/1-7), fuel consumption, coolant temp, boost pressure (0-30 PSI, builds with throttle at higher RPM). Loads initial odometer values from `odoStore` context property. Dashboard indicator states: low/high beams, oil pressure, check engine, battery, coolant warnings (with random toggles per phase)
+- **`SimEngine.qml`** — **Not loaded at runtime.** Bundled only as a reference/potential `--demo` fallback; it predates `CanBus` and was the original simulated data source before real CAN integration. Speed wanders through city/suburban/highway/stop phases, RPM derived from gear ratios, automatic gear selection (P/R/N/1-7), fuel consumption, coolant temp, boost pressure (0-30 PSI). `CanBus::simulateTick()` (macOS builds only) reimplements this same phase logic directly in C++ so it can drive the live `sim` property — see [CAN Bus Integration](#can-bus-integration-syvecs-s7)
 
 ### Asset Files
 
@@ -926,6 +937,69 @@ ssh root@192.168.50.139 "/etc/init.d/S11app restart"
 ```
 
 **Important**: Deploy to `/root/app/ultima-app` — that's where the init scripts launch from.
+
+### Local macOS Dev Build (with Simulated CAN Data)
+
+For iterating on QML/layout without a Pi or CAN hardware, build and run the app natively on macOS with desktop Qt:
+
+```bash
+brew install qt   # Qt 6 via Homebrew — the .pro file has no Qt5-specific dependencies, builds fine under Qt6
+scripts/dev-build.sh   # qmake6 + make in ./build/, then opens ultima-app.app
+```
+
+`CanBus` is written so the Linux-only `#ifdef __linux__` block (SocketCAN: `socket(PF_CAN, ...)`, `linux/can.h`, etc.) compiles out entirely on macOS. In its place, `CanBus::tryConnect()`'s `#else` branch starts a `QTimer`-driven `simulateTick()` that generates a realistic driving profile (see [CAN Bus Integration](#can-bus-integration-syvecs-s7) below), so the gauges animate immediately without any hardware. `main.cpp`'s `/proc/uptime` read and `OdoStore`'s `/data/odometer.json` path both fail open (silently) when missing on macOS, so nothing else needs stubbing.
+
+---
+
+## CAN Bus Integration (Syvecs S7+)
+
+The dash gets live engine/vehicle data from the car's Syvecs S7+ ECU over CAN, decoded by `CanBus` (`canbus.h`/`canbus.cpp`) and exposed to QML as the `sim` context property.
+
+### Hardware
+
+- **Adapter**: ODrive USB-CAN adapter (`gs_usb`/candleLight class, VID:PID `1d50:606f`). Plugs into a Pi USB-A port; screw terminals wire to the ECU's **B2 (CAN_H) / B3 (CAN_L)** pins.
+- **Termination**: the adapter has a switchable 120 Ω terminator built in. The Syvecs S7+'s CAN2 bus has **no on-board termination**, so an external 120 Ω resistor must be placed across CAN_H/CAN_L at the ECU end, or the bus won't terminate correctly.
+- **Kernel support**: `CONFIG_CAN`, `CAN_RAW`, `CAN_BCM`, `CAN_DEV`, `CAN_GS_USB` are all `=y` in `kernel-fragments.cfg`.
+- **Bring-up**: `br2-external/board/ultima-rpi5/overlay/etc/udev/rules.d/70-can.rules` matches the adapter's VID:PID and runs `ip link set can0 type can bitrate 1000000 && ip link set up can0` automatically on plug-in. Because the app launches before udev (see [Boot Optimizations](#boot-optimizations-applied)), `CanBus` doesn't assume `can0` exists at startup — it retries `socket(PF_CAN)` + `bind()` every 1s until the interface appears.
+
+### ECU Configuration
+
+The ECU is a Syvecs S7+ on a Cayman LS7 engine swap (firmware string `S7Plus 1.778.1- LS7SC - Cayman Standalone`), configured via Syvecs' SCal tool.
+
+- **CAN1 is the powertrain bus — never touch it.** All dash data comes from **CAN2, running at 1 Mbit/s** (verified in SCal: Datastreams → CAN2 Bus Speed).
+- CAN2's outbound frames are configured via SCal **Datastreams → Generic CAN Transmit**. This build does *not* have the "Custom CAN" / "Datastream Select" hierarchy that some gaugeART documentation references — don't assume that structure applies here.
+- **Syvecs `.SC` config files are proprietary binary** (encrypted/packed after a small header) — there's no way to extract the CAN Tx config by inspecting an `.SC` file directly. If you need to verify or change the CAN2 layout, ask for a screenshot of the SCal Datastreams → Generic CAN Transmit screen rather than trying to parse a config file.
+
+### DBC Reference (Scalings Only — Not Frame IDs)
+
+`br2-external/package/ultima-app/can/syvecs_s7_fixed_stream_v3.dbc` is bundled as a reference, but it describes the **CAN1 fixed stream**, not this car's CAN2 layout. Its per-channel scaling and signedness definitions are tied to channel name (e.g. `vehicleSpeed`'s `0.036` km/h scaling), which holds true regardless of which frame/slot a channel is transmitted on — so it's useful for looking up scaling factors, but **do not use it to look up frame IDs** for CAN2.
+
+### Verified CAN2 Frame Map
+
+Read from SCal Datastreams → Generic CAN Transmit → Transmit Content. Frame *N* broadcasts on CAN ID `0x600 + (N-1)`; each frame carries four 16-bit big-endian slots, slot *S* at byte offset `2(S-1)..2S-1`. What `CanBus::decodeFrame()` consumes today:
+
+| Frame (CAN ID) | Bytes | Channel | Decoding |
+|---|---|---|---|
+| `0x600` | 0-1 | rpm | signed, clamped ≥ 0 |
+| `0x604` | 6-7 | limpMode | unsigned enum; non-zero → `checkEngine` |
+| `0x605` | 2-3 | ect1 (coolant) | °C × 0.1 → °F; `coolantWarn` if > 110 °C |
+| `0x608` | 0-1 | eop1 (oil pressure) | kPa × 0.1; `oilPressureWarn` if rpm > 1200 && < 100 kPa |
+| `0x60E` | 2-3 | gear | Syvecs enum 0=Unknown 1=R 2=N 3..10=1st..8th → QML -1/0/1..8 |
+| `0x60E` | 4-5 | vbat | V × 0.001 (unsigned); `batteryWarn` if 0.5 < v < 12 |
+| `0x60F` | 0-1 | vehicleSpeed | km/h × 0.036 → mph (× 0.621371); drives odometer accumulation |
+| `0x614` | 0-1 | mapMax (boost) | kPa abs × 0.1 → psi `(kPa-101.325)×0.145038`, clamped ≥ 0 (frame 21 — added separately from the initial SCal config) |
+
+**Not on CAN2 in the current SCal config:**
+- `flvlA` (fuel level) — the fuel gauge stays at 0 until this channel is added to SCal's Transmit Content.
+- `sensorWarningLevel` — `checkEngine` currently derives from `limpMode` alone.
+
+**Not on CAN at all** (no Syvecs channels exist for these): `leftIndicator`, `rightIndicator`, `lowBeams`, `highBeams` — declared as `CONSTANT`/`false` properties on `CanBus` purely so `main.qml`'s bindings still compile.
+
+### Debugging
+
+- `candump can0` (can-utils is enabled in the defconfig) to watch raw traffic.
+- `ip -details link show can0` to check bitrate/link state.
+- `CanBus` logs `[canbus] ...` lines to stderr on connect/bind failures and reconnects — check `/boot/ultima-app.log` or `/var/log/ultima-app.log` (see [Debugging](#debugging)).
 
 ---
 
