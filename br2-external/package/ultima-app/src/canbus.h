@@ -78,7 +78,7 @@ signals:
 private slots:
     void onReadable();
     void tryConnect();
-#ifndef __linux__
+#if !defined(__linux__) || defined(ULTIMA_SIMULATE)
     void simulateTick();
 #endif
 
@@ -114,9 +114,10 @@ private:
     // Odometer integration
     qint64 m_lastSpeedMs = 0;
 
-#ifndef __linux__
-    // Dev-build data simulator (macOS/desktop only — mirrors SimEngine.qml's
-    // phase-based driving profile so gauges animate without real CAN hardware).
+#if !defined(__linux__) || defined(ULTIMA_SIMULATE)
+    // Dev-build data simulator (macOS always, Linux dev builds when built
+    // with CONFIG+=ultima_dev_sim — mirrors SimEngine.qml's phase-based
+    // driving profile so gauges animate without real CAN hardware).
     QTimer m_simTimer;
     double m_simTargetSpeed = 0.0;   // mph
     double m_simPhaseTimer = 0.0;    // seconds remaining in current phase

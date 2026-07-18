@@ -28,7 +28,7 @@ fi
 
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
-"$QMAKE" "$SRC_DIR/ultima-app.pro"
+"$QMAKE" "$SRC_DIR/ultima-app.pro" "CONFIG+=ultima_dev_sim"
 make -j"$(nproc)"
 
 LD_LIBRARY_PATH="$QT_DIR/lib" QT_QPA_PLATFORM=xcb ./ultima-app

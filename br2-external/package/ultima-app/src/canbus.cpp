@@ -3,7 +3,7 @@
 
 #include <QDateTime>
 #include <QtGlobal>
-#ifndef __linux__
+#if !defined(__linux__) || defined(ULTIMA_SIMULATE)
 #include <QRandomGenerator>
 #endif
 
@@ -69,7 +69,7 @@ void CanBus::closeSocket()
 
 void CanBus::tryConnect()
 {
-#ifdef __linux__
+#if defined(__linux__) && !defined(ULTIMA_SIMULATE)
     if (m_fd >= 0)
         return;
 
@@ -109,11 +109,12 @@ void CanBus::tryConnect()
     m_reconnectTimer.stop();
     fprintf(stderr, "[canbus] connected to %s\n", qPrintable(m_iface));
 #else
-    // SocketCAN is Linux-only. On macOS dev builds, drive the gauges with a
+    // SocketCAN is Linux-only, and even on Linux this branch only compiles
+    // for dev builds (CONFIG+=ultima_dev_sim). Drive the gauges with a
     // simulated data stream instead (see simulateTick()) so the QML can be
     // exercised without real CAN hardware. tryConnect() only runs once here
     // (nothing re-triggers it), so this wiring happens exactly once.
-    fprintf(stderr, "[canbus] SocketCAN unavailable on this platform — simulating data\n");
+    fprintf(stderr, "[canbus] SocketCAN unavailable/disabled for this build — simulating data\n");
     connect(&m_simTimer, &QTimer::timeout, this, &CanBus::simulateTick);
     m_simTimer.start(60);
 #endif
@@ -272,7 +273,7 @@ void CanBus::save()
     m_odo->save();
 }
 
-#ifndef __linux__
+#if !defined(__linux__) || defined(ULTIMA_SIMULATE)
 // Dev-build data simulator. Ports SimEngine.qml's phase-based driving
 // profile (random city/stop/suburban/highway/spirited legs) onto CanBus's
 // mph/°F/psi units so main.qml's gauges animate without real CAN hardware.
