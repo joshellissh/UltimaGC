@@ -2,8 +2,6 @@
     <qresource prefix="/">
         <file>main.qml</file>
         <file>CircularGauge.qml</file>
-        <file>BoostGauge.qml</file>
-        <file>ShiftLightBar.qml</file>
         <file>SimEngine.qml</file>
         <file>background.png</file>
         <file>needle.png</file>
@@ -14,6 +12,7 @@
         <file>icon_check_engine.png</file>
         <file>icon_battery.png</file>
         <file>icon_coolant_warn.png</file>
+        <file>boost_lines_overlay.png</file>
         <file>icon_low_beam.png</file>
         <file>icon_high_beam.png</file>
     </qresource>
