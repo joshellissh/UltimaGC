@@ -89,59 +89,35 @@ Window {
         pivotY: 74
     }
 
-    // Boost gauge — trapezoid black overlay that recedes upward with boost
-    Canvas {
+    // background.png bakes in an orange "road" gradient under this area — it
+    // used to be masked by the old boost trapezoid's black overlay. Cover it
+    // solidly now that that mechanism is gone.
+    Rectangle {
         x: 350
         y: 460
-        width: 897   // 1247 - 350
-        height: 207  // 667 - 460
-
-        property real boost: sim.boost
-        onBoostChanged: requestPaint()
-
-        onPaint: {
-            var ctx = getContext("2d")
-            ctx.clearRect(0, 0, width, height)
-
-            var f = Math.min(1, Math.max(0, boost / 30))
-            var h = height * (1 - f)  // black area height from top
-            if (h <= 0) return
-
-            // Trapezoid edges: top is narrow (350..554), bottom is wide (0..897)
-            var tlx = 350  // 700 - 350
-            var trx = 554  // 904 - 350
-            var t = h / height
-            var blx = tlx * (1 - t)
-            var brx = trx + t * (897 - trx)
-
-            ctx.fillStyle = "black"
-            ctx.beginPath()
-            ctx.moveTo(tlx, 0)
-            ctx.lineTo(trx, 0)
-            ctx.lineTo(brx, h)
-            ctx.lineTo(blx, h)
-            ctx.closePath()
-            ctx.fill()
-        }
+        width: 897
+        height: 207
+        color: "black"
     }
 
-    // Boost PSI readout
-    Text {
-        x: 800 - width / 2
-        y: 475 - height / 2
-        z: 10
-        font.family: rangeFont.name
-        font.pixelSize: 22
-        color: "white"
-        text: Math.round(sim.boost) + " PSI"
+    // Boost gauge — small pill matching the fuel/coolant dial style
+    BoostGauge {
+        id: boostGauge
+        x: 620 - width / 2
+        y: 560 - height / 2
+        value: sim.boost
+        fontFamily: rangeFont.name
     }
 
-    // Boost gauge scale lines overlay (above black trapezoid)
-    Image {
-        x: 0
-        y: 0
-        z: 1
-        source: "qrc:/boost_lines_overlay.png"
+    // Shift-light bar — fills with rpm, blinks red together at redline
+    ShiftLightBar {
+        x: 760
+        y: 560 - height / 2
+        width: 420
+        height: 36
+        rpm: sim.rpm
+        redlineRpm: shiftRedlineRpm
+        flash: _warnFlash
     }
 
     // Left turn signal indicator
@@ -161,11 +137,12 @@ Window {
         mirror: true
     }
 
-    // Warning flash timer (300ms cycle)
+    // Warning flash timer (300ms cycle) — also drives the shift-light blink at redline
     property bool _warnFlash: true
+    property real shiftRedlineRpm: 7000
     Timer {
         interval: 300
-        running: sim.oilPressureWarn || sim.batteryWarn || sim.coolantWarn
+        running: sim.oilPressureWarn || sim.batteryWarn || sim.coolantWarn || sim.rpm >= shiftRedlineRpm
         repeat: true
         onTriggered: _warnFlash = !_warnFlash
         onRunningChanged: if (running) _warnFlash = true
