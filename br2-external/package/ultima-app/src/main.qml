@@ -89,53 +89,6 @@ Window {
         pivotY: 74
     }
 
-    // Boost gauge — trapezoid black overlay that recedes upward with boost
-    Canvas {
-        x: 350
-        y: 460
-        width: 897   // 1247 - 350
-        height: 207  // 667 - 460
-
-        property real boost: sim.boost
-        onBoostChanged: requestPaint()
-
-        onPaint: {
-            var ctx = getContext("2d")
-            ctx.clearRect(0, 0, width, height)
-
-            var f = Math.min(1, Math.max(0, boost / 30))
-            var h = height * (1 - f)  // black area height from top
-            if (h <= 0) return
-
-            // Trapezoid edges: top is narrow (350..554), bottom is wide (0..897)
-            var tlx = 350  // 700 - 350
-            var trx = 554  // 904 - 350
-            var t = h / height
-            var blx = tlx * (1 - t)
-            var brx = trx + t * (897 - trx)
-
-            ctx.fillStyle = "black"
-            ctx.beginPath()
-            ctx.moveTo(tlx, 0)
-            ctx.lineTo(trx, 0)
-            ctx.lineTo(brx, h)
-            ctx.lineTo(blx, h)
-            ctx.closePath()
-            ctx.fill()
-        }
-    }
-
-    // Boost PSI readout
-    Text {
-        x: 800 - width / 2
-        y: 475 - height / 2
-        z: 10
-        font.family: rangeFont.name
-        font.pixelSize: 22
-        color: "white"
-        text: Math.round(sim.boost) + " PSI"
-    }
-
     // Left turn signal indicator
     Image {
         x: 25
