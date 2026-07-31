@@ -136,14 +136,6 @@ Window {
         text: Math.round(sim.boost) + " PSI"
     }
 
-    // Boost gauge scale lines overlay (above black trapezoid)
-    Image {
-        x: 0
-        y: 0
-        z: 1
-        source: "qrc:/boost_lines_overlay.png"
-    }
-
     // Left turn signal indicator
     Image {
         x: 25
