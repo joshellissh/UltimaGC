@@ -20,11 +20,12 @@ Window {
     Image {
         anchors.fill: parent
         source: "qrc:/car_lights_off.png"
+        visible: !sim.lowBeams && !sim.highBeams
     }
     Image {
         anchors.fill: parent
         source: "qrc:/car_lights_on.png"
-        visible: false
+        visible: sim.lowBeams || sim.highBeams
     }
 
     // Periodic odometer save (every 30s) — CanBus owns integration and pushes
@@ -106,7 +107,7 @@ Window {
         x: 25
         y: 23
         source: "qrc:/left_indicator.png"
-        visible: sim.leftIndicator
+        visible: true
     }
 
     // Right turn signal indicator (mirrored)
@@ -114,7 +115,7 @@ Window {
         x: 1600 - 25 - width
         y: 23
         source: "qrc:/left_indicator.png"
-        visible: sim.rightIndicator
+        visible: true
         mirror: true
     }
 
@@ -128,36 +129,43 @@ Window {
         onRunningChanged: if (running) _warnFlash = true
     }
 
+    // Axle lift indicator — centered below the gear readout at (800, 558)
+    Image {
+        x: 800 - width / 2; y: 558 - height / 2
+        source: "qrc:/icon_axle_lift.png"
+        visible: true
+    }
+
     // Top indicator row — evenly spaced at 80px intervals, centered at x=800
     Image {
         x: 640 - width / 2; y: 23
         source: "qrc:/icon_oil_pressure.png"
-        visible: sim.oilPressureWarn && _warnFlash
+        visible: true
     }
     Image {
         x: 720 - width / 2; y: 23
         source: "qrc:/icon_check_engine.png"
-        visible: sim.checkEngine
+        visible: true
     }
     Image {
         x: 800 - width / 2; y: 23
         source: "qrc:/icon_low_beam.png"
-        visible: sim.lowBeams && !sim.highBeams
+        visible: true
     }
     Image {
         x: 800 - width / 2; y: 23
         source: "qrc:/icon_high_beam.png"
-        visible: sim.highBeams
+        visible: true
     }
     Image {
         x: 880 - width / 2; y: 23
         source: "qrc:/icon_battery.png"
-        visible: sim.batteryWarn && _warnFlash
+        visible: true
     }
     Image {
         x: 960 - width / 2; y: 23
         source: "qrc:/icon_coolant_warn.png"
-        visible: sim.coolantWarn && _warnFlash
+        visible: true
     }
 
     // Fonts

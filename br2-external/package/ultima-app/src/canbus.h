@@ -35,6 +35,7 @@ class CanBus : public QObject
     Q_PROPERTY(bool rightIndicator MEMBER m_rightIndicator CONSTANT)
     Q_PROPERTY(bool lowBeams MEMBER m_lowBeams CONSTANT)
     Q_PROPERTY(bool highBeams MEMBER m_highBeams CONSTANT)
+    Q_PROPERTY(bool axleLift MEMBER m_axleLift CONSTANT)
 
 public:
     explicit CanBus(OdoStore *odo, const QString &iface = QStringLiteral("can0"),
@@ -110,6 +111,7 @@ private:
     bool m_rightIndicator = false;
     bool m_lowBeams = false;
     bool m_highBeams = false;
+    bool m_axleLift = false;
 
     // Odometer integration
     qint64 m_lastSpeedMs = 0;
