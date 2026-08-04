@@ -239,30 +239,31 @@ Window {
         }
     }
 
-    // Odometer (left of center)
+    // Odometer — right-aligned against the "mi" label at x=772
     Text {
-        x: 450 - width / 2
-        y: 670
+        id: odoText
+        x: 760 - width
+        y: 617
         font.family: rangeFont.name
-        font.pixelSize: 32
-        color: "#aaaaaa"
-        text: sim.totalOdo.toFixed(1) + " mi"
+        font.pixelSize: 24
+        color: "white"
+        text: sim.totalOdo.toFixed(1)
     }
 
-    // Trip odometer (right of center)
+    // Trip odometer — right-aligned against the "mi" label at x=1013
     Text {
         id: tripText
-        x: 1150 - width / 2
-        y: 670
+        x: 1001 - width
+        y: 617
         font.family: rangeFont.name
-        font.pixelSize: 32
-        color: "#aaaaaa"
-        text: "TRIP  " + sim.tripOdo.toFixed(1) + " mi"
+        font.pixelSize: 24
+        color: "white"
+        text: sim.tripOdo.toFixed(1)
     }
 
     // Trip reset button
     Text {
-        x: tripText.x + tripText.width + 8
+        x: 1079
         y: tripText.y
         font.pixelSize: 32
         color: tripResetArea.pressed ? "#ffffff" : "#aaaaaa"
@@ -303,6 +304,10 @@ Window {
 
     MouseArea {
         anchors.fill: parent
+        // Stacked below interactive elements (odometer/trip drag handles,
+        // trip reset button) so it doesn't swallow their presses — it only
+        // catches touches that land on non-interactive parts of the dash.
+        z: -1
         onPressed: {
             touchDot.x = mouse.x - touchDot.width / 2
             touchDot.y = mouse.y - touchDot.height / 2
