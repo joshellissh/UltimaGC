@@ -1,8 +1,9 @@
 # Ultima
 
 Minimal Buildroot-based Linux image that boots directly into a fullscreen Qt5/QML
-gauge cluster, fed live data from a car's CAN bus. Currently ships on Raspberry Pi 5;
-a BeaglePlay (AM625) port is upcoming. The two targets share one Qt app
+gauge cluster, fed live data from a car's CAN bus. Ships on Raspberry Pi 5; a
+BeaglePlay (AM625) port is in progress (scaffolding done, not yet hardware-verified —
+see `SETUP-BEAGLEPLAY.md`). The two targets share one Qt app
 (`br2-external/package/ultima-app/`) and get their own `board/` directory, defconfig,
 and setup guide apiece — see "Repo layout across board targets" below.
 
@@ -10,7 +11,9 @@ and setup guide apiece — see "Repo layout across board targets" below.
 kernel config, or Qt app structure — it's a complete, maintained reproduction guide
 (host setup, VM setup, defconfig, kernel fragments, init scripts, CAN bus integration,
 flashing, EEPROM, debugging). This file only covers what isn't obvious from reading
-that guide or the code. A `SETUP-BEAGLEPLAY.md` will exist once that port starts.
+that guide or the code. **Read `SETUP-BEAGLEPLAY.md` first** for the BeaglePlay port —
+it's explicit throughout about what's copied from a verified upstream reference vs.
+still unverified without hardware in hand.
 
 ## Repo layout across board targets
 
@@ -18,9 +21,13 @@ that guide or the code. A `SETUP-BEAGLEPLAY.md` will exist once that port starts
   RPi-specific code lives here (confirmed by audit); don't fork it per board.
 - `br2-external/board/ultima-rpi5/`, `br2-external/configs/ultima_rpi5_defconfig` —
   RPi5-only: boot config, kernel fragments, DT overlays, init overlay, KMS config.
-  A future `board/ultima-beagleplay/` + `configs/ultima_beagleplay_defconfig` follow
-  the same shape but with entirely different content (different bootloader, different
-  DRM driver — nothing here transfers as-is).
+- `br2-external/board/ultima-beagleplay/`, `br2-external/configs/ultima_beagleplay_defconfig` —
+  BeaglePlay-only, same shape as the RPi5 dir but entirely different content: real
+  secure boot chain (R5 SPL/TF-A/OP-TEE/U-Boot, not firmware+EEPROM), `tidss` DRM
+  driver, software-rendered Qt (`linuxfb` + Qt Quick software backend — no GPU driver
+  available yet for this SoC in Buildroot). Nothing here transfers as-is from RPi5.
+  Scaffolded without hardware in hand — see `SETUP-BEAGLEPLAY.md` for what's verified
+  vs. still needs checking on a real board.
 - `scripts/` — `setup-vm.sh`, `dev-build.sh`, `dev-build-wsl.sh` are shared (VM deps
   and local app-only dev builds don't depend on the target board). `build-rpi5.sh`,
   `flash-rpi5.sh`, `read-logs-rpi5.sh` are RPi5-specific; BeaglePlay equivalents get

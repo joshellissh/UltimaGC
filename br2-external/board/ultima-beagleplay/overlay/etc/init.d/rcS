@@ -1,0 +1,13 @@
+#!/bin/sh
+
+LOGFILE="/tmp/boot-timing.log"
+for i in /etc/init.d/S??*; do
+    [ ! -f "$i" ] && continue
+    [ ! -x "$i" ] && continue
+    name="${i##*/}"
+    uptime_start=$(cut -d' ' -f1 /proc/uptime)
+    echo "[$uptime_start] $name start" >> "$LOGFILE"
+    "$i" start > /dev/null 2>&1
+    uptime_end=$(cut -d' ' -f1 /proc/uptime)
+    echo "[$uptime_end] $name done" >> "$LOGFILE"
+done
