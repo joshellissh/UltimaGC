@@ -299,6 +299,26 @@ Window {
         }
     }
 
+    // Clock — mirrors the drive mode indicator's spot on the left side,
+    // right-aligned against the mirror of its x=1087 left edge (center 800).
+    Text {
+        id: clockText
+        property date now: new Date()
+        x: 513 - width
+        y: 614
+        font.family: bahnschriftFont.name
+        font.pixelSize: 28
+        color: "white"
+        text: Qt.formatDateTime(now, "h:mm AP")
+
+        Timer {
+            interval: 1000
+            running: true
+            repeat: true
+            onTriggered: clockText.now = new Date()
+        }
+    }
+
     // Odometer — right-aligned against the "mi" label at x=772
     Text {
         id: odoText
