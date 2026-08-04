@@ -3,7 +3,10 @@
         <file>main.qml</file>
         <file>CircularGauge.qml</file>
         <file>SimEngine.qml</file>
-        <file>background.png</file>
+        <file>boost_circle.png</file>
+        <file>background_overlay.png</file>
+        <file>car_lights_off.png</file>
+        <file>car_lights_on.png</file>
         <file>needle.png</file>
         <file>left_indicator.png</file>
         <file>range.regular.ttf</file>
