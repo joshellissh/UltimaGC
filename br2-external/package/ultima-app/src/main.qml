@@ -9,9 +9,53 @@ Window {
     color: "black"
 
     // Background layers, back to front: boost circle, gauge overlay, car
-    Image {
+    //
+    // The boost ring wraps the tachometer (same center/sweep as rpmGauge:
+    // 1251,343 / 270deg-503deg CW). It's fully covered by a pie wedge at
+    // zero boost, radially exposing more of the ring as boost builds —
+    // sweeping in the same direction as the tach's own needle travel.
+    Canvas {
+        id: boostRing
         anchors.fill: parent
-        source: "qrc:/boost_circle.png"
+
+        readonly property real centerX: 1251
+        readonly property real centerY: 343
+        readonly property real startAngle: 270
+        readonly property real endAngle: 503
+        readonly property real maxBoost: 30
+
+        property real displayBoost: sim.boost
+        Behavior on displayBoost {
+            NumberAnimation { duration: 250; easing.type: Easing.OutCubic }
+        }
+
+        Component.onCompleted: loadImage("qrc:/boost_circle.png")
+        onImageLoaded: requestPaint()
+        onDisplayBoostChanged: requestPaint()
+
+        onPaint: {
+            var ctx = getContext("2d")
+            ctx.reset()
+            if (!isImageLoaded("qrc:/boost_circle.png"))
+                return
+
+            function toRad(deg) {
+                return (deg - 90) * Math.PI / 180
+            }
+
+            var frac = Math.max(0, Math.min(1, displayBoost / maxBoost))
+            var sweepEnd = startAngle + frac * (endAngle - startAngle)
+            var r = Math.max(width, height) * 1.5
+
+            ctx.save()
+            ctx.beginPath()
+            ctx.moveTo(centerX, centerY)
+            ctx.arc(centerX, centerY, r, toRad(startAngle), toRad(sweepEnd), false)
+            ctx.closePath()
+            ctx.clip()
+            ctx.drawImage("qrc:/boost_circle.png", 0, 0, width, height)
+            ctx.restore()
+        }
     }
     Image {
         anchors.fill: parent
