@@ -18,5 +18,6 @@
         <file>icon_low_beam.png</file>
         <file>icon_high_beam.png</file>
         <file>icon_axle_lift.png</file>
+        <file>icon_cruise.png</file>
     </qresource>
 </RCC>
