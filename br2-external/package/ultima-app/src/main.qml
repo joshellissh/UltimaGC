@@ -263,9 +263,9 @@ Window {
 
     // Trip reset button
     Text {
-        x: 1079
+        x: 1040
         y: tripText.y
-        font.pixelSize: 32
+        font.pixelSize: 24
         color: tripResetArea.pressed ? "#ffffff" : "#aaaaaa"
         text: "\u21BA"
         z: 200
