@@ -30,11 +30,13 @@ class CanBus : public QObject
     Q_PROPERTY(bool coolantWarn READ coolantWarn NOTIFY coolantWarnChanged)
     Q_PROPERTY(bool checkEngine READ checkEngine NOTIFY checkEngineChanged)
     // Channels not present in the Syvecs fixed stream — exposed for QML
-    // compatibility, never set true by this class.
+    // compatibility. Real hardware never sets these true; the dev-build
+    // simulator (see simulateTick()) drives lowBeams/highBeams for layout
+    // testing.
     Q_PROPERTY(bool leftIndicator MEMBER m_leftIndicator CONSTANT)
     Q_PROPERTY(bool rightIndicator MEMBER m_rightIndicator CONSTANT)
-    Q_PROPERTY(bool lowBeams MEMBER m_lowBeams CONSTANT)
-    Q_PROPERTY(bool highBeams MEMBER m_highBeams CONSTANT)
+    Q_PROPERTY(bool lowBeams READ lowBeams NOTIFY lowBeamsChanged)
+    Q_PROPERTY(bool highBeams READ highBeams NOTIFY highBeamsChanged)
     Q_PROPERTY(bool axleLift MEMBER m_axleLift CONSTANT)
 
 public:
@@ -54,6 +56,8 @@ public:
     bool batteryWarn() const { return m_batteryWarn; }
     bool coolantWarn() const { return m_coolantWarn; }
     bool checkEngine() const { return m_checkEngine; }
+    bool lowBeams() const { return m_lowBeams; }
+    bool highBeams() const { return m_highBeams; }
 
     void setTotalOdo(double v);
     void setTripOdo(double v);
@@ -75,6 +79,8 @@ signals:
     void batteryWarnChanged();
     void coolantWarnChanged();
     void checkEngineChanged();
+    void lowBeamsChanged();
+    void highBeamsChanged();
 
 private slots:
     void onReadable();
@@ -124,6 +130,7 @@ private:
     double m_simTargetSpeed = 0.0;   // mph
     double m_simPhaseTimer = 0.0;    // seconds remaining in current phase
     double m_simAccel = 0.0;         // mph per tick
+    double m_simElapsedS = 0.0;      // free-running clock for sweep/toggle phases
 #endif
 };
 
