@@ -291,6 +291,28 @@ void CanBus::simulateTick()
     bool lowBeams = std::fmod(m_simElapsedS, 4.0) < 2.0;
     if (lowBeams != m_lowBeams) { m_lowBeams = lowBeams; emit lowBeamsChanged(); }
 
+    // Cruise control: always engaged in the simulator so the icon can be
+    // exercised without real CAN hardware.
+    if (!m_cruiseControl) { m_cruiseControl = true; emit cruiseControlChanged(); }
+
+    // Transmission mode: flip Automatic/Manual every few seconds so the
+    // gear indicator's A/M badge can be exercised without real CAN hardware.
+    bool transmissionAuto = std::fmod(m_simElapsedS, 6.0) < 3.0;
+    if (transmissionAuto != m_transmissionAuto) {
+        m_transmissionAuto = transmissionAuto;
+        emit transmissionAutoChanged();
+    }
+
+    // Drive mode: step through SPORT -> SPORT+ -> RACE on a slow cycle so
+    // the indicator's three colors can be exercised without real CAN
+    // hardware.
+    static const QString driveModes[] = { QStringLiteral("SPORT"), QStringLiteral("SPORT+"), QStringLiteral("RACE") };
+    int driveModeIndex = int(std::fmod(m_simElapsedS / 5.0, 3.0));
+    if (driveModes[driveModeIndex] != m_driveMode) {
+        m_driveMode = driveModes[driveModeIndex];
+        emit driveModeChanged();
+    }
+
     // Fuel/coolant: sweep the full gauge range on independent slow sine
     // waves (real hardware doesn't broadcast fuel level at all, and
     // coolant only wanders a few degrees in practice — this is purely so
@@ -327,17 +349,18 @@ void CanBus::simulateTick()
     double newSpeed = qBound(0.0, m_speed + m_simAccel + noise, 160.0);
     if (!qFuzzyCompare(1.0 + newSpeed, 1.0 + m_speed)) { m_speed = newSpeed; emit speedChanged(); }
 
-    int newGear;
-    if      (m_speed < 3.0)   newGear = 0;
-    else if (m_speed < 12.0)  newGear = 1;
-    else if (m_speed < 25.0)  newGear = 2;
-    else if (m_speed < 40.0)  newGear = 3;
-    else if (m_speed < 62.0)  newGear = 4;
-    else if (m_speed < 87.0)  newGear = 5;
-    else if (m_speed < 106.0) newGear = 6;
-    else if (m_speed < 137.0) newGear = 7;
-    else                      newGear = 8;
-    if (newGear != m_gear) { m_gear = newGear; emit gearChanged(); }
+    // Gear: cycle R N P 1..7 on a fixed timer (independent of simulated
+    // speed) so the gear indicator and transmission-mode badge can be
+    // exercised for every glyph without real CAN hardware.
+    m_simGearCycleTimer -= dt;
+    if (m_simGearCycleTimer <= 0.0) {
+        static const int gearSequence[] = { -1, 0, -2, 1, 2, 3, 4, 5, 6, 7 };
+        const int gearSequenceLen = int(sizeof(gearSequence) / sizeof(gearSequence[0]));
+        int newGear = gearSequence[m_simGearCycleIndex];
+        if (newGear != m_gear) { m_gear = newGear; emit gearChanged(); }
+        m_simGearCycleIndex = (m_simGearCycleIndex + 1) % gearSequenceLen;
+        m_simGearCycleTimer = 2.0;
+    }
 
     double newRpm;
     if (m_gear <= 0) {

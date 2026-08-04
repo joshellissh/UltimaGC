@@ -81,6 +81,17 @@ Window {
         onTriggered: sim.save()
     }
 
+    // Cruise control indicator — upper-left of the speedometer's black
+    // interior, painted above the background art but under the needle
+    // (declared before speedGauge, so it stacks behind it).
+    Image {
+        x: 273 - width / 2; y: 264 - height / 2
+        width: 50; height: 50
+        fillMode: Image.PreserveAspectFit
+        source: "qrc:/icon_cruise.png"
+        visible: sim.cruiseControl
+    }
+
     // Left gauge: Speedometer — pivot at (351, 342)
     CircularGauge {
         id: speedGauge
@@ -222,11 +233,11 @@ Window {
         source: "qrc:/bahnschrift._semibold.ttf"
     }
 
-    // Gear indicator — centered at (798, 601)
+    // Gear indicator — centered at (798, 631)
     Text {
         id: gearIndicator
         x: 803 - width / 2
-        y: 279 - height / 2
+        y: 309 - height / 2
         font.family: bahnschriftFont.name
         font.pixelSize: 150
         color: "white"
@@ -236,6 +247,55 @@ Window {
             if (g === -1) return "R"
             if (g === 0) return "N"
             return g.toString()
+        }
+    }
+
+    // Widest glyph the gear indicator can show ("N", wider than "P"/"R" or
+    // any digit in this font) — used to give the transmission badge a fixed
+    // position instead of one that shifts with the current gear text's width.
+    TextMetrics {
+        id: gearWidthMetric
+        font.family: bahnschriftFont.name
+        font.pixelSize: gearIndicator.font.pixelSize
+        text: "N"
+    }
+
+    // Baselines for the two font sizes — aligning bounding-box bottoms would
+    // leave the badge sitting visibly lower than the gear glyph, since a
+    // 150px font's descent eats far more of its box than a 32px font's does.
+    FontMetrics {
+        id: gearFontMetrics
+        font.family: bahnschriftFont.name
+        font.pixelSize: gearIndicator.font.pixelSize
+    }
+    FontMetrics {
+        id: transmissionBadgeMetrics
+        font.family: bahnschriftFont.name
+        font.pixelSize: 32
+    }
+
+    // Transmission mode badge — fixed to the right of the gear indicator,
+    // baseline-aligned with it.
+    Text {
+        x: 813 + gearWidthMetric.width / 2
+        y: gearIndicator.y + gearFontMetrics.ascent - transmissionBadgeMetrics.ascent
+        font.family: bahnschriftFont.name
+        font.pixelSize: 32
+        color: "white"
+        text: sim.transmissionAuto ? "A" : "M"
+    }
+
+    // Drive mode indicator — top-left corner at (1087, 614)
+    Text {
+        x: 1087
+        y: 614
+        font.family: bahnschriftFont.name
+        font.pixelSize: 28
+        text: sim.driveMode
+        color: {
+            if (sim.driveMode === "RACE") return "red"
+            if (sim.driveMode === "SPORT+") return "orange"
+            return "white"
         }
     }
 

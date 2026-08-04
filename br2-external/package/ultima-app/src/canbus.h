@@ -31,13 +31,22 @@ class CanBus : public QObject
     Q_PROPERTY(bool checkEngine READ checkEngine NOTIFY checkEngineChanged)
     // Channels not present in the Syvecs fixed stream — exposed for QML
     // compatibility. Real hardware never sets these true; the dev-build
-    // simulator (see simulateTick()) drives lowBeams/highBeams for layout
-    // testing.
+    // simulator (see simulateTick()) drives lowBeams/highBeams/cruiseControl
+    // for layout testing.
     Q_PROPERTY(bool leftIndicator MEMBER m_leftIndicator CONSTANT)
     Q_PROPERTY(bool rightIndicator MEMBER m_rightIndicator CONSTANT)
     Q_PROPERTY(bool lowBeams READ lowBeams NOTIFY lowBeamsChanged)
     Q_PROPERTY(bool highBeams READ highBeams NOTIFY highBeamsChanged)
     Q_PROPERTY(bool axleLift MEMBER m_axleLift CONSTANT)
+    Q_PROPERTY(bool cruiseControl READ cruiseControl NOTIFY cruiseControlChanged)
+    // Automatic/manual shift mode — not on the Syvecs fixed stream. Defaults
+    // to Automatic on real hardware; the dev-build simulator (see
+    // simulateTick()) toggles it for layout review.
+    Q_PROPERTY(bool transmissionAuto READ transmissionAuto NOTIFY transmissionAutoChanged)
+    // Drive mode selector — not on the Syvecs fixed stream. One of "SPORT",
+    // "SPORT+", "RACE"; the dev-build simulator (see simulateTick()) cycles
+    // through them for layout review.
+    Q_PROPERTY(QString driveMode READ driveMode NOTIFY driveModeChanged)
 
 public:
     explicit CanBus(OdoStore *odo, const QString &iface = QStringLiteral("can0"),
@@ -58,6 +67,9 @@ public:
     bool checkEngine() const { return m_checkEngine; }
     bool lowBeams() const { return m_lowBeams; }
     bool highBeams() const { return m_highBeams; }
+    bool cruiseControl() const { return m_cruiseControl; }
+    bool transmissionAuto() const { return m_transmissionAuto; }
+    QString driveMode() const { return m_driveMode; }
 
     void setTotalOdo(double v);
     void setTripOdo(double v);
@@ -81,6 +93,9 @@ signals:
     void checkEngineChanged();
     void lowBeamsChanged();
     void highBeamsChanged();
+    void cruiseControlChanged();
+    void transmissionAutoChanged();
+    void driveModeChanged();
 
 private slots:
     void onReadable();
@@ -118,6 +133,9 @@ private:
     bool m_lowBeams = false;
     bool m_highBeams = false;
     bool m_axleLift = false;
+    bool m_cruiseControl = false;
+    bool m_transmissionAuto = true;
+    QString m_driveMode = QStringLiteral("SPORT");
 
     // Odometer integration
     qint64 m_lastSpeedMs = 0;
@@ -131,6 +149,8 @@ private:
     double m_simPhaseTimer = 0.0;    // seconds remaining in current phase
     double m_simAccel = 0.0;         // mph per tick
     double m_simElapsedS = 0.0;      // free-running clock for sweep/toggle phases
+    double m_simGearCycleTimer = 0.0; // seconds remaining before advancing the gear cycle
+    int m_simGearCycleIndex = 0;      // index into the R/N/P/1..7 cycle
 #endif
 };
 
