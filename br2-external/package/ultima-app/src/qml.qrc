@@ -17,5 +17,6 @@
         <file>icon_coolant_warn.png</file>
         <file>icon_low_beam.png</file>
         <file>icon_high_beam.png</file>
+        <file>icon_axle_lift.png</file>
     </qresource>
 </RCC>
