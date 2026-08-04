@@ -8,11 +8,23 @@ Window {
     visibility: Window.Windowed
     color: "black"
 
-    // Background image
+    // Background layers, back to front: boost circle, gauge overlay, car
     Image {
         anchors.fill: parent
-        source: "qrc:/background.png"
-        fillMode: Image.PreserveAspectCrop
+        source: "qrc:/boost_circle.png"
+    }
+    Image {
+        anchors.fill: parent
+        source: "qrc:/background_overlay.png"
+    }
+    Image {
+        anchors.fill: parent
+        source: "qrc:/car_lights_off.png"
+    }
+    Image {
+        anchors.fill: parent
+        source: "qrc:/car_lights_on.png"
+        visible: false
     }
 
     // Periodic odometer save (every 30s) — CanBus owns integration and pushes
