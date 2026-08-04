@@ -889,17 +889,36 @@ The app consists of 3 QML files, all in `br2-external/package/ultima-app/src/`:
 
 ### Asset Files
 
+`main.qml`'s background is currently mid-swap to a new "Bavarian" theme
+(source PSDs/exports in `Ultima Gauge Cluster/Bavarian/` outside this
+repo). It's now 4 stacked full-canvas (1600x720) layers instead of one
+flat `background.png` — back to front:
+
 | File | Purpose |
 |------|---------|
-| `background.png` | 1600x720 gauge cluster face (speedometer, tachometer, fuel, coolant, boost) |
+| `boost_circle.png` | Backmost layer — boost gauge dial (opaque, own black backing) |
+| `background_overlay.png` | Gauge/dial face overlay (tick marks, TOTAL/TRIP text area, mini fuel/coolant arcs; alpha) |
+| `car_lights_off.png` | Centered car render (alpha) |
+| `car_lights_on.png` | Same, headlights lit — registered in `qml.qrc` and present in `main.qml` but `visible: false`; not wired to any signal yet |
 | `needle.png` | Gauge needle image (rotated by CircularGauge) |
-| `boost_lines_overlay.png` | Boost gauge scale lines overlay |
 | `left_indicator.png` | Turn signal arrow icon (mirrored for right) |
 | `range.regular.ttf` | Font for odometer and boost PSI display |
 | `bahnschrift._semibold.ttf` | Bahnschrift SemiBold font for gear indicator |
 | `icon_*.png` | ISO 7000 dashboard warning icons (51x51, white on transparent) |
 
+`background.png` (the old single-image face) is still in the source
+tree and still listed in `qml.qrc`, but nothing in `main.qml`
+references it anymore — dead resource, safe to remove once the
+Bavarian theme is confirmed final.
+
 ### Gauge Needle Alignment
+
+**Stale as of the Bavarian background swap.** The table below was
+calibrated against the old `background.png` dial art. The new
+`background_overlay.png` has a visibly different tick-mark layout (no
+printed numbers, different arc extents), so these pivots/angles almost
+certainly need re-measuring against the new art before the needles line
+up correctly again.
 
 | Gauge | Pivot (px) | Start Angle | End Angle | Direction | Needle Size | Needle Pivot |
 |-------|-----------|-------------|-----------|-----------|-------------|-------------|
