@@ -70,3 +70,11 @@ still unverified without hardware in hand.
 - Overlay/init script change only: `make` (no dirclean).
 - App source change: `make ultima-app-dirclean && make`.
 - Fast iteration without a full reflash: see "Hot-Deploy to Pi" in `SETUP-RPI5.md`.
+
+## Git commit conventions
+
+- **Never add a `Co-Authored-By: Claude ...` or `Claude-Session: ...` trailer to
+  commit messages in this repo.** This overrides the default commit-message
+  format Claude Code normally appends. The full existing history was rewritten
+  (2026-08-04) to strip these trailers specifically so Claude doesn't show up as
+  a contributor — don't reintroduce them.
