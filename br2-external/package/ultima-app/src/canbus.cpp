@@ -5,6 +5,7 @@
 #include <QtGlobal>
 #if !defined(__linux__) || defined(ULTIMA_SIMULATE)
 #include <QRandomGenerator>
+#include <cmath>
 #endif
 
 #include <stdio.h>
@@ -280,7 +281,25 @@ void CanBus::save()
 void CanBus::simulateTick()
 {
     const double dt = 0.06; // matches m_simTimer interval (60 ms)
+    const double kTwoPi = 6.283185307179586;
     auto rnd = []() { return QRandomGenerator::global()->generateDouble(); };
+
+    m_simElapsedS += dt;
+
+    // Headlights: toggle low beams on/off every 2s so the car art and
+    // low-beam icon can be exercised without real CAN hardware.
+    bool lowBeams = std::fmod(m_simElapsedS, 4.0) < 2.0;
+    if (lowBeams != m_lowBeams) { m_lowBeams = lowBeams; emit lowBeamsChanged(); }
+
+    // Fuel/coolant: sweep the full gauge range on independent slow sine
+    // waves (real hardware doesn't broadcast fuel level at all, and
+    // coolant only wanders a few degrees in practice — this is purely so
+    // the gauges can be seen sweeping end-to-end during layout review).
+    double fuelLevel = 0.5 + 0.5 * std::sin(kTwoPi * m_simElapsedS / 24.0);
+    if (!qFuzzyCompare(1.0 + fuelLevel, 1.0 + m_fuelLevel)) {
+        m_fuelLevel = fuelLevel;
+        emit fuelLevelChanged();
+    }
 
     m_simPhaseTimer -= dt;
     if (m_simPhaseTimer <= 0.0) {
@@ -330,7 +349,7 @@ void CanBus::simulateTick()
     }
     if (!qFuzzyCompare(1.0 + newRpm, 1.0 + m_rpm)) { m_rpm = newRpm; emit rpmChanged(); }
 
-    double targetCoolant = 190.0 + m_rpm / 2000.0 * 15.0 + (rnd() - 0.5) * 2.0;
+    double targetCoolant = 200.0 + 40.0 * std::sin(kTwoPi * m_simElapsedS / 30.0) + (rnd() - 0.5) * 2.0;
     double newCoolant = m_coolantTempF + (targetCoolant - m_coolantTempF) * 0.01;
     if (!qFuzzyCompare(1.0 + newCoolant, 1.0 + m_coolantTempF)) {
         m_coolantTempF = newCoolant;
