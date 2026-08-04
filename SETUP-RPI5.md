@@ -2,6 +2,12 @@
 
 A comprehensive guide for reproducing the Ultima project: a minimal Buildroot-based Linux image for Raspberry Pi 5 running a fullscreen gauge cluster Qt5 app with fast boot, WiFi, and touchscreen support.
 
+**This guide is RPi5-specific.** The `ultima-app` Qt package it describes is shared across
+board targets, but everything about the bootloader, kernel, DT overlays, and boot-time
+tuning here is particular to the RPi5/BCM2712 platform. A future BeaglePlay port gets its
+own `SETUP-BEAGLEPLAY.md` alongside this one, sharing `br2-external/package/ultima-app/`
+but with its own `br2-external/board/ultima-beagleplay/` and `br2-external/configs/ultima_beagleplay_defconfig`.
+
 ---
 
 ## Table of Contents
@@ -215,11 +221,12 @@ br2-external/
         └── icon_coolant_warn.png      # ISO 7000 coolant temp warning
 
 scripts/
-├── setup-vm.sh      # VM dependency installation
-├── build.sh         # Full sync + build + copy image
-├── flash.sh         # macOS SD card flasher with disk picker
-├── dev-build.sh     # Local macOS Qt6 dev build
-└── read-logs.sh     # Read debug logs from boot partition
+├── setup-vm.sh          # VM dependency installation (shared across board targets)
+├── build-rpi5.sh        # Full sync + build + copy image (RPi5)
+├── flash-rpi5.sh        # macOS SD card flasher with disk picker (RPi5)
+├── dev-build.sh         # Local macOS Qt6 dev build (shared — app-only, no board dependency)
+├── dev-build-wsl.sh     # Same, for WSL2 + WSLg (shared)
+└── read-logs-rpi5.sh    # Read debug logs from boot partition (RPi5)
 ```
 
 ---
@@ -1107,7 +1114,7 @@ The build produces `sdcard.img` (~400MB) with:
 ### SD Card (macOS)
 
 ```bash
-scripts/flash.sh
+scripts/flash-rpi5.sh
 ```
 
 The script auto-detects external disks, shows a picker, and flashes with `dd`.
@@ -1235,7 +1242,7 @@ arp -a | grep "2c:cf:67"   # RPi5 MAC prefix
 
 With the SD card in the Mac:
 ```bash
-scripts/read-logs.sh
+scripts/read-logs-rpi5.sh
 ```
 
 This reads `ultima-app.log`, `ultima-debug.log`, and `dmesg.log` from the FAT boot partition.

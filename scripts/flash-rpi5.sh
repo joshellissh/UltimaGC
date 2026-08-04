@@ -8,7 +8,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 IMG_FILE="$PROJECT_DIR/output/sdcard.img"
 
 if [ ! -f "$IMG_FILE" ]; then
-    echo "ERROR: $IMG_FILE not found. Run build.sh first."
+    echo "ERROR: $IMG_FILE not found. Run build-rpi5.sh first."
     exit 1
 fi
 
