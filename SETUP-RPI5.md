@@ -4,8 +4,8 @@ A comprehensive guide for reproducing the Ultima project: a minimal Buildroot-ba
 
 **This guide is RPi5-specific.** The `ultima-app` Qt package it describes is shared across
 board targets, but everything about the bootloader, kernel, DT overlays, and boot-time
-tuning here is particular to the RPi5/BCM2712 platform. A future BeaglePlay port gets its
-own `SETUP-BEAGLEPLAY.md` alongside this one, sharing `br2-external/package/ultima-app/`
+tuning here is particular to the RPi5/BCM2712 platform. The BeaglePlay port has its own
+`SETUP-BEAGLEPLAY.md` alongside this one, sharing `br2-external/package/ultima-app/`
 but with its own `br2-external/board/ultima-beagleplay/` and `br2-external/configs/ultima_beagleplay_defconfig`.
 
 ---

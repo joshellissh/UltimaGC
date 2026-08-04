@@ -1,0 +1,47 @@
+#!/bin/sh
+#
+# Remount root filesystem read-only, mount /data, launch app immediately.
+# Runs before udev (S10), same pattern as RPi5's S00remountro.
+#
+# Partition numbers (p1=boot, p2=rootfs, p3=data) and device (mmcblk1) assume
+# SD card boot, matching extlinux.conf's root= — TODO verify against real
+# hardware and adjust if targeting eMMC (mmcblk0) instead.
+#
+case "$1" in
+    start)
+        sync
+        mount -o remount,ro /
+
+        # Mount data partition for persistent odometer state
+        mkdir -p /data
+        mount -t ext4 /dev/mmcblk1p3 /data 2>/dev/null
+
+        # Mount boot partition for logs
+        mkdir -p /boot
+        for dev in /dev/mmcblk1p1 /dev/sda1; do
+            [ -b "$dev" ] && mount -t vfat "$dev" /boot 2>/dev/null && break
+        done
+
+        # Launch Qt app immediately (before udev). No GPU driver package
+        # exists yet for AM625's PowerVR AXE-1-16M in Buildroot, so this
+        # targets linuxfb + Qt Quick's software renderer instead of RPi5's
+        # eglfs/KMS+Mesa path — see "Rendering: Why Software, Not GPU" in
+        # SETUP-BEAGLEPLAY.md.
+        export QT_QPA_PLATFORM=linuxfb
+        export QT_QUICK_BACKEND=software
+        export XDG_RUNTIME_DIR=/tmp/runtime
+        mkdir -p "$XDG_RUNTIME_DIR"
+
+        # Timing marker on UART (visible even with quiet console)
+        echo "[APP_LAUNCH] $(cut -d' ' -f1 /proc/uptime)" > /dev/ttyS2 2>/dev/null
+
+        if mountpoint -q /boot 2>/dev/null; then
+            /root/app/ultima-app > /boot/ultima-app.log 2>&1 &
+        else
+            /root/app/ultima-app > /var/log/ultima-app.log 2>&1 &
+        fi
+        ;;
+    stop)
+        killall -q ultima-app 2>/dev/null
+        ;;
+esac
