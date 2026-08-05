@@ -2,8 +2,8 @@
 
 Minimal Buildroot-based Linux image that boots directly into a fullscreen Qt5/QML
 gauge cluster, fed live data from a car's CAN bus. Ships on Raspberry Pi 5; a
-BeaglePlay (AM625) port is in progress (scaffolding done, not yet hardware-verified —
-see `SETUP-BEAGLEPLAY.md`). The two targets share one Qt app
+BeaglePlay (AM625) port is in progress (build verified green on the build VM,
+not yet hardware-verified — see `SETUP-BEAGLEPLAY.md`). The two targets share one Qt app
 (`br2-external/package/ultima-app/`) and get their own `board/` directory, defconfig,
 and setup guide apiece — see "Repo layout across board targets" below.
 

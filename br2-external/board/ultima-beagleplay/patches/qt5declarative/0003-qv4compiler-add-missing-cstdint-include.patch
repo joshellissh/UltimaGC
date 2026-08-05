@@ -1,0 +1,19 @@
+Add missing <cstdint> include for GCC 14+
+
+GCC 14 tightened C++ header transitivity, so uintptr_t/uint32_t are no
+longer implicitly available via other Qt/system headers. Documented in
+this project's SETUP-RPI5.md as a known required patch when building
+with HOSTCC=gcc-14; applies identically here since qt5declarative is
+unmodified between boards.
+
+--- a/src/qml/compiler/qv4compiler.cpp
++++ b/src/qml/compiler/qv4compiler.cpp
+@@ -48,6 +48,8 @@
+ #include <private/qqmlirbuilder_p.h>
+ #include <QCryptographicHash>
+
++#include <cstdint>
++
+ // Efficient implementation that takes advantage of powers of two.
+ static inline size_t roundUpToMultipleOf(size_t divisor, size_t x)
+ {

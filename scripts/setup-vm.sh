@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-echo "=== Ultima RPi5 Build Environment Setup ==="
+echo "=== Ultima Build Environment Setup ==="
 
 # Detect Ubuntu version
 source /etc/os-release 2>/dev/null || true
@@ -29,7 +29,10 @@ sudo apt-get install -y \
     bzip2 \
     xz-utils \
     tar \
-    device-tree-compiler
+    device-tree-compiler \
+    python3-pyelftools \
+    python3-cryptography \
+    swig
 
 # Clone Buildroot if not already present
 BUILDROOT_VERSION="2024.11.1"
