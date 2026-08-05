@@ -6,17 +6,37 @@ port shares `br2-external/package/ultima-app/` with the RPi5 build (see
 `br2-external/configs/ultima_beagleplay_defconfig`, and almost nothing about
 the bootloader, kernel, or display stack transfers as-is.
 
-**Status: scaffolding only, not yet hardware-verified.** This guide and the
-config/board files it describes were written without BeaglePlay hardware in
-hand. The bootloader chain (R5 loader / TF-A / OP-TEE / U-Boot) and Linux
-kernel version are copied verbatim from upstream Buildroot's own
-`beagleplay_defconfig` (mainlined 2024.08, still current as of Buildroot
-master in 2026), which is known to boot this exact board — that part is on
-solid ground. Everything layered on top of it for Ultima specifically
-(overlay scripts, partition device numbers, kernel fragments, Qt rendering
-path) is new and untested. Every section below marks which is which. Treat
+**Status: build verified green on the VM (2026-08-05), not yet hardware-verified.**
+`make BR2_EXTERNAL=~/ultima/br2-external ultima_beagleplay_defconfig && make`
+now completes cleanly end-to-end — kernel, TF-A/OP-TEE/R5-loader/U-Boot boot
+chain, Qt5, and `ultima-app` all build, and `post-image.sh` assembles a full
+`sdcard.img`. Nothing below has been booted on real hardware yet. Treat
 `# TODO verify on hardware` comments in the files themselves as the
 authoritative list of what to check first.
+
+Getting the build green required correcting the initial scaffolding in two
+ways, both reflected in the current `ultima_beagleplay_defconfig`:
+- **Toolchain**: the original config picked Bootlin's external toolchain,
+  but Bootlin only publishes prebuilt toolchains for x86_64 build hosts
+  (`depends on BR2_HOSTARCH = "x86_64"` in Buildroot's own
+  `toolchain-external-bootlin/Config.in`) — invisible on an arm64 build VM
+  (e.g. Apple Silicon via OrbStack), which silently fell back to an empty
+  toolchain. Switched to Buildroot's internal toolchain
+  (`BR2_TOOLCHAIN_BUILDROOT_GLIBC`), the same approach RPi5 already uses —
+  works on any host architecture.
+- **Bootloader-chain version pins**: the original config claimed to copy
+  its TF-A/R5-loader/U-Boot/kernel versions "verbatim from upstream
+  Buildroot's `beagleplay_defconfig`," but was never actually diffed
+  against that file — it invented newer-looking pins (kernel 6.18.16, TF-A
+  "latest LTS", U-Boot/R5-loader "2026.01") that don't match what this
+  Buildroot release ships or was tested against. The U-Boot 2026.01 guess in
+  particular doesn't correspond to a complete, working release: its
+  `COPYING` is a symlink to `Licenses/gpl-2.0.txt`, but that file is
+  missing from the tarball, which broke Buildroot's own legacy license-copy
+  hook on first extract. This checkout's own `configs/beagleplay_defconfig`
+  — a real, proven reference sitting right in the cloned Buildroot tree —
+  pins kernel 6.10, TF-A v2.11, and U-Boot/R5-loader 2024.07; the defconfig
+  now matches it exactly for these values.
 
 ---
 
@@ -95,7 +115,7 @@ A quick-reference table for anyone jumping between the two SETUP guides:
 | Aspect | RPi5 | BeaglePlay |
 |---|---|---|
 | Bootloader | RPi firmware + EEPROM config | R5 SPL → TF-A/OP-TEE → U-Boot (real secure boot chain) |
-| Toolchain | Buildroot-internal | External Bootlin toolchain |
+| Toolchain | Buildroot-internal | Buildroot-internal (same reason — Bootlin's toolchain is x86_64-host-only) |
 | Display driver | Mesa V3D (open, mature) | tidss (DRM/KMS only, no fbdev-native) |
 | GPU | Broadcom VideoCore — Mesa V3D, used | Imagination PowerVR AXE-1-16M — **not used**, see below |
 | Qt QPA platform | `eglfs` (KMS + GPU) | `linuxfb` (framebuffer, no GPU) |
@@ -122,21 +142,20 @@ there (OrbStack, git, rsync).
 Same VM (`ssh ubuntu@orb`, Buildroot cloned to `~/ultima/buildroot`) can build
 both targets — `scripts/setup-vm.sh` is shared across boards per `CLAUDE.md`.
 
-**Likely additional host build dependencies** (not yet confirmed by an actual
-build — TF-A and OP-TEE builds commonly need these beyond what
-`setup-vm.sh` installs for the RPi5 kernel/Qt build):
+**Additional host build dependencies** confirmed needed for TF-A/OP-TEE beyond
+what `setup-vm.sh` installs for the RPi5 kernel/Qt build — `scripts/setup-vm.sh`
+now installs these for both boards:
 
 ```bash
 sudo apt-get install -y python3-pyelftools python3-cryptography \
     device-tree-compiler swig
 ```
 
-`scripts/setup-vm.sh` doesn't install these yet — add them if the first
-`beagleplay` build fails during the `arm-trusted-firmware` or `optee-os`
-package steps.
-
 GCC version fix (GCC 14, `HOSTCC=gcc-14 HOSTCXX=g++-14`) applies identically —
-see `SETUP-RPI5.md`.
+see `SETUP-RPI5.md`. Confirmed needed here too: without it, Buildroot's
+`host-m4` build breaks the same way on a GCC-15-only Ubuntu image (this VM's
+OrbStack default was Ubuntu 26.04, GCC 15-only until `gcc-14`/`g++-14` are
+installed explicitly from the `universe` repo).
 
 ---
 
@@ -152,6 +171,8 @@ br2-external/
 │   ├── kernel-fragments.cfg           # Kernel config fragments (CAN, WiFi, touch, display fbdev)
 │   ├── post-build.sh                  # Post-build: install extlinux.conf, disable getty, reorder init scripts
 │   ├── post-image.sh                  # Post-image: creates data partition, runs genimage
+│   ├── patches/                       # Auto-applied via BR2_GLOBAL_PATCH_DIR, same mechanism upstream uses
+│   │   └── qt5declarative/            # GCC-14+ cstdint fix — see Qt5 Application & Rendering
 │   └── overlay/
 │       ├── boot/, data/               # Mountpoints for boot/data partitions
 │       ├── etc/
@@ -185,13 +206,17 @@ overlay placement (see [WiFi & Networking](#wifi--networking)).
 
 | Setting | Value | Why |
 |---|---|---|
-| `BR2_TOOLCHAIN_EXTERNAL_BOOTLIN_AARCH64_GLIBC_STABLE=y` | External Bootlin toolchain | Matches upstream's tested combo for the TF-A/OP-TEE/U-Boot chain |
-| `BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE="6.18.16"` | Kernel version | Pinned to upstream's verified version — AM625 kernel support (tidss, wlcore) moves fast; don't bump without re-checking |
+| `BR2_TOOLCHAIN_BUILDROOT_GLIBC=y` | Buildroot-internal toolchain | Same as RPi5; Bootlin's external toolchain only ships x86_64-host prebuilts (invisible on an arm64 build VM) — see status note above |
+| `BR2_GLOBAL_PATCH_DIR=".../ultima-beagleplay/patches"` | Auto-applied per-package patches | Same mechanism upstream's `beagleplay_defconfig` uses (`BR2_GLOBAL_PATCH_DIR="board/beagleboard/beagleplay/patches"`) — currently just the `qt5declarative` GCC-14 `cstdint` fix, see [Qt5 Application & Rendering](#qt5-application--rendering) |
+| `BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE="6.10"` | Kernel version | Matches this Buildroot checkout's own `configs/beagleplay_defconfig` exactly — the actually-tested pin, not a guess |
 | `BR2_LINUX_KERNEL_INTREE_DTS_NAME="ti/k3-am625-beagleplay"` | Board DTS | The board's device tree, in-tree in mainline Linux |
+| `BR2_TARGET_ARM_TRUSTED_FIRMWARE_CUSTOM_VERSION_VALUE="v2.11"` | TF-A version | Matches upstream's own defconfig |
 | `BR2_TARGET_ARM_TRUSTED_FIRMWARE_PLATFORM="k3"` / `_TARGET_BOARD="lite"` | TF-A platform | K3 generation, "lite" board variant used by AM62x |
 | `BR2_TARGET_OPTEE_OS_PLATFORM="k3-am62x"` | OP-TEE platform | AM62x-specific OP-TEE OS build |
+| `BR2_TARGET_TI_K3_R5_LOADER_CUSTOM_VERSION_VALUE="2024.07"` / `BR2_TARGET_UBOOT_CUSTOM_VERSION_VALUE="2024.07"` | R5-loader / U-Boot version | Matches upstream's own defconfig — the version this Buildroot release's hash files actually expect |
 | `BR2_TARGET_TI_K3_R5_LOADER_TIBOOT3_BIN="tiboot3-am62x-gp-evm.bin"` | R5 SPL variant | **GP (General Purpose) security variant** — BeaglePlay ships GP silicon; wrong variant = board won't boot |
 | `BR2_TARGET_UBOOT_BOARD_DEFCONFIG="am62x_beagleplay_a53"` | U-Boot board | A53-domain U-Boot defconfig for this exact board |
+| `BR2_TARGET_UBOOT_CUSTOM_MAKEOPTS="TEE=$(BINARIES_DIR)/tee-pager_v2.bin"` | U-Boot/OP-TEE wiring | Matches upstream's own defconfig's mechanism for handing U-Boot the OP-TEE binary |
 | `BR2_PACKAGE_QT5BASE_DEFAULT_QPA="linuxfb"` | Qt platform | No GPU driver — see [Qt5 rendering](#qt5-application--rendering) |
 | `BR2_PACKAGE_LINUX_FIRMWARE_TI_WL18XX=y` | WiFi firmware | Ships onboard WL1807 firmware via Buildroot, no manual overlay needed |
 
@@ -272,10 +297,14 @@ BootROM → tiboot3.bin (R5 SPL, wakeup domain: inits DDR)
 All four boot-chain components (`tiboot3.bin`, `tispl.bin`, `u-boot.img`,
 plus the kernel `Image` and `.dtb`) are Buildroot package outputs, assembled
 into `boot.vfat` by `genimage.cfg`. This entire chain — versions, board
-defconfig names, TF-A/OP-TEE platform strings — is copied from upstream
-Buildroot's own `beagleplay_defconfig`, which is a maintained, working
-reference for exactly this board. Don't hand-edit these version pins without
-checking upstream first.
+defconfig names, TF-A/OP-TEE platform strings — now matches this exact
+Buildroot checkout's own `configs/beagleplay_defconfig`
+(`~/ultima/buildroot/configs/beagleplay_defconfig` on the build VM), which
+is a maintained, working reference for exactly this board. Don't hand-edit
+these version pins without diffing against that actual file first — an
+earlier version of this defconfig claimed to do so but never actually
+compared them, and shipped invented version pins that broke the build (see
+the status note at the top of this guide).
 
 ---
 
@@ -322,6 +351,14 @@ working Raspberry Pi OS install). The kernel driver is `wlcore` + `wl18xx`
 [Qt5 Application](SETUP-RPI5.md#qt5-application) section for the full
 description of `main.cpp`, `OdoStore`, `CanBus`, and the QML files. Nothing
 there is RPi-specific; it's already board-agnostic per `CLAUDE.md`.
+
+**Build-time patch required**: `qt5declarative` needs the same GCC-14+
+`cstdint` fix documented in `SETUP-RPI5.md` (`uintptr_t`/`uint32_t` no
+longer implicitly available via header transitivity under GCC 14). Applied
+here via `br2-external/board/ultima-beagleplay/patches/qt5declarative/0003-qv4compiler-add-missing-cstdint-include.patch`,
+picked up automatically by `BR2_GLOBAL_PATCH_DIR` in the defconfig — no
+manual step needed, unlike RPi5's guide which still describes creating this
+patch by hand each time.
 
 ### Rendering: Why Software, Not GPU
 
@@ -423,8 +460,9 @@ rsync -av --exclude='buildroot/' --exclude='.git/' --exclude='output/' \
 # 2. Load defconfig
 ssh ubuntu@orb "cd ~/ultima/buildroot && make BR2_EXTERNAL=~/ultima/br2-external ultima_beagleplay_defconfig"
 
-# 3. Build (likely longer than RPi5's first build — external toolchain
-#    download, plus TF-A/OP-TEE/U-Boot all build from source)
+# 3. Build (longer than RPi5's first build — the internal toolchain, TF-A,
+#    OP-TEE, and U-Boot all build from source; roughly an hour on an 13-core
+#    OrbStack VM)
 ssh ubuntu@orb "cd ~/ultima/buildroot && make -j\$(nproc) HOSTCC=gcc-14 HOSTCXX=g++-14"
 
 # 4. Copy image
@@ -477,18 +515,21 @@ boot:
    boot (`mmcblk1`). If targeting the onboard eMMC instead (no USR button
    held), every `mmcblk1` reference in `extlinux.conf` and `S00remountro`
    needs to become `mmcblk0`.
-2. **Additional host build dependencies** for TF-A/OP-TEE — see
-   [Build VM Setup](#build-vm-setup-ubuntu).
-3. **Whether the HDMI panel comes up at all** — no mode-line/EDID fallback
+2. **Whether the HDMI panel comes up at all** — no mode-line/EDID fallback
    has been configured; if the target panel doesn't cleanly report EDID over
    HDMI, `tidss`/KMS may need an explicit forced mode.
-4. **Touch input under `linuxfb`** — confirm the USB touchscreen is picked
+3. **Touch input under `linuxfb`** — confirm the USB touchscreen is picked
    up without RPi5's `QT_QPA_EGLFS_NO_LIBINPUT=1` equivalent.
-5. **Software rendering performance** — measure actual frame rate before
+4. **Software rendering performance** — measure actual frame rate before
    deciding whether the GPU/Zink path is worth pursuing.
-6. **Kernel boot-time trimming** — once the board boots reliably, do the
+5. **Kernel boot-time trimming** — once the board boots reliably, do the
    same iterative "disable unused subsystem" pass RPi5 got via hardware
    testing (see [Kernel Configuration](#kernel-configuration)).
-7. **`scripts/build-beagleplay.sh` / `flash-beagleplay.sh` /
+6. **`scripts/build-beagleplay.sh` / `flash-beagleplay.sh` /
    `read-logs-beagleplay.sh`** — not yet written; adapt the RPi5 equivalents
    once there's hardware to validate against.
+
+Resolved since the initial scaffolding (see status note at the top): host
+build dependencies for TF-A/OP-TEE are confirmed and installed by
+`scripts/setup-vm.sh`; the toolchain and bootloader-chain version pins were
+corrected and the build now completes end-to-end on the VM.
