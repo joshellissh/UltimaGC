@@ -317,6 +317,12 @@ Window {
             repeat: true
             onTriggered: clockText.now = new Date()
         }
+
+        MouseArea {
+            anchors.fill: parent
+            anchors.margins: -10
+            onClicked: setTimeScreen.open()
+        }
     }
 
     // Odometer — right-aligned against the "mi" label at x=772
@@ -393,5 +399,11 @@ Window {
             touchDot.y = mouse.y - touchDot.height / 2
             touchAnim.restart()
         }
+    }
+
+    // Time-set overlay — opened by tapping the clock. Stacked above
+    // everything else (including the touch feedback dot at z=100).
+    SetTimeScreen {
+        id: setTimeScreen
     }
 }

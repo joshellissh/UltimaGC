@@ -3,6 +3,7 @@
         <file>main.qml</file>
         <file>CircularGauge.qml</file>
         <file>SimEngine.qml</file>
+        <file>SetTimeScreen.qml</file>
         <file>boost_circle.png</file>
         <file>background_overlay.png</file>
         <file>car_lights_off.png</file>
