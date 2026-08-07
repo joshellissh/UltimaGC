@@ -235,7 +235,7 @@ copies of the same file.
 
 **File**: `br2-external/board/ultima-beagleplay/kernel-fragments.cfg`
 
-Unlike RPi5's kernel fragment file, this one is **additive only** — it
+Unlike RPi5's kernel fragment file, this one is mostly **additive only** — it
 enables what's needed (CAN, WiFi, touchscreen HID, display fbdev emulation,
 module decompression fix) on top of
 `BR2_LINUX_KERNEL_USE_ARCH_DEFAULT_CONFIG`'s stock arm64 defconfig, and does
@@ -244,8 +244,29 @@ KASLR, etc.). Those disables were only proven safe on bcm2712 by testing each
 one against real hardware one at a time; blindly porting that list onto a
 completely different SoC's defconfig risks disabling something AM625/K3
 actually needs (e.g. a scheduling/IOMMU feature the K3 boot chain relies on).
-Do the same iterative exercise here once hardware is available — see
-[Open Questions](#open-questions--next-steps-on-real-hardware).
+Do the same iterative exercise here once more hardware time is available —
+see [Open Questions](#open-questions--next-steps-on-real-hardware).
+
+**One disable is already in** (2026-08-07): `CONFIG_DRM_POWERVR` (the
+`fd00000.gpu` node's driver, arch-default `=m`) is turned off. This isn't a
+speculative trim like RPi5's list — it's a direct fix for hardware evidence
+gathered during the `S00remountro`/`fb0`-race debugging below: the unused
+PowerVR GPU driver was probing and failing (~2s) before `tidss` got a turn,
+directly contributing to the wait `S00remountro` has to background around
+the app launch. With the driver not built, nothing probes that node — see
+[Init System & Boot Optimization](#init-system--boot-optimization) for the
+race this feeds into and [Open Questions](#open-questions--next-steps-on-real-hardware)
+item 4 for status.
+
+**Confirmed on real hardware (2026-08-07):** `dmesg` shows `fb0` registering
+at **3.44s** (`tidss 30200000.dss: [drm] fb0: tidssdrmfb frame buffer
+device`), down from the prior 7.11s/18.06s range, with zero PowerVR/GPU
+lines in `dmesg` at all — the driver isn't probing, not just failing faster.
+`ultima-app.log` shows QML loaded and rendering at 4.83s total. This also
+appears to have removed the boot-to-boot variance the old 15s-synchronous-wait
+attempt exposed (the genuine `tidss` deferred-probe retry) — worth watching
+across more boots before calling that part fully resolved, but one clean run
+is a good sign.
 
 **Required (verified against TI/upstream documentation, not yet against
 real hardware)**:
@@ -563,11 +584,12 @@ boot:
    up without RPi5's `QT_QPA_EGLFS_NO_LIBINPUT=1` equivalent.
 3. **Software rendering performance** — measure actual frame rate before
    deciding whether the GPU/Zink path is worth pursuing.
-4. **Disable the PowerVR GPU driver** (`fd00000.gpu`) — it has no firmware
-   in Buildroot and isn't used (see [Qt5 rendering](#qt5-application--rendering)),
-   but it still probes on every boot and fails after ~2s, needlessly
-   lengthening the `/dev/fb0` wait in `S00remountro`. Low-risk kernel-config
-   trim now that there's hardware evidence it's pure overhead.
+4. ~~**Disable the PowerVR GPU driver** (`fd00000.gpu`)~~ — **Done and
+   hardware-verified (2026-08-07).** `CONFIG_DRM_POWERVR` is off in
+   `kernel-fragments.cfg` (see [Kernel Configuration](#kernel-configuration)).
+   Reflashed and booted: `fb0` now registers at 3.44s (down from 7.11s/18.06s),
+   with no PowerVR/GPU lines in `dmesg` at all. See the confirmation note in
+   [Kernel Configuration](#kernel-configuration) for the full numbers.
 5. **Kernel boot-time trimming** — once the board boots reliably, do the
    same iterative "disable unused subsystem" pass RPi5 got via hardware
    testing (see [Kernel Configuration](#kernel-configuration)).
