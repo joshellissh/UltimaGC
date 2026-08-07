@@ -9,6 +9,7 @@
 
 #include "odostore.h"
 #include "canbus.h"
+#include "systemclock.h"
 
 static double readUptime() {
     double t = 0;
@@ -46,6 +47,8 @@ int main(int argc, char *argv[])
     CanBus canBus(&odoStore);
     g_canBus = &canBus;
 
+    SystemClock systemClock;
+
     signal(SIGTERM, sigHandler);
     signal(SIGINT, sigHandler);
 
@@ -53,6 +56,7 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty("bootTime", t0);
     engine.rootContext()->setContextProperty("odoStore", &odoStore);
     engine.rootContext()->setContextProperty("sim", &canBus);
+    engine.rootContext()->setContextProperty("systemClock", &systemClock);
     engine.load(QUrl(QStringLiteral("qrc:/main.qml")));
     double t2 = readUptime();
     fprintf(stderr, "[%6.2f] QML loaded (+%.2fs)\n", t2, t2-t1);
