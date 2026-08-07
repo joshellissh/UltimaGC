@@ -6,13 +6,16 @@ port shares `br2-external/package/ultima-app/` with the RPi5 build (see
 `br2-external/configs/ultima_beagleplay_defconfig`, and almost nothing about
 the bootloader, kernel, or display stack transfers as-is.
 
-**Status: build verified green on the VM (2026-08-05), not yet hardware-verified.**
-`make BR2_EXTERNAL=~/ultima/br2-external ultima_beagleplay_defconfig && make`
-now completes cleanly end-to-end — kernel, TF-A/OP-TEE/R5-loader/U-Boot boot
-chain, Qt5, and `ultima-app` all build, and `post-image.sh` assembles a full
-`sdcard.img`. Nothing below has been booted on real hardware yet. Treat
-`# TODO verify on hardware` comments in the files themselves as the
-authoritative list of what to check first.
+**Status: booted and rendering on real hardware (2026-08-07).** The Qt app
+runs and the gauge cluster displays over HDMI; WiFi and SSH both work. One
+real hardware bug was found and fixed on first boot — see the
+`S00remountro`/`S11app` entry in
+[Init System & Boot Optimization](#init-system--boot-optimization) — plus a
+stale SSH key in `authorized_keys` that predated this Mac. Remaining
+`# TODO verify on hardware` comments in the files themselves are the
+authoritative list of what's still unconfirmed (touch input, eMMC boot,
+software rendering frame rate — see
+[Open Questions](#open-questions--next-steps-on-real-hardware)).
 
 Getting the build green required correcting the initial scaffolding in two
 ways, both reflected in the current `ultima_beagleplay_defconfig`:
@@ -323,6 +326,44 @@ The only real differences from RPi5's versions:
   instead of the `eglfs`/KMS env block
 - UART marker device: `/dev/ttyS2` instead of `/dev/ttyAMA10`
 - `S40network` loads `wlcore_sdio` instead of `modprobe brcmfmac`
+- **`S00remountro` backgrounds a `/dev/fb0` wait (up to 60s) around the app
+  launch, instead of waiting synchronously.** First hardware boot
+  (2026-08-07) showed `ultima-app.log` failing immediately with "Unable to
+  figure out framebuffer device" — `tidss`'s DRM probe is component-based
+  (bridges, HDMI DDC/EDID reads over i2c) and hadn't finished by the time
+  the pre-udev launch tried to open `/dev/fb0`, unlike RPi5's `vc4` which
+  probes fast enough that `eglfs` never needed this. Kernel-side wiring was
+  confirmed correct (`tidss_drv.c` calls `drm_fbdev_dma_setup`, `CONFIG_FB`/
+  `CONFIG_DRM_FBDEV_EMULATION`/`CONFIG_FB_DEVICE` all enabled), so this is a
+  boot-race fix, not a missing-feature fix — but the race turned out to be
+  wider than one timeout could reliably cover. Three iterations on real
+  hardware:
+  1. A 5s synchronous wait — lost the race (`fb0` registered at 8.28s per
+     `dmesg`, app launched at 7.11s per `ultima-app.log`).
+  2. A 15s synchronous wait — lost the race on a *different* boot, and
+     worse than that: `dmesg` showed a genuine deferred probe (`tidss: port
+     1 probe failed`, retried later) pushing `fb0` all the way to 18.06s.
+     Boot-to-boot variance in the HDMI/DDC probe is real, not just margin
+     tuning. The synchronous wait was also quietly delaying `S40network`/
+     `S50dropbear` by however long the display took, since `rcS` runs init
+     scripts sequentially and nothing after `S00remountro` could start
+     until it returned.
+  3. Backgrounding the wait+launch as a subshell (`( ... ) &`) fixes both
+     problems at once: `rcS` moves on immediately, so WiFi/SSH come up on
+     their own schedule regardless of the display, and the app's own wait
+     can afford a much longer cap (60s) since it no longer blocks anything
+     else. **Confirmed working over SSH on real hardware (2026-08-07)**
+     with a manual `/etc/init.d/S11app restart` after `/dev/fb0` existed —
+     clean `ultima-app.log` (QML loaded, 0.8s startup), gauge cluster
+     rendered on the HDMI display. The backgrounded cold-boot path itself
+     — the actual fix for the race — still needs one more hardware
+     confirmation pass; the manual restart proved the app/display path
+     works, not the new boot-time structure.
+  Part of the delay in both failed attempts was the unused PowerVR GPU
+  driver (`fd00000.gpu`, no firmware present in Buildroot) probing first
+  and burning ~2s failing before `tidss` gets its turn — see
+  [Open Questions](#open-questions--next-steps-on-real-hardware) for
+  disabling it.
 
 `fstab`, `inittab`, and `rcS` are byte-identical to RPi5's — genuinely
 board-agnostic.
@@ -489,9 +530,12 @@ substitute the image filename above.
 ## Flashing
 
 Same `dd`-based approach as RPi5 — see `SETUP-RPI5.md`'s
-[Flashing](SETUP-RPI5.md#flashing) section. No `scripts/flash-beagleplay.sh`
-exists yet (the RPi5 one is a generic disk-picker + `dd`, easily adapted, but
-not written until there's hardware to test the resulting image against).
+[Flashing](SETUP-RPI5.md#flashing) section. `scripts/flash-beagleplay.sh`
+exists now (adapted from the RPi5 script's disk-picker + `dd`), with one
+addition: it detects removable media via `diskutil info`'s "Removable
+Media" flag rather than `diskutil list external physical` — a built-in
+SD card reader reports as "Internal" even with a card inserted, which the
+RPi5 script's detection would miss.
 
 ---
 
@@ -515,21 +559,29 @@ boot:
    boot (`mmcblk1`). If targeting the onboard eMMC instead (no USR button
    held), every `mmcblk1` reference in `extlinux.conf` and `S00remountro`
    needs to become `mmcblk0`.
-2. **Whether the HDMI panel comes up at all** — no mode-line/EDID fallback
-   has been configured; if the target panel doesn't cleanly report EDID over
-   HDMI, `tidss`/KMS may need an explicit forced mode.
-3. **Touch input under `linuxfb`** — confirm the USB touchscreen is picked
+2. **Touch input under `linuxfb`** — confirm the USB touchscreen is picked
    up without RPi5's `QT_QPA_EGLFS_NO_LIBINPUT=1` equivalent.
-4. **Software rendering performance** — measure actual frame rate before
+3. **Software rendering performance** — measure actual frame rate before
    deciding whether the GPU/Zink path is worth pursuing.
+4. **Disable the PowerVR GPU driver** (`fd00000.gpu`) — it has no firmware
+   in Buildroot and isn't used (see [Qt5 rendering](#qt5-application--rendering)),
+   but it still probes on every boot and fails after ~2s, needlessly
+   lengthening the `/dev/fb0` wait in `S00remountro`. Low-risk kernel-config
+   trim now that there's hardware evidence it's pure overhead.
 5. **Kernel boot-time trimming** — once the board boots reliably, do the
    same iterative "disable unused subsystem" pass RPi5 got via hardware
    testing (see [Kernel Configuration](#kernel-configuration)).
-6. **`scripts/build-beagleplay.sh` / `flash-beagleplay.sh` /
-   `read-logs-beagleplay.sh`** — not yet written; adapt the RPi5 equivalents
-   once there's hardware to validate against.
+6. **`scripts/build-beagleplay.sh` / `read-logs-beagleplay.sh`** — not yet
+   written; `flash-beagleplay.sh` now exists (see
+   [Flashing](#flashing)), adapt the remaining RPi5 equivalents the same way.
 
 Resolved since the initial scaffolding (see status note at the top): host
 build dependencies for TF-A/OP-TEE are confirmed and installed by
 `scripts/setup-vm.sh`; the toolchain and bootloader-chain version pins were
-corrected and the build now completes end-to-end on the VM.
+corrected and the build now completes end-to-end on the VM. As of
+2026-08-07, the board boots on real hardware, WiFi/SSH work, and the Qt app
+renders the gauge cluster over HDMI — see the `S00remountro`/`S11app` entry
+above and [Init System & Boot Optimization](#init-system--boot-optimization)
+for what got fixed to make that happen. HDMI/EDID negotiation came up
+without any forced mode needed, resolving the open question that used to be
+here.
