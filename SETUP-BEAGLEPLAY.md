@@ -258,15 +258,16 @@ the app launch. With the driver not built, nothing probes that node — see
 race this feeds into and [Open Questions](#open-questions--next-steps-on-real-hardware)
 item 4 for status.
 
-**Confirmed on real hardware (2026-08-07):** `dmesg` shows `fb0` registering
-at **3.44s** (`tidss 30200000.dss: [drm] fb0: tidssdrmfb frame buffer
-device`), down from the prior 7.11s/18.06s range, with zero PowerVR/GPU
-lines in `dmesg` at all — the driver isn't probing, not just failing faster.
-`ultima-app.log` shows QML loaded and rendering at 4.83s total. This also
-appears to have removed the boot-to-boot variance the old 15s-synchronous-wait
-attempt exposed (the genuine `tidss` deferred-probe retry) — worth watching
-across more boots before calling that part fully resolved, but one clean run
-is a good sign.
+**Confirmed on real hardware, two boots (2026-08-07):** `dmesg` shows `fb0`
+registering at **3.44s**, then **3.58s** on a second reboot (`tidss
+30200000.dss: [drm] fb0: tidssdrmfb frame buffer device`), down from the
+prior 7.11s/18.06s range, with zero PowerVR/GPU lines in `dmesg` on either
+boot — the driver isn't probing, not just failing faster. `ultima-app.log`
+shows QML loaded and rendering at 4.83s/5.16s total across the two boots.
+Two consecutive tight, consistent runs is good evidence the old boot-to-boot
+variance (the genuine `tidss` deferred-probe retry that hit 18.06s once) is
+actually gone, not just avoided by luck — this open question is now
+considered resolved.
 
 **Required (verified against TI/upstream documentation, not yet against
 real hardware)**:
