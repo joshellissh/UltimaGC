@@ -331,6 +331,43 @@ earlier version of this defconfig claimed to do so but never actually
 compared them, and shipped invented version pins that broke the build (see
 the status note at the top of this guide).
 
+### Boot timing: most of it is this chain, not the kernel
+
+Unlike RPi5 (profiled: ~7.8s bootloader / ~1.45s kernel+init+app, see
+`SETUP-RPI5.md`), this chain has no equivalent stage-by-stage timing yet —
+`dmesg` timestamps only start counting once the kernel itself begins
+executing, so none of the `fb0`-timing work above ([Kernel
+Configuration](#kernel-configuration)) captures anything before that point.
+The onboard status LED (wired to the kernel's `heartbeat` trigger,
+`k3-am625-beagleplay.dts:156`) is the only signal available so far for
+"kernel has started" without a UART capture, and it showed **~10s of real
+elapsed time on power-on before the kernel starts at all** — dwarfing the
+~1.5-2s the `dmesg`-visible kernel/app path was taking. Most of the boot
+budget is upstream of everything tuned so far.
+
+**One fix landed (2026-08-07):** `CONFIG_BOOTDELAY` in U-Boot's
+`am62x_beagleplay_a53` defconfig defaults to `2` — U-Boot waits 2s at every
+boot for a keypress to interrupt autoboot before running
+`CONFIG_BOOTCOMMAND`. Nothing ever needs to interrupt autoboot on a headless
+dash, so this was pure waste. Set to `0` via a new
+`br2-external/board/ultima-beagleplay/uboot-fragments.cfg`, wired up the
+same way `kernel-fragments.cfg` layers onto the kernel defconfig, via
+`BR2_TARGET_UBOOT_CONFIG_FRAGMENT_FILES` in `ultima_beagleplay_defconfig`.
+**Confirmed on real hardware**: heartbeat LED now lights at ~8s, matching
+the expected ~2s savings almost exactly.
+
+**Still ~8s unaccounted for.** With `bootdelay` gone, the remaining time is
+somewhere across BootROM → R5 SPL (DDR training) → TF-A/OP-TEE → U-Boot's
+own `envboot`/`bootflow scan` — and right now there's no visibility into
+which stage(s) actually dominate. Getting a UART capture on the JST-SH
+debug header (same physical port as `console=ttyS2`/`earlycon` — pinout
+still not confirmed against the board in hand, see
+[Debugging](#debugging)) with early boot logging enabled would tell us
+whether this is legitimately fixed hardware init (DDR/security setup, like
+RPi5's SDRAM training) or has its own slack (verbose boot-stage logging over
+a slow 115200 baud UART blocking real time, the way RPi5's console did) —
+see [Open Questions](#open-questions--next-steps-on-real-hardware).
+
 ---
 
 ## Init System & Boot Optimization
@@ -597,6 +634,20 @@ boot:
 6. **`scripts/build-beagleplay.sh` / `read-logs-beagleplay.sh`** — not yet
    written; `flash-beagleplay.sh` now exists (see
    [Flashing](#flashing)), adapt the remaining RPi5 equivalents the same way.
+7. ~~**U-Boot `bootdelay`**~~ — **Done and hardware-verified (2026-08-07).**
+   Was defaulting to 2s; set to 0 via `uboot-fragments.cfg`. Heartbeat LED
+   moved from ~10s to ~8s, matching the expected savings. See [Boot timing:
+   most of it is this chain, not the kernel](#boot-timing-most-of-it-is-this-chain-not-the-kernel).
+8. **Profile the bootloader chain itself (BootROM → R5 SPL → TF-A/OP-TEE →
+   U-Boot) via UART capture on the JST-SH debug header.** With `bootdelay`
+   gone, ~8s of every boot is still unaccounted for and entirely upstream of
+   the kernel — `dmesg` timestamps can't see any of it. This is now the
+   single biggest lever left for boot speed, bigger than everything fixed
+   so far combined, but needs real stage-by-stage timing data before
+   guessing at further fixes (same lesson RPi5's `BOOT_UART=1` profiling
+   taught — don't assume a bootloader phase is "fixed hardware init"
+   without measuring it first). Needs a USB-UART adapter on the debug
+   header; pinout not yet confirmed against the board in hand.
 
 Resolved since the initial scaffolding (see status note at the top): host
 build dependencies for TF-A/OP-TEE are confirmed and installed by
