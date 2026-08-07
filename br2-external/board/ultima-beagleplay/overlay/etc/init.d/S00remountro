@@ -32,14 +32,34 @@ case "$1" in
         export XDG_RUNTIME_DIR=/tmp/runtime
         mkdir -p "$XDG_RUNTIME_DIR"
 
-        # Timing marker on UART (visible even with quiet console)
-        echo "[APP_LAUNCH] $(cut -d' ' -f1 /proc/uptime)" > /dev/ttyS2 2>/dev/null
+        # Wait for /dev/fb0, then launch — backgrounded as a whole unit so
+        # this doesn't block rcS from moving on to S10udev/S40network/
+        # S50dropbear. tidss's DRM probe is component-based (bridges, HDMI
+        # DDC/EDID reads over i2c) and its timing varies boot-to-boot far
+        # more than expected: first hardware boot (2026-08-07) had fb0 ready
+        # at 8.28s kernel uptime, a later boot hit a deferred probe
+        # ("tidss: port 1 probe failed" in dmesg) and didn't get fb0 until
+        # 18.06s. A synchronous wait was previously tried at both 5s and 15s
+        # timeouts and lost the race both times, while also needlessly
+        # delaying WiFi/SSH by however long the display took. Backgrounding
+        # fixes both: the rest of boot proceeds immediately, and the app
+        # can afford a much longer cap (60s) since it's no longer gating
+        # anything else.
+        (
+            for i in $(seq 1 600); do
+                [ -e /dev/fb0 ] && break
+                sleep 0.1
+            done
 
-        if mountpoint -q /boot 2>/dev/null; then
-            /root/app/ultima-app > /boot/ultima-app.log 2>&1 &
-        else
-            /root/app/ultima-app > /var/log/ultima-app.log 2>&1 &
-        fi
+            # Timing marker on UART (visible even with quiet console)
+            echo "[APP_LAUNCH] $(cut -d' ' -f1 /proc/uptime)" > /dev/ttyS2 2>/dev/null
+
+            if mountpoint -q /boot 2>/dev/null; then
+                /root/app/ultima-app > /boot/ultima-app.log 2>&1
+            else
+                /root/app/ultima-app > /var/log/ultima-app.log 2>&1
+            fi
+        ) &
         ;;
     stop)
         killall -q ultima-app 2>/dev/null

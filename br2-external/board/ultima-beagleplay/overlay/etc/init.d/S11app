@@ -19,6 +19,10 @@ case "$1" in
         export QT_QUICK_BACKEND=software
         export XDG_RUNTIME_DIR=/tmp/runtime
         mkdir -p "$XDG_RUNTIME_DIR"
+        for i in $(seq 1 150); do
+            [ -e /dev/fb0 ] && break
+            sleep 0.1
+        done
         if mountpoint -q /boot 2>/dev/null; then
             /root/app/ultima-app > /boot/ultima-app.log 2>&1 &
         else
