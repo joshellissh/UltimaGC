@@ -356,17 +356,44 @@ same way `kernel-fragments.cfg` layers onto the kernel defconfig, via
 **Confirmed on real hardware**: heartbeat LED now lights at ~8s, matching
 the expected ~2s savings almost exactly.
 
-**Still ~8s unaccounted for.** With `bootdelay` gone, the remaining time is
-somewhere across BootROM → R5 SPL (DDR training) → TF-A/OP-TEE → U-Boot's
-own `envboot`/`bootflow scan` — and right now there's no visibility into
-which stage(s) actually dominate. Getting a UART capture on the JST-SH
-debug header (same physical port as `console=ttyS2`/`earlycon` — pinout
-still not confirmed against the board in hand, see
-[Debugging](#debugging)) with early boot logging enabled would tell us
-whether this is legitimately fixed hardware init (DDR/security setup, like
-RPi5's SDRAM training) or has its own slack (verbose boot-stage logging over
-a slow 115200 baud UART blocking real time, the way RPi5's console did) —
-see [Open Questions](#open-questions--next-steps-on-real-hardware).
+**Second fix landed, no measurable win (2026-08-07):** silenced U-Boot
+proper's console (`CONFIG_SILENT_CONSOLE` + `CONFIG_SPL_SILENT_CONSOLE` +
+`CONFIG_SILENT_U_BOOT_ONLY` in `uboot-fragments.cfg`, default env
+`silent=1` via a patch to `beagleplay.env` — see
+`br2-external/board/ultima-beagleplay/patches/uboot/`). Previously U-Boot
+printed its full banner and boot-progress lines to the 115200 UART on
+every boot even with `bootdelay=0` giving nobody a window to read them.
+`CONFIG_SILENT_U_BOOT_ONLY` keeps this scoped to U-Boot itself so the
+kernel's own console/earlycon (relied on by `S00remountro`'s UART timing
+marker) is untouched — confirmed on real hardware, app still starts
+cleanly (3.79s kernel-relative, 1.67s total app startup, no regressions).
+**Confirmed on real hardware: no measurable change** — heartbeat LED still
+at ~8s. In hindsight this makes sense: suppressing a UART banner at 115200
+baud is worth tens of ms at most, well under what a stopwatch-on-LED can
+resolve. Not reverted (it's correct and free), but it rules out "boot
+console I/O" as a meaningful contributor to the unaccounted gap. Not
+wired up for the R5 SPL stage (`ti-k3-r5-loader`) — see the comment in
+`uboot-fragments.cfg` for why that's not worth the maintenance cost, and
+it wouldn't have mattered anyway given this result.
+
+**Still ~8s unaccounted for, and now more clearly *not* a console-I/O
+problem.** The remaining time is somewhere across BootROM → R5 SPL (DDR
+training) → TF-A/OP-TEE → U-Boot's own `envboot`/`bootflow scan` — and
+right now there's no visibility into which stage(s) actually dominate.
+Getting a UART capture on the JST-SH debug header (same physical port as
+`console=ttyS2`/`earlycon` — pinout still not confirmed against the board
+in hand, see [Debugging](#debugging)) with early boot logging enabled
+would tell us whether this is legitimately fixed hardware init (DDR/security
+setup, like RPi5's SDRAM training) or has its own slack — see
+[Open Questions](#open-questions--next-steps-on-real-hardware).
+
+Falcon mode (R5 SPL jumping straight to TF-A→kernel, skipping A53 SPL +
+U-Boot proper) was researched as a bigger potential lever but ruled out for
+now: the AM62x-specific wiring for it isn't in our pinned U-Boot 2024.07
+(it's an unmerged, TI-SK-board-only patch series posted March 2025 with no
+BeaglePlay precedent), it needs TI secure-signing tooling we don't have,
+and TI's own numbers put the realistic payoff at ~1-2s — not worth forward-
+porting out-of-tree patches for.
 
 ---
 
@@ -648,6 +675,23 @@ boot:
    taught — don't assume a bootloader phase is "fixed hardware init"
    without measuring it first). Needs a USB-UART adapter on the debug
    header; pinout not yet confirmed against the board in hand.
+9. ~~**Silence U-Boot's console**~~ — **Done, hardware-verified, no
+   measurable win (2026-08-07).** `CONFIG_SILENT_CONSOLE` +
+   `CONFIG_SPL_SILENT_CONSOLE` + `CONFIG_SILENT_U_BOOT_ONLY` in
+   `uboot-fragments.cfg`, default `silent=1` via a patch to
+   `beagleplay.env`. Heartbeat LED still ~8s — banner/status-line UART
+   output was only ever worth tens of ms, below stopwatch resolution.
+   Kept (it's correct and free) but rules out console I/O as a real
+   contributor. See [Boot timing: most of it is this chain, not the
+   kernel](#boot-timing-most-of-it-is-this-chain-not-the-kernel).
+10. **Falcon mode — researched, ruled out for now.** Would skip A53 SPL +
+    U-Boot proper entirely (R5 SPL → TF-A → kernel directly). Not viable
+    without a lot of unjustified risk: the AM62x wiring for it isn't in our
+    pinned U-Boot 2024.07 (unmerged patch series from March 2025, TI-SK-
+    board-only, no BeaglePlay precedent), needs TI's secure-signing tooling
+    we don't have, and TI's own numbers put the realistic payoff at ~1-2s.
+    Revisit only if the UART profiling (#8) points squarely at the A53
+    SPL/U-Boot-proper stage as the dominant cost.
 
 Resolved since the initial scaffolding (see status note at the top): host
 build dependencies for TF-A/OP-TEE are confirmed and installed by
