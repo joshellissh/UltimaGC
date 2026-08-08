@@ -235,17 +235,11 @@ copies of the same file.
 
 **File**: `br2-external/board/ultima-beagleplay/kernel-fragments.cfg`
 
-Unlike RPi5's kernel fragment file, this one is mostly **additive only** — it
-enables what's needed (CAN, WiFi, touchscreen HID, display fbdev emulation,
-module decompression fix) on top of
-`BR2_LINUX_KERNEL_USE_ARCH_DEFAULT_CONFIG`'s stock arm64 defconfig, and does
-**not** attempt RPi5-style boot-time trimming (disabling KVM, NFS, ftrace,
-KASLR, etc.). Those disables were only proven safe on bcm2712 by testing each
-one against real hardware one at a time; blindly porting that list onto a
-completely different SoC's defconfig risks disabling something AM625/K3
-actually needs (e.g. a scheduling/IOMMU feature the K3 boot chain relies on).
-Do the same iterative exercise here once more hardware time is available —
-see [Open Questions](#open-questions--next-steps-on-real-hardware).
+This file enables what's needed (CAN, WiFi, touchscreen HID, display fbdev
+emulation, module decompression fix) on top of
+`BR2_LINUX_KERNEL_USE_ARCH_DEFAULT_CONFIG`'s stock arm64 defconfig, plus a
+boot-time trimming block modeled on RPi5's but not blindly copied — see
+below.
 
 **One disable is already in** (2026-08-07): `CONFIG_DRM_POWERVR` (the
 `fd00000.gpu` node's driver, arch-default `=m`) is turned off. This isn't a
@@ -268,6 +262,36 @@ Two consecutive tight, consistent runs is good evidence the old boot-to-boot
 variance (the genuine `tidss` deferred-probe retry that hit 18.06s once) is
 actually gone, not just avoided by luck — this open question is now
 considered resolved.
+
+**Kernel trimming pass, hardware-verified (2026-08-07):** disabled the
+unused-subsystem block now at the bottom of `kernel-fragments.cfg` — KVM,
+BT, NFS, SCSI/ATA-adjacent block stuff, RC_CORE/CEC/media, FTRACE,
+RANDOMIZE_BASE, TASKSTATS/AUDIT, PROFILING/PERF_EVENTS-where-possible,
+DEBUG_FS, KALLSYMS-where-possible, IOSCHED_BFQ/KYBER, VGA_ARB-where-possible,
+QUOTA, PPS/PTP, and — unlike RPi5, verified safe here because `DRM_TIDSS`
+has no dependency on it — `SOUND`/`SND`. Four symbols (`SCSI`, `KALLSYMS`,
+`VGA_ARB`, `PERF_EVENTS`) stayed on despite being listed off: each is
+force-selected by something else still enabled (`libata`, kernel tracing/
+debug infra, DRM core, CoreSight) and none of them do active hardware
+probing at boot the way the PowerVR driver did, so not worth chasing
+further. Kernel `Image` shrank 46.3MB → 43.3MB. `fb0` registration dropped
+from 3.44-3.58s to **3.26s** — a real but modest (~0.2-0.3s) improvement,
+not the multi-second win hoped for; app-ready timing is flat at 5.16s
+total, same range as before. No dmesg errors or regressions from anything
+disabled. Confirms this was worth doing but that kernel-side init was
+never the dominant cost — the ~8s pre-kernel gap (see [Boot timing: most
+of it is this chain, not the
+kernel](#boot-timing-most-of-it-is-this-chain-not-the-kernel)) still
+dwarfs it.
+
+Deliberately **not** touched: BeaglePlay's real wired Ethernet
+(`TI_K3_AM65_CPSW_NUSS`, driving `cpsw_port1`/`cpsw_port2` per
+`k3-am625-beagleplay.dts`) is built in and probes on every boot. Unlike
+everything above, this is actual board capability (a potential wired
+debug/dev fallback), not generically-unused kernel cruft — worth real
+profiling data (how much boot time it costs, e.g. PHY autonegotiation
+delay with no cable attached) before deciding whether to cut it, not a
+default-disable call.
 
 **Required (verified against TI/upstream documentation, not yet against
 real hardware)**:
@@ -655,9 +679,12 @@ boot:
    Reflashed and booted: `fb0` now registers at 3.44s (down from 7.11s/18.06s),
    with no PowerVR/GPU lines in `dmesg` at all. See the confirmation note in
    [Kernel Configuration](#kernel-configuration) for the full numbers.
-5. **Kernel boot-time trimming** — once the board boots reliably, do the
-   same iterative "disable unused subsystem" pass RPi5 got via hardware
-   testing (see [Kernel Configuration](#kernel-configuration)).
+5. ~~**Kernel boot-time trimming**~~ — **Done and hardware-verified
+   (2026-08-07).** `fb0` registration dropped 3.44-3.58s → 3.26s, `Image`
+   shrank 46.3MB → 43.3MB, no regressions. Modest win, not a major one —
+   see [Kernel Configuration](#kernel-configuration) for the full list and
+   numbers. Wired Ethernet (`TI_K3_AM65_CPSW_NUSS`) deliberately left alone
+   pending real profiling data, not bundled into this pass.
 6. **`scripts/build-beagleplay.sh` / `read-logs-beagleplay.sh`** — not yet
    written; `flash-beagleplay.sh` now exists (see
    [Flashing](#flashing)), adapt the remaining RPi5 equivalents the same way.
