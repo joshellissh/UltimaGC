@@ -1,0 +1,12 @@
+# ODrive USB-CAN adapter (gs_usb / candleLight class, VID:PID 1d50:606f)
+# Bring up can0 at 1 Mbit/s on plug-in. Syvecs S7+ CAN2 runs at 1M on this car
+# (verified in SCal: Datastreams → CAN2 Bus Speed).
+# Identical to RPi5/Buildroot-BeaglePlay's rule — same USB adapter,
+# board-agnostic. Mirrored here (not shared by reference) because Yocto
+# recipes need files inside the layer's own files/ dir to be fetchable via
+# SRC_URI; keep in sync with
+# br2-external/board/ultima-beagleplay/overlay/etc/udev/rules.d/70-can.rules
+# by hand if it ever changes.
+SUBSYSTEM=="net", ACTION=="add", DEVPATH=="*/usb*", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="606f", \
+  RUN+="/sbin/ip link set %k type can bitrate 1000000", \
+  RUN+="/sbin/ip link set %k up"

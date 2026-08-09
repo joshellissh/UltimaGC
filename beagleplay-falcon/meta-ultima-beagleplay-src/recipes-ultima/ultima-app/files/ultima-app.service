@@ -1,0 +1,19 @@
+[Unit]
+Description=Ultima gauge cluster
+After=systemd-udevd.service
+Wants=systemd-udevd.service
+StartLimitIntervalSec=0
+
+[Service]
+ExecStartPre=/bin/mkdir -p /tmp/runtime
+ExecStart=/usr/bin/ultima-app
+Environment=QT_QPA_PLATFORM=linuxfb
+Environment=QT_QUICK_BACKEND=software
+Environment=XDG_RUNTIME_DIR=/tmp/runtime
+Restart=on-failure
+RestartSec=1
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
