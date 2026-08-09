@@ -28,11 +28,7 @@ sudo apt-get install -y \
     gzip \
     bzip2 \
     xz-utils \
-    tar \
-    device-tree-compiler \
-    python3-pyelftools \
-    python3-cryptography \
-    swig
+    tar
 
 # Clone Buildroot if not already present
 BUILDROOT_VERSION="2024.11.1"

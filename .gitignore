@@ -1,5 +1,7 @@
 output/
 build/
+beagleplay-falcon/deploy/
+beagleplay-falcon/deploy-falcon/
 .DS_Store
 **/.DS_Store
 .qtcreator/

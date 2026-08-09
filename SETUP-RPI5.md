@@ -2,11 +2,13 @@
 
 A comprehensive guide for reproducing the Ultima project: a minimal Buildroot-based Linux image for Raspberry Pi 5 running a fullscreen gauge cluster Qt5 app with fast boot, WiFi, and touchscreen support.
 
-**This guide is RPi5-specific.** The `ultima-app` Qt package it describes is shared across
-board targets, but everything about the bootloader, kernel, DT overlays, and boot-time
-tuning here is particular to the RPi5/BCM2712 platform. The BeaglePlay port has its own
-`SETUP-BEAGLEPLAY.md` alongside this one, sharing `br2-external/package/ultima-app/`
-but with its own `br2-external/board/ultima-beagleplay/` and `br2-external/configs/ultima_beagleplay_defconfig`.
+**This guide is RPi5-specific**, and RPi5 is the only board this Buildroot tree
+targets. Everything about the bootloader, kernel, DT overlays, and boot-time tuning here
+is particular to the RPi5/BCM2712 platform. BeaglePlay is a separate Yocto/TI-SDK build
+(`beagleplay-falcon/`, see its `NOTES.md`) — not part of this Buildroot tree at all, see
+`CLAUDE.md` for why. It does reuse this same `ultima-app` Qt source
+(`br2-external/package/ultima-app/`, board-agnostic), bind-mounted in rather than built
+by Buildroot.
 
 ---
 
