@@ -24,6 +24,22 @@ python do_unpack:append() {
     shutil.copytree(d.getVar('ULTIMA_APP_EXTERNAL_SRC'), s)
 }
 
+# do_unpack's task signature is computed from SRC_URI (just the .service and
+# .rules files) — nothing hashes the contents of ULTIMA_APP_EXTERNAL_SRC, so
+# a source-only edit (change a .qml, change nothing else) leaves every
+# task's signature unchanged and bitbake reuses the stale sstate object,
+# silently rebuilding an image with the OLD app binary. Confirmed the hard
+# way: two full image builds in a row after editing SetTimeScreen.qml/
+# main.qml both produced zero "ultima-app" lines in the task log — do_unpack
+# never reran, so the workdir's copy of the source (and the compiled binary)
+# stayed whatever was last built hours earlier. Same class of trap as the
+# KERNEL_CONFIG_FRAGMENTS one this layer already learned the hard way (see
+# linux-ti-staging_%.bbappend). nostamp forces do_unpack — and everything
+# downstream of it (do_compile, do_install, do_package, ...) — to run every
+# single build, which is the only way to make this recipe actually match
+# what "always mirror the current host source" already claims to do.
+do_unpack[nostamp] = "1"
+
 SYSTEMD_SERVICE:${PN} = "ultima-app.service"
 SYSTEMD_AUTO_ENABLE:${PN} = "enable"
 

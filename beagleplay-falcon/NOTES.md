@@ -539,6 +539,133 @@ So SSH only works if BeaglePlay's wired Ethernet comes up with a DHCP lease
 ultima-app` needs to happen over the serial console directly. Don't assume
 WiFi/SSH access the way the Buildroot bring-up notes do.
 
+## Dash clock doesn't persist a manual set (2026-08-10) — root-caused on hardware
+
+Reported symptom: SetTimeScreen's UI works (steppers, AM/PM, Save all
+respond) but the new time "doesn't save." Checked live over SSH rather than
+guessing — two independent, stacked causes, both real:
+
+1. **`systemd-timesyncd` is enabled by default in this base image** and was
+   actively NTP-synced (`timedatectl`: `System clock synchronized: yes`,
+   `NTP service: active`, polling `1.pool.ntp.org` over the wired Ethernet
+   used for SSH/bench access). `SystemClock::setTime()` calls
+   `clock_settime()` directly — it doesn't go through
+   `org.freedesktop.timedate1`, so systemd-timesyncd has no idea a manual
+   override happened and never disables itself the way `timedatectl
+   set-time` would. Net effect: NTP just wins the race, repeatedly, any
+   time the board has network — which is bench-only; the deployed car has
+   none (see CLAUDE.md). Not a loss for the real use case to turn off, since
+   NTP was never a legitimate clock source there anyway.
+2. **Nothing loaded the RTC's time back into the system clock at boot.**
+   `/dev/rtc0` (`bq32k 0-0068`) exists and — confirmed with `hwclock -r` —
+   correctly held a previously-written time, so `SystemClock`'s
+   write-through to hardware was already working. But
+   `CONFIG_RTC_HCTOSYS` is unset in this kernel's `.config`, and even
+   setting it wouldn't help: `CONFIG_RTC_DRV_BQ32K=m` here (module, not
+   built in — same Kconfig-driven `=y`→`=m` downgrade pattern as
+   `CONFIG_CAN_GS_USB`, see `ultima-can.cfg`), so the driver isn't bound yet
+   at the kernel's early-boot HCTOSYS point regardless. No udev rule or
+   systemd unit filled the gap either — `util-linux-hwclock` is installed
+   (`/usr/sbin/hwclock` present) but ships no service of its own. Added
+   `recipes-ultima/ultima-hwclock-load`, running `hwclock --hctosys`.
+
+Both are needed — (1) alone still loses the RTC's value on the very next
+disconnected boot; (2) alone still gets overwritten live any time the board
+is on the bench with Ethernet plugged in.
+
+**First attempt at both, hardware-verified wrong — two more lessons:**
+
+- **`SYSTEMD_AUTO_ENABLE:pn-systemd-timesyncd = "disable"` (in a
+  `boot-trim/systemd_%.bbappend`, matching this layer's existing pattern for
+  docker-moby/psplash/etc.) was a silent no-op.** Flashed, booted, checked:
+  `systemctl is-enabled systemd-timesyncd` still said `enabled`, and a real
+  `.wants` symlink existed. `opkg list-installed` showed why —
+  `systemd-timesyncd.service` ships inside the base `systemd` package here,
+  not split into its own `systemd-timesyncd` sub-package, so
+  `SYSTEMD_AUTO_ENABLE:pn-<pkg>` had no package named `systemd-timesyncd` to
+  attach to (confirmed by reading `systemd_populate_packages()` in
+  `systemd.bbclass` — the enable/disable decision is resolved per *package*,
+  from whichever package actually declares `SYSTEMD_SERVICE:<pkg>`, not per
+  service name). A package-level override on `systemd` itself would've been
+  too broad — that package's `SYSTEMD_SERVICE` list covers more than just
+  timesyncd. Fixed by masking the unit directly in the finished rootfs
+  instead (`ROOTFS_POSTPROCESS_COMMAND` in `tisdk-base-image.bbappend`,
+  `ln -sf /dev/null .../systemd/system/systemd-timesyncd.service` after
+  removing the `.wants` symlink) — surgical, and it runs after every
+  package's own postinst so ordering can't undo it.
+- **`ultima-hwclock-load.service`'s `ConditionPathExists=/dev/rtc0` also
+  silently no-op'd, every boot, on real hardware** — confirmed in
+  `journalctl -b`: the condition check ran and failed at kernel timestamp
+  4.54s, `bq32k` didn't register as `rtc0` until 5.11s, well under a second
+  later. `ConditionPathExists` skips immediately on a false read, it doesn't
+  wait or retry — same trap as the `Requires=dev-fb0.device` race
+  `ultima-app.service`'s own history already warns about (see its
+  `[Unit]` comment). Replaced with a bounded poll loop in `ExecStart`
+  (0.1s × up to 30, i.e. ≤3s, no-ops past that). Also dropped this unit's
+  `Before=ultima-app.service` entirely rather than trying to tighten the
+  ordering further — with boot-to-framebuffer this project just cut from
+  ~8.9s to ~2.3s (see "Boot-time optimization" above), nothing about
+  restoring the clock should ever sit in front of the app's start. It runs
+  concurrently now; the dash clock re-reads system time every second on its
+  own (`clockText`'s `Timer` in `main.qml`), so on the rare boot where this
+  loses the race the display is briefly stale and self-corrects a moment
+  later — a harmless cosmetic blip, not worth trading app-start latency for.
+
+Both corrected and re-flashed; re-verified on hardware after the corrected
+build: `systemd-timesyncd` shows `masked`/`inactive`, `NTP service: n/a`;
+`ultima-hwclock-load` ran successfully (journal shows the clock jump
+mid-unit — "Starting" logged under the stale boot-default time, "Finished"
+under the RTC-corrected one); `timedatectl` matched the RTC exactly with no
+network sync involved. Root-caused, fixed, and confirmed — not just built.
+
+## Glyph fix looked broken on hardware — wasn't Canvas, was stale sstate
+
+Separately, the glyph fix (see main session notes / git log for
+SetTimeScreen.qml + main.qml — replaced Text glyphs the target has no font
+coverage for with Canvas-drawn icons) tested as "just outlined rectangles"
+on real hardware after two full image rebuilds, even though it rendered
+correctly in a macOS dev build first. Before touching the Canvas code,
+checked whether the new QML had even reached the board — it hadn't:
+
+**`ultima-app.bb`'s `do_unpack` signature is computed from `SRC_URI` alone
+(just `ultima-app.service` + `70-can.rules`) — nothing hashes the contents
+of `ULTIMA_APP_EXTERNAL_SRC`, the bind-mounted external source tree the
+`do_unpack:append` python actually copies from.** A source-only edit (QML,
+C++, anything under `br2-external/package/ultima-app/src`) leaves every
+task's signature unchanged, so bitbake reuses the stale sstate object and
+silently ships the OLD binary. Confirmed directly: two full image builds in
+a row after editing the QML produced zero "ultima-app" task lines in either
+build log, and the work directory's copy of `SetTimeScreen.qml` had none of
+the new code in it. Same class of trap as the `KERNEL_CONFIG_FRAGMENTS` one
+this layer already learned the hard way (`linux-ti-staging_%.bbappend`) —
+a task's signature only reflects what bitbake was told to track, not
+everything the task's script actually touches at runtime.
+
+Fixed with `do_unpack[nostamp] = "1"` on the recipe — forces `do_unpack` and
+everything downstream (`do_compile`, `do_install`, `do_package`, ...) to run
+on every single build, which is what "always mirror the current host
+source" was already supposed to mean. Confirmed the fix by checking task
+logs for actual "Started"/"Succeeded" lines this time, not just build exit
+code — a green build here proves nothing about whether the app recipe
+itself ran.
+
+**Fast iteration loop discovered along the way, worth reusing before
+reaching for a full image build + SD flash + USR-held reboot:**
+```
+./build.sh ultima-app        # builds just the recipe (~1min once source-tracked)
+docker run --rm -v falcon-yocto-build:/src -v /tmp/hotdeploy:/dst falcon-yocto:latest \
+  cp /src/tisdk/build/arago-tmp-default-glibc/work/aarch64-oe-linux/ultima-app/1.0/image/usr/bin/ultima-app /dst/
+scp /tmp/hotdeploy/ultima-app root@beagleplay-ti.local:/root/ultima-app.new
+ssh root@beagleplay-ti.local 'mv /root/ultima-app.new /usr/bin/ultima-app; systemctl restart ultima-app'
+```
+Overwriting `/usr/bin/ultima-app` in place while it's running fails with
+`ETXTBSY` (scp's sftp backend reports it as a generic "dest open" failure) —
+upload to a temp path and `mv` over it instead; renames don't hit that,
+since the running process keeps its own reference to the old inode. This
+whole loop is minutes and needs zero physical access to the board, versus a
+full image build + card swap + held-button power-on. Doesn't help for
+kernel/DT/bootloader changes, only app source.
+
 ## Hardware verification (2026-08-08) — done, working end to end
 
 Flashed `deploy-falcon/tisdk-base-image-beagleplay-ti.rootfs.wic.xz` (the

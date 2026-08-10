@@ -1,0 +1,38 @@
+[Unit]
+Description=Load system time from the onboard BQ32002 RTC
+# CONFIG_RTC_DRV_BQ32K is a module here (see ultima-can.cfg's comment on why
+# =y requests get downgraded on this kernel's arago defconfig), so it isn't
+# available at the kernel's own early-boot RTC_HCTOSYS point — that config
+# option can't do this job on this build.
+After=systemd-udevd.service
+Wants=systemd-udevd.service
+# Deliberately NOT Before=ultima-app.service. This project just spent a
+# whole session cutting boot-to-framebuffer time (~8.9s -> ~2.3s, see
+# NOTES.md "Boot-time optimization") — this must never sit in front of the
+# app's start. Runs concurrently instead: the dash clock re-reads system
+# time every second on its own (main.qml's clockText Timer), so if this
+# loses the race the display is briefly stale and self-corrects within a
+# couple seconds once this finishes — a harmless cosmetic blip, not worth
+# trading boot latency for.
+
+[Service]
+Type=oneshot
+# /dev/rtc0 isn't guaranteed to exist yet even After=systemd-udevd.service —
+# measured on hardware: bq32k registered at kernel timestamp 5.11s, this
+# unit's old ConditionPathExists check ran (and failed) at 4.54s, less than
+# a second earlier. ConditionPathExists doesn't wait, it just skips, so that
+# race silently no-op'd the whole unit every boot. Bounded poll instead of a
+# hard dependency on a .device unit — see ultima-app.service's own comment
+# on why Requires=dev-fb0.device was tried and reverted for the same class
+# of race (a dependency that isn't up yet just fails outright rather than
+# waiting). Worst case here is a bounded 3s of this unit's own runtime, not
+# boot-blocking since nothing waits on it (see [Unit] above).
+ExecStart=/bin/sh -c '\
+    i=0; \
+    while [ ! -e /dev/rtc0 ] && [ $i -lt 30 ]; do sleep 0.1; i=$((i + 1)); done; \
+    [ -e /dev/rtc0 ] && exec /usr/sbin/hwclock --hctosys; \
+    exit 0'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
