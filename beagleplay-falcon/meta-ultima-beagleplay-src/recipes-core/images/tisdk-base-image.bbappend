@@ -1,4 +1,4 @@
-IMAGE_INSTALL:append:beagleplay-ti = " ultima-app can-utils mmc-utils ultima-hwclock-load ultima-data-mount"
+IMAGE_INSTALL:append:beagleplay-ti = " ultima-app can-utils mmc-utils ultima-hwclock-load ultima-data-mount volatile-binds"
 
 # Adds a small ext4 /data partition (p3) after the stock boot+root layout —
 # see wic/ultima-beagleplay.wks.in for the full reasoning, including a corrected
@@ -9,6 +9,41 @@ IMAGE_INSTALL:append:beagleplay-ti = " ultima-app can-utils mmc-utils ultima-hwc
 # convention (confirmed via `bitbake -e tisdk-base-image`), so the bare
 # filename resolves.
 WKS_FILE:beagleplay-ti = "ultima-beagleplay.wks.in"
+
+# read-only-rootfs (2026-08-10): root (p2) becomes mount-time read-only.
+# oe-core's rootfs-postcommands.bbclass handles most of this automatically
+# once this feature is on — confirmed by reading it rather than assuming:
+# it appends "ro" to the kernel cmdline itself, rewrites /etc/fstab's
+# "/dev/root" line to ro (matches this image's fstab as shipped, no
+# wic/ultima-beagleplay.wks.in change needed), empties /etc/machine-id at
+# build time so systemd's transient-ID support takes over, and redirects
+# dropbear to generate its host key under /var/lib/dropbear instead of
+# /etc/dropbear once it sees no key baked into the image. The one thing that
+# mechanism assumes and this distro doesn't provide on its own is somewhere
+# writable for that redirected state to actually land — volatile-binds
+# (stock oe-core, not present in any TI/arago layer by default) bind-mounts
+# tmpfs over /var/lib, /var/cache, /var/spool and /srv for exactly that.
+# Consequence accepted rather than engineered around: both machine-id and
+# the dropbear host key become transient, regenerated fresh every boot,
+# since nothing here persists /var/lib across reboots. That matches this
+# project's already-documented tolerance for dropbear host-key churn (see
+# emmc-push.sh's SSH_OPTS comment) — not treated as a gap worth the added
+# complexity of persisting either one onto /data.
+#
+# Checked directly against this board rather than assumed clean: /tmp is
+# already tmpfs via systemd's static tmp.mount (ultima-app.service's
+# ExecStartPre mkdir is unaffected), and ultima-hwclock-load's
+# `hwclock --hctosys` does not write /etc/adjtime on this build (confirmed
+# absent after 5+ minutes of uptime) — no /etc write-path risk from either.
+#
+# Not yet verified: can-utils/mmc-utils/ultima-* and the boot-trim-disabled
+# but still-installed docker-moby/containerd/netperf/lldpd/psplash all need
+# do_rootfs to actually succeed with this feature on — any postinst that
+# assumes it can defer work to first boot fails the build outright under
+# read-only-rootfs, which is the intended discovery mechanism (same
+# approach that surfaced the WKS_FILE ".wks" vs ".wks.in" mistake above:
+# let a real build failure name the exact problem instead of guessing).
+IMAGE_FEATURES += "read-only-rootfs"
 
 # Disable systemd-timesyncd — it silently overwrites whatever SetTimeScreen
 # just wrote via SystemClock::setTime() any time the board has network (see
