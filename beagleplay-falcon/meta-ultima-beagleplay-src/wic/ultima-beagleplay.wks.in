@@ -1,0 +1,32 @@
+# short-description: Ultima gauge cluster image: stock boot/root + ext4 /data
+# long-description: Adds a small ext4 /data partition (p3) to meta-ti-bsp's
+# stock sdimage-2part-efi.wks.in, for the persistent-odometer-state
+# read-only-rootfs port (see NOTES.md "read-only rootfs" groundwork).
+#
+# CORRECTED 2026-08-10: an earlier version of this file *replaced* p1 (the
+# vfat --source bootimg-efi partition) with /data, on the reasoning that
+# Falcon's fitImage-reading stage never touches it. That reasoning was right
+# about the wrong stage — it covers what tiboot3.bin (the R5 SPL) does once
+# it's already running, not how the ROM finds and loads tiboot3.bin on SD in
+# the first place, which turns out to be exactly this vfat partition.
+# Confirmed by hardware test (board produced zero LEDs / zero video with the
+# p1-repurposed image, both symptoms of the ROM finding nothing to load —
+# eMMC boot was unaffected, since that path uses the separate boot0 hardware
+# partition, not this one) and confirmed by byte-search: building with the
+# stock .wks and grepping the resulting .wic for tiboot3.bin's own bytes
+# finds a full-length match at 24.09MiB, inside p1's 1-129MiB range; building
+# with p1 removed, tiboot3.bin appears nowhere in the image at all. p1 is
+# required for SD boot and must stay exactly as the stock template has it.
+#
+# Root stays partition #2, same as stock — meta-ti-foundational/recipes-ti/
+# resize-rootfs's resize_rootfs.sh hardcodes `sfdisk -N 2 ... echo ",+"` to
+# grow partition 2 into whatever free space follows it on first boot. With
+# /data now added as a real partition 3 *after* root, that free-space grab
+# would otherwise race /data for the same space — resize_rootfs.service is
+# masked in tisdk-base-image.bbappend to remove that runtime partition-table
+# mutation entirely, which a bounded/eventually-read-only root wants anyway.
+
+bootloader --timeout=3 --append="rootfstype=ext4 ${TI_WKS_BOOTLOADER_APPEND}"
+part --source bootimg-efi --sourceparams="loader=${EFI_PROVIDER}" --fstype=vfat --label boot --active --align 1024 --use-uuid --fixed-size 128M
+part / --source rootfs --fstype=ext4 --label root --align 1024 --use-uuid
+part /data --fstype=ext4 --label data --fixed-size 16M --align 1024 --use-uuid

@@ -77,6 +77,7 @@ T3E_MMCDEV=$(strings t3e.bin | grep -E '^mmcdev=' || true)
 # actually mounted, so this works no matter what label/mountpoint is in use.
 umount /dev/mmcblk0p1 2>/dev/null || true
 umount /dev/mmcblk0p2 2>/dev/null || true
+umount /dev/mmcblk0p3 2>/dev/null || true
 if grep -q mmcblk0 /proc/mounts; then die "eMMC still mounted — see /proc/mounts"; fi
 
 say "writing image to /dev/mmcblk0 (~1 min)"
@@ -86,13 +87,29 @@ sync
 # only flushes at the end and does not invalidate cached pages, so a compare
 # without this can report a byte-perfect match that the next boot disagrees with.
 echo 3 > /proc/sys/vm/drop_caches
-blockdev --rereadpt /dev/mmcblk0
-sleep 2
 
+# Verify BEFORE blockdev --rereadpt, not after: this board has its own
+# /etc/udev/rules.d/automount.rules that auto-mounts newly-visible partitions
+# by label via systemd-mount, and `blockdev --rereadpt` is what makes udev
+# notice the freshly-written partitions in the first place. That triggered a
+# real fsck + automount of /dev/mmcblk0p2 in testing (confirmed in the
+# journal: "Starting File System Check on /dev/mmcblk0p2" then
+# "Auto-mount of [/run/media/root-mmcblk0p2] successful"), which updates the
+# ext4 superblock's s_wtime/mount-count fields -- and produced a spurious cmp
+# mismatch at exactly the s_wtime byte offset (char 135267377 == partition 2
+# start + superblock offset 48, to the byte). The image write itself was
+# fine; the verification was racing this board's own auto-mounter. Reading
+# the raw whole-disk device doesn't need the kernel to have re-scanned the
+# partition table, so checking first sidesteps the race rather than needing
+# to fight or disable automount.rules, which other workflows rely on.
+#
 # cmp always exits 1 here with "EOF on -" because the device is larger than the
 # image; only a "differ" line means an actual mismatch.
 xzcat f.xz | cmp - /dev/mmcblk0 > /root/cmp.out 2>&1 || true
 if grep -q differ /root/cmp.out; then die "eMMC content differs from image: $(cat /root/cmp.out)"; fi
+
+blockdev --rereadpt /dev/mmcblk0
+sleep 2
 
 # --- 3. keep the SD's PARTUUID distinct from the eMMC's ---
 # An MBR PARTUUID is derived from the 4-byte disk signature at offset 440, and
@@ -134,10 +151,15 @@ BS=$(dumpe2fs -h /dev/mmcblk0p2 2>/dev/null | awk -F: '/^Block size:/{print $2+0
 FS_KB=$(( BC * BS / 1024 ))
 say "mmcblk0p2: partition ${PART_KB}KB vs superblock ${FS_KB}KB"
 # A filesystem smaller than its partition is normal and boots fine (trailing
-# unused space) -- the .wic's last partition is sized "rest of disk" at build
-# time, and actual SD/eMMC media of the same nominal size commonly differ by
-# a few KB in real sector count, so exact equality is the wrong check here.
-# Only a superblock LARGER than its partition is the real hazard this guards
+# unused space) -- actual SD/eMMC media of the same nominal size commonly
+# differ by a few KB in real sector count, so exact equality is the wrong
+# check here. (Root used to be the .wic's last partition, sized "rest of
+# disk" at build time, which made this slack the common case; now that /data
+# is a real partition 3 after root and resize_rootfs.service is masked --
+# see wic/ultima-beagleplay.wks.in -- root stays at its fixed build-time
+# size and PART_KB/FS_KB should usually match closely. The slack case can
+# still happen from media geometry differences, so the check stays.) Only a
+# superblock LARGER than its partition is the real hazard this guards
 # against ("bad geometry", unbootable) -- verified against this same eMMC:
 # partition 868254KB vs superblock 868252KB, 2KB of harmless slack.
 [ "$FS_KB" -le "$PART_KB" ] || die "superblock bigger than partition (${FS_KB} vs ${PART_KB})"
