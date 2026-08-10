@@ -66,9 +66,10 @@ do_install() {
     # do_rootfs failed outright ("nothing provides kernel-module-tidss")
     # once that package stopped being produced.
 
-    # Persistent odometer state — a plain rootfs directory for now (the
-    # Buildroot boards use a separate /data partition; not replicated here
-    # yet, see beagleplay-falcon/NOTES.md follow-ups).
+    # Persistent odometer state. This is just the empty mountpoint —
+    # wic/ultima-beagleplay.wks.in provisions the actual /data partition (p3,
+    # mirroring the Buildroot boards' separate /data partition), and
+    # ultima-data-mount.bb mounts it here before this service starts.
     install -d ${D}/data
 }
 

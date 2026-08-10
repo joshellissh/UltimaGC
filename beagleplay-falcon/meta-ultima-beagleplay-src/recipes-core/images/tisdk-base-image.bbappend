@@ -1,4 +1,4 @@
-IMAGE_INSTALL:append:beagleplay-ti = " ultima-app can-utils mmc-utils ultima-hwclock-load"
+IMAGE_INSTALL:append:beagleplay-ti = " ultima-app can-utils mmc-utils ultima-hwclock-load ultima-data-mount"
 
 # Adds a small ext4 /data partition (p3) after the stock boot+root layout —
 # see wic/ultima-beagleplay.wks.in for the full reasoning, including a corrected

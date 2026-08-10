@@ -1,0 +1,13 @@
+[Unit]
+Description=Mount /data from whichever disk (SD or eMMC) root itself booted from
+After=systemd-udevd.service
+Wants=systemd-udevd.service
+Before=local-fs.target ultima-app.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/ultima-data-mount.sh
+
+[Install]
+WantedBy=local-fs.target

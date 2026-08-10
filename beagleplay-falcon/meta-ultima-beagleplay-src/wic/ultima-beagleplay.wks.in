@@ -25,8 +25,23 @@
 # would otherwise race /data for the same space — resize_rootfs.service is
 # masked in tisdk-base-image.bbappend to remove that runtime partition-table
 # mutation entirely, which a bounded/eventually-read-only root wants anyway.
+#
+# --no-fstab-update on root (2026-08-10): wic's own fstab-injection logic
+# (scripts/lib/wic/plugins/imager/direct.py:update_fstab) writes a UUID=,
+# LABEL=, or bare-device-path line for /data depending on the /data part
+# line's own flags — but SD and eMMC are dd'd from this exact same image, so
+# whichever of those wic picks is byte-identical on both, and a bare device
+# path (mmcblk0 vs mmcblk1) would be flat-out wrong on the other medium
+# besides. There is no per-partition "add no entry at all" flag; the only
+# lever is this one, on the partition that actually owns /etc/fstab
+# (confirmed by reading partition.py: it's root's own no_fstab_update that
+# gates whether the computed fstab gets debugfs-written into root's ext4
+# image, regardless of what /data's line requests). ultima-data-mount.bb
+# mounts /data itself instead, by deriving the device from the root
+# filesystem that's already resolved by the time it runs — see that
+# recipe's DESCRIPTION for the full reasoning.
 
 bootloader --timeout=3 --append="rootfstype=ext4 ${TI_WKS_BOOTLOADER_APPEND}"
 part --source bootimg-efi --sourceparams="loader=${EFI_PROVIDER}" --fstype=vfat --label boot --active --align 1024 --use-uuid --fixed-size 128M
-part / --source rootfs --fstype=ext4 --label root --align 1024 --use-uuid
-part /data --fstype=ext4 --label data --fixed-size 16M --align 1024 --use-uuid
+part / --source rootfs --fstype=ext4 --label root --align 1024 --use-uuid --no-fstab-update
+part /data --fstype=ext4 --label data --fixed-size 16M --align 1024
