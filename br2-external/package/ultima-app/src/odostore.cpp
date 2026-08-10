@@ -1,7 +1,11 @@
 #include "odostore.h"
 #include <QFile>
+#include <QSaveFile>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <fcntl.h>
+#include <unistd.h>
 
 static const double DEFAULT_TOTAL_ODO = 2347.0;
 static const double DEFAULT_TRIP_ODO = 0.0;
@@ -33,20 +37,41 @@ void OdoStore::load()
     }
 }
 
+// QSaveFile writes to a temp file in the same directory and renames it over
+// m_path on commit, so a power cut mid-write leaves the old odometer.json
+// intact instead of a truncated/unparseable one (which load() would silently
+// treat as "no data" and reset the odometer to the hardcoded default). The
+// explicit fsyncs make the write and the rename itself survive a power cut
+// immediately after a "successful" save, not just protect against a torn one.
 void OdoStore::save()
 {
     QJsonObject obj;
     obj["totalOdo"] = m_totalOdo;
     obj["tripOdo"] = m_tripOdo;
 
-    QFile f(m_path);
-    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        f.write(QJsonDocument(obj).toJson(QJsonDocument::Compact));
-        f.close();
-        fprintf(stderr, "OdoStore: saved totalOdo=%.1f tripOdo=%.1f\n", m_totalOdo, m_tripOdo);
-    } else {
+    QSaveFile f(m_path);
+    if (!f.open(QIODevice::WriteOnly)) {
         fprintf(stderr, "OdoStore: failed to write %s\n", qPrintable(m_path));
+        return;
     }
+
+    f.write(QJsonDocument(obj).toJson(QJsonDocument::Compact));
+    f.flush();
+    fsync(f.handle());
+
+    if (!f.commit()) {
+        fprintf(stderr, "OdoStore: failed to commit %s\n", qPrintable(m_path));
+        return;
+    }
+
+    const QByteArray dirPath = QFileInfo(m_path).absolutePath().toLocal8Bit();
+    int dirFd = ::open(dirPath.constData(), O_RDONLY);
+    if (dirFd >= 0) {
+        fsync(dirFd);
+        ::close(dirFd);
+    }
+
+    fprintf(stderr, "OdoStore: saved totalOdo=%.1f tripOdo=%.1f\n", m_totalOdo, m_tripOdo);
 }
 
 void OdoStore::setTotalOdo(double v)
