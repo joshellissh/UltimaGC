@@ -730,6 +730,11 @@ diagnosis — this rootfs has no read-only protection the way the Buildroot
 boards do (see "Data persistence" above), so a write-heavy loop is a real
 risk to the card, not just wasted time.
 
+**Update 2026-08-10**: root itself is now read-only end to end — see
+"Read-only rootfs" below — so this specific risk no longer applies to root.
+The same caution still applies to `/data`, the one partition still mounted
+read-write.
+
 ## eMMC boot — solved (2026-08-09)
 
 The board boots falcon mode, and therefore the gauge cluster, straight from
@@ -1092,7 +1097,137 @@ Healthy-boot invariants:
   `/etc/modules-load.d/`. If the cluster doesn't come up, look at the image on
   the user area, not at the boot path.
 
+## Read-only rootfs (2026-08-10) — done, hardware-verified on SD and eMMC
+
+Answers the question that started this: a gauge cluster gets its power cut
+constantly, with no clean-shutdown warning, every time the car turns off.
+Root is now mounted `ro` and rejects writes outright, so there's no dirty
+ext4 state for a power cut to leave behind on the partition Falcon actually
+boots from — "First hardware attempt: the crash-loop and its risk" above
+(this rootfs has no read-only protection...") and the PARTUUID/superblock
+war stories under "Always shut down cleanly" below were both about exactly
+this failure class on the *old* read-write root. `/data` (p3, see "Data
+persistence" — odometer state) is still a real read-write ext4 partition
+and still needs a clean shutdown to avoid corruption; it just isn't root,
+so a torn write there can't take the whole board down with it, and
+`OdoStore::save()`'s atomic-write-plus-fsync (see `odostore.cpp`) covers
+its own worst case directly.
+
+**What's in place**, layered on top of the `/data`-partition groundwork
+(`wic/ultima-beagleplay.wks.in`, journald/coredump on tmpfs, `resize_rootfs`
+masked — all from the same effort, done first and separately):
+
+- `IMAGE_FEATURES += "read-only-rootfs"` in `tisdk-base-image.bbappend`.
+  oe-core's own `rootfs-postcommands.bbclass` (`read_only_rootfs_hook`)
+  handles most of the mechanics automatically once this is set — read the
+  class before assuming any of this needs custom work:
+  - appends `ro` to the kernel cmdline itself (`APPEND:append`);
+  - rewrites `/etc/fstab`'s `/dev/root` line to `ro` (matched this image's
+    fstab as shipped, no `.wks.in` change needed);
+  - empties `/etc/machine-id` at build time so systemd's transient-ID
+    support takes over — a fresh ID every boot, not persisted;
+  - detects no baked-in `/etc/dropbear/dropbear_rsa_host_key` and points
+    dropbear at `/var/lib/dropbear` instead, generated fresh every boot.
+    Deliberately left transient rather than persisted onto `/data` — this
+    project already tolerates dropbear host-key churn on every reflash
+    (see `emmc-push.sh`'s `SSH_OPTS` comment), so a boot-to-boot version of
+    the same churn isn't a new cost.
+- `volatile-binds` (stock oe-core, not pulled in by any TI/arago layer by
+  default) added to `IMAGE_INSTALL`, giving `/var/lib`, `/var/cache`,
+  `/var/spool` and `/srv` a tmpfs overlay — the one thing the hook above
+  assumes exists and this distro doesn't provide on its own. Without it,
+  dropbear's redirected key location has nowhere writable to land.
+- Checked directly against hardware rather than assumed clean: `/tmp` is
+  already tmpfs via systemd's static `tmp.mount`, and
+  `ultima-hwclock-load`'s `hwclock --hctosys` does not write
+  `/etc/adjtime` on this build (confirmed absent after 5+ minutes of
+  uptime) — neither needed any change.
+- `docker-moby`/`containerd`/`netperf`/`lldpd`/`psplash` are still
+  *installed* (only service-disabled, see `recipes-ultima/boot-trim`) —
+  under `read-only-rootfs`, any postinst deferred to first boot fails
+  `do_rootfs` outright rather than silently misbehaving at runtime. All
+  five built clean on the first attempt; this was the actual discovery
+  mechanism for that risk, not a review of each package by hand.
+
+### Two regressions that only showed up on a real boot, not at build time
+
+**1. Systemd dependency cycle from a missing `DefaultDependencies=no`.**
+`ultima-data-mount.service` (mounts `/data` from whichever disk root
+itself booted from — see "Data persistence") declares
+`Before=local-fs.target`. Every `.service` also gets an implicit
+`After=sysinit.target` by default — and `local-fs.target` itself precedes
+`sysinit.target` in the normal boot chain, so that's a genuine ordering
+cycle. systemd breaks cycles by deleting an arbitrary job rather than
+refusing to boot, and on hardware it dropped
+`systemd-tmpfiles-setup.service`'s start job instead of this unit's. That
+meant `/var/volatile/tmp` and `/var/volatile/log` (created by a
+`tmpfiles.d` rule this service was supposed to run before) never existed,
+which took down `dbus-broker`'s `PrivateTmp=` (`EROFS` trying to
+bind-mount a directory that isn't there), cascading into `avahi-daemon`,
+`systemd-logind` and `systemd-resolved` all failing. Confirmed by
+`journalctl -b | grep -i "ordering cycle"` — this unit named in every
+cycle chain systemd printed. `volatile-binds`' own service template sets
+`DefaultDependencies=no` for exactly this reason; the fix here was
+noticing that and copying it, having first (wrongly) judged it
+unnecessary boilerplate.
+
+Fast way to validate an ordering fix like this without burning a full
+build+flash cycle: the board is already up, root is `rw` until you say
+otherwise —
+```
+mount -o remount,rw / && <edit the unit under /usr/lib/systemd/system/> \
+  && mount -o remount,ro / && reboot
+```
+Confirms in one reboot; a clean rebuilt-and-reflashed image is still the
+final check, since a hand-edited unit doesn't prove the build pipeline
+produces the same file.
+
+**2. `emmc-push.sh`/`emmc-install.sh` staged the transferred image in
+`/root`**, which is now part of the read-only root partition — running
+`emmc-push.sh` against a read-only-rootfs SD boot failed immediately with
+`Read-only file system` on the very first file copy. Moved staging to
+`/tmp` (tmpfs): board has ~1.8GB free RAM against the ~105MB payload, and
+nothing staged there needs to survive a reboot — `emmc-install.sh` runs
+immediately after the copy and the board powers off right after it
+succeeds.
+
+### Verification checklist (what "working" looks like)
+
+```
+findmnt -no SOURCE,OPTIONS /        # mmcblk{0,1}p2, ro,relatime
+touch /x                             # must fail: Read-only file system
+journalctl -b | grep -i "ordering cycle"   # must be empty
+systemctl --failed                   # must be empty
+ls -d /var/volatile/tmp /var/volatile/log  # both must exist
+findmnt /data                        # mmcblk{0,1}p3, rw,relatime
+systemctl is-active dbus-broker avahi-daemon systemd-logind \
+  systemd-resolved ultima-app ultima-data-mount   # all "active"
+cat /data/odometer.json              # real content, not the hardcoded default
+ls -la /var/lib/dropbear/            # key regenerated this boot
+```
+Ran clean on both SD (`mmcblk1p2`/`mmcblk1p3`) and eMMC
+(`mmcblk0p2`/`mmcblk0p3`) from a real flash, not a live-patched boot.
+
+### Not done, not currently planned
+
+- `/data`'s ext4 UUID being identical across SD and eMMC (both flashed
+  from the same build) is no longer a mount hazard — `ultima-data-mount`
+  derives the device from the root filesystem instead of matching by UUID
+  — but the UUIDs themselves are still equal. Harmless as things stand;
+  would only matter if something else ever needed to tell the two `/data`
+  partitions apart by filesystem identity.
+- A deliberate power-yank stress test (repeatedly cutting power to the
+  running board) would be the direct empirical close-out of the question
+  that started this, but wasn't requested — the design argument above
+  (root literally rejects writes) was judged sufficient without it.
+
 ## Always shut down cleanly — `sync; poweroff`
+
+This section predates "Read-only rootfs" above and both incidents below hit
+root while it was still read-write — root can no longer be dirtied by a
+power cut at all. Still applies as written to `/data` and to anything
+running from the SD card during flashing/install work, both of which stay
+read-write.
 
 Repeatedly yanking power (especially out of the `### ERROR ### Please RESET the
 board ###` state during a failed eMMC boot test) leaves the ext4 rootfs dirty
