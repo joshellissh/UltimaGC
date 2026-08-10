@@ -63,22 +63,29 @@ esac
 
 echo
 echo "=== Copying files (~110MB, a minute or so) ==="
+# Staged in /tmp, not /root: root is read-only-rootfs as of the BeaglePlay
+# read-only-rootfs work, so /root/f.xz would just fail with "Read-only file
+# system" (confirmed the hard way). /tmp is tmpfs — board has ~1.8GB free
+# RAM against a ~105MB payload, comfortable headroom — and nothing here
+# needs to survive a reboot; emmc-install.sh runs immediately after the
+# copy and the board powers off right after that succeeds.
+#
 # `ssh 'cat > file'` rather than scp: it needs nothing on the far end but a
 # shell, so it works regardless of whether scp/sftp-server is installed.
 echo "  f.xz"
-sh_ 'cat > /root/f.xz' < "$WIC"
+sh_ 'cat > /tmp/f.xz' < "$WIC"
 echo "  t3e.bin"
-sh_ 'cat > /root/t3e.bin' < "$SPL"
+sh_ 'cat > /tmp/t3e.bin' < "$SPL"
 echo "  emmc-install.sh"
-sh_ 'cat > /root/emmc-install.sh' < emmc-install.sh
+sh_ 'cat > /tmp/emmc-install.sh' < emmc-install.sh
 {
     printf '%s  f.xz\n'    "$(md5 -q "$WIC")"
     printf '%s  t3e.bin\n' "$(md5 -q "$SPL")"
-} | sh_ 'cat > /root/md5sums.txt'
+} | sh_ 'cat > /tmp/md5sums.txt'
 
 echo
 echo "=== Running the install on the board ==="
-sh_ 'sh /root/emmc-install.sh'
+sh_ 'sh /tmp/emmc-install.sh'
 
 echo
 echo "=== Install finished. Shutting the board down cleanly ==="
@@ -96,4 +103,4 @@ echo "  3. power on with NO button held"
 echo "  4. the gauge cluster should come up from eMMC"
 echo
 echo "Verify with:  ssh ${SSH_OPTS[*]} $HOST 'findmnt -no SOURCE /'   -> /dev/mmcblk0p2"
-echo "Install log:  /root/emmc-install.log on the board"
+echo "Install log:  /tmp/emmc-install.log on the board (gone once it powers off, tmpfs)"

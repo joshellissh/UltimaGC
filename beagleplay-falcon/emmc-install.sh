@@ -5,7 +5,7 @@
 # RUNS ON THE BOARD, booted from the SD card (USR held). Two ways to drive it:
 #
 #   SSH (preferred — no serial console needed at all). `./emmc-push.sh` on the
-#   Mac copies this script plus f.xz/t3e.bin/md5sums.txt into /root and runs it.
+#   Mac copies this script plus f.xz/t3e.bin/md5sums.txt into /tmp and runs it.
 #   The image has passwordless root dropbear and DHCP ethernet, so the board is
 #   reachable at beagleplay-ti.local as soon as it boots.
 #
@@ -14,7 +14,13 @@
 #     wget -qO- http://<mac-ip>:877/emmc-install.sh | sh -s http://<mac-ip>:877
 #
 # With an argument, it downloads from that base URL. With none, it expects
-# f.xz, t3e.bin and md5sums.txt to already be in /root.
+# f.xz, t3e.bin and md5sums.txt to already be in /tmp.
+#
+# Staged in /tmp, not /root: root is read-only-rootfs as of the BeaglePlay
+# read-only-rootfs work, so /root isn't writable anymore (confirmed the hard
+# way — "Read-only file system" on the first line of the SSH path). /tmp is
+# tmpfs, plenty of headroom against this payload, and nothing here needs to
+# survive a reboot.
 #
 # Three separate things have to be right for eMMC falcon boot, and each fails
 # in its own way (see NOTES.md "eMMC persistence"):
@@ -31,7 +37,7 @@
 set -e
 BASE="${1:-}"
 
-LOG=/root/emmc-install.log
+LOG=/tmp/emmc-install.log
 # fd 3 keeps a handle on the console: everything else (including stderr and the
 # set -x trace) goes to the log, so progress has to be echoed to fd 3 explicitly
 # or the operator watches a silent console through a multi-minute 950MB write.
@@ -50,7 +56,7 @@ case "$ROOT_DEV" in
 esac
 
 # --- 1. fetch + verify ---
-cd /root
+cd /tmp
 if [ -n "$BASE" ]; then
     say "downloading from $BASE"
     wget -q "$BASE/f.xz"        -O f.xz        || die "download f.xz"
@@ -58,7 +64,7 @@ if [ -n "$BASE" ]; then
     wget -q "$BASE/md5sums.txt" -O md5sums.txt || die "download md5sums.txt"
 fi
 for f in f.xz t3e.bin md5sums.txt; do
-    [ -f "/root/$f" ] || die "/root/$f missing — pass a base URL, or use emmc-push.sh"
+    [ -f "/tmp/$f" ] || die "/tmp/$f missing — pass a base URL, or use emmc-push.sh"
 done
 md5sum -c md5sums.txt || die "md5 mismatch — transfer was corrupted, re-copy and retry"
 
@@ -105,8 +111,8 @@ echo 3 > /proc/sys/vm/drop_caches
 #
 # cmp always exits 1 here with "EOF on -" because the device is larger than the
 # image; only a "differ" line means an actual mismatch.
-xzcat f.xz | cmp - /dev/mmcblk0 > /root/cmp.out 2>&1 || true
-if grep -q differ /root/cmp.out; then die "eMMC content differs from image: $(cat /root/cmp.out)"; fi
+xzcat f.xz | cmp - /dev/mmcblk0 > /tmp/cmp.out 2>&1 || true
+if grep -q differ /tmp/cmp.out; then die "eMMC content differs from image: $(cat /tmp/cmp.out)"; fi
 
 blockdev --rereadpt /dev/mmcblk0
 sleep 2

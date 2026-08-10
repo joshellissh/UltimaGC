@@ -1,5 +1,21 @@
 [Unit]
 Description=Mount /data from whichever disk (SD or eMMC) root itself booted from
+# DefaultDependencies=no is load-bearing, not boilerplate — found out the hard
+# way. Without it this unit also gets the implicit After=sysinit.target every
+# .service gets by default, which directly contradicts Before=local-fs.target
+# below (local-fs.target itself precedes sysinit.target in the normal boot
+# chain). That contradiction is a real dependency cycle, and systemd breaks
+# cycles by deleting an arbitrary job rather than refusing to boot — on
+# hardware it silently dropped systemd-tmpfiles-setup.service's start job
+# instead of this unit's, which meant /var/volatile/tmp and
+# /var/volatile/log never got created, which took down dbus-broker's
+# PrivateTmp= (EROFS trying to bind-mount a directory that doesn't exist)
+# and cascaded into avahi-daemon/systemd-logind/systemd-resolved all
+# failing (confirmed via `journalctl -b | grep -i "ordering cycle"` showing
+# ultima-data-mount.service in every one of the printed cycle chains).
+# volatile-binds' own service template sets this same flag for the same
+# reason — should have copied it the first time.
+DefaultDependencies=no
 After=systemd-udevd.service
 Wants=systemd-udevd.service
 Before=local-fs.target ultima-app.service
