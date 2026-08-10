@@ -27,6 +27,10 @@ instant and the cluster takes the display. See "eMMC boot" below. The SD card
 remains a working falcon boot device when USR is held, and is the recovery
 path.
 
+**Update (2026-08-09): real power-on-to-gauge-cluster number measured** —
+~8.9s, not the ~12.3s eyeballed off a raw log earlier. See "Boot-time
+measurement" below and `measure-boot.sh`.
+
 ## Build environment
 
 - `Dockerfile` + `run.sh` — builds a Yocto/TI SDK (`tisdk`) container.
@@ -188,6 +192,39 @@ capture start times aren't perfectly aligned with power-on.
 Net: falcon mode saves ~9.3s per boot; ~5.3s of that is genuine
 A53-SPL+U-Boot-proper+GRUB-parsing overhead (the rest is GRUB's tunable
 timeout, not falcon-specific).
+
+### Full power-on-to-gauge-cluster number (2026-08-09)
+
+The ~12.3s figure quoted earlier (in "ultima-app integration") for
+kernel-boot-through-framebuffer-ready was eyeballed off a raw, untimestamped
+`screenlog.0` capture, not actually measured. `measure-boot.sh` fixes that:
+it arms the serial port, timestamps every line as it arrives relative to the
+first byte received (t=0, a power-on proxy — same caveat as the ATF/kernel
+table above, tight but not a hardware-verified zero), and auto-stops a few
+seconds past the `tidss` framebuffer-ready line. Output goes to
+`boot-logs/boot-<timestamp>.log` (gitignored).
+
+Three consecutive runs, same board, same SD-booted falcon image:
+
+| Run | falcon payload load | ATF start | kernel entry | **framebuffer ready** |
+|---|---|---|---|---|
+| 1 | 0.171s | 0.918s | 1.419s | **8.859s** |
+| 2 | 0.170s | 0.918s | 1.420s | **8.890s** |
+| 3 | 0.170s | 0.918s | 1.419s | **8.918s** |
+
+**Power-on → gauge cluster framebuffer ready: ~8.9s, ±30ms** — tight enough
+across runs to treat as deterministic rather than jittery. The falcon
+boot-loader stage itself (power-on → kernel entry) is a rock-solid ~1.42s
+every time; nearly all of the total (~7.5s) is kernel driver probe +
+systemd + the `tidss` module load, not the boot loader. wl18xx WiFi
+firmware-load failures show up in the log around 10-11.6s (expected — no
+WiFi in this build) but land after framebuffer-ready, so they aren't on the
+critical path.
+
+Framebuffer-ready is not the same as "app visibly rendering" — there's some
+gap between `/dev/fb0` existing and Qt's first frame hitting it that this
+method doesn't capture (would need an app-side render-ready log line, which
+doesn't exist yet).
 
 ## Board boot-source behavior
 
@@ -427,10 +464,10 @@ anything built here.
 Not yet checked on this hardware: CAN2 data actually arriving (needs the
 ODrive USB-CAN adapter connected to the Syvecs S7+), touch input, odometer
 persistence across reboots, WiFi (not wired up at all in this build, see
-above), boot-time measurement with the app included (the ~9.3s falcon
-number above predates the app; re-measuring with the full chain — falcon
-kernel boot → systemd → tidss module load → app render — would give the
-real end-to-end number this project actually cares about).
+above). Boot-time measurement with the full chain is now done — see
+"Boot-time measurement" → "Full power-on-to-gauge-cluster number" above
+(~8.9s power-on to framebuffer-ready, measured with `measure-boot.sh`, not
+the eyeballed ~12.3s this paragraph used to cite).
 
 ### First hardware attempt: the crash-loop and its risk (context, resolved)
 
