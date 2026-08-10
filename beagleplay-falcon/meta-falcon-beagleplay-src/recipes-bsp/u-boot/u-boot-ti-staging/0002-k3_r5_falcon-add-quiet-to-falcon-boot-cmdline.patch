@@ -1,6 +1,6 @@
 --- a/arch/arm/mach-k3/common.c
 +++ b/arch/arm/mach-k3/common.c
-@@ -605,7 +605,24 @@
+@@ -605,7 +605,29 @@
  		       __func__, bootmedia, bootpart, ret);
  		return ret;
  	}
@@ -21,8 +21,13 @@
 +	 * console text by the time tidss inits on an unpatched boot, which
 +	 * is ~3.3s of pure UART wire time on the critical path, not just
 +	 * log noise.
++	 *
++	 * Also append "vt.global_cursor_default=0": once tidss brings up
++	 * fbcon on the HDMI output, the getty on tty1 blinks a text cursor
++	 * there until ultima-app takes the framebuffer over -- same fix
++	 * RPi5/Buildroot already carries in cmdline.txt.
 +	 */
-+	snprintf(str, sizeof(str), "console=%s root=PARTUUID=%s rootwait quiet",
++	snprintf(str, sizeof(str), "console=%s root=PARTUUID=%s rootwait quiet vt.global_cursor_default=0",
  		 env_get("console"), info.uuid);
  
  	fdt_set_totalsize(fdt, fdt_totalsize(fdt) + CONFIG_SYS_FDT_PAD);

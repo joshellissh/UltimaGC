@@ -42,7 +42,11 @@ SRC_URI:append = " file://0001-k3_r5_falcon-enable-eMMC-raw-boot-support.patch"
 # UART console is synchronous and systemd itself also honors "quiet" to
 # suppress its own [ OK ]/Started spam — measured ~3.3s of pure UART wire
 # time (38KB of console text) on the critical path before tidss inits on an
-# unpatched boot. Tried doing this from the kernel side first
+# unpatched boot. Also appends "vt.global_cursor_default=0" to hide the
+# blinking fbcon cursor that's otherwise visible on the HDMI output for a
+# few seconds between tidss coming up and ultima-app taking the framebuffer
+# (same fix RPi5/Buildroot carries in cmdline.txt). Tried doing this from
+# the kernel side first
 # (CONFIG_CMDLINE_EXTEND) — dead end, that Kconfig choice member doesn't
 # exist on this kernel's arm64 Kconfig (only CMDLINE_FROM_BOOTLOADER/
 # CMDLINE_FORCE), and CMDLINE_FORCE would replace the whole cmdline with a
