@@ -1,5 +1,18 @@
 [Unit]
 Description=Ultima gauge cluster
+# Tried After=/Requires=dev-fb0.device here to stop ultima-app racing tidss
+# (boot log showed a SIGABRT before fb0 existed, then a RestartSec=1 wait
+# every boot) — reverted. Requires= on a .device unit does NOT make systemd
+# wait for it to appear: if it isn't active yet when this job runs, the
+# dependency just fails outright, and Restart=on-failure never retries a
+# unit that never started. That's strictly worse than the crash-loop it was
+# meant to fix (a cluster that never comes up at all, vs. one that
+# eventually does). The real fix for a race like this is udev pulling the
+# service in via SYSTEMD_WANTS when the device appears, not device-unit
+# ordering — not implemented, because forcing tidss/IT66121 built into the
+# kernel (see ultima-display.cfg) should make fb0 exist before systemd even
+# starts, which likely makes this race moot. Re-open only if a boot log
+# still shows the SIGABRT after that change.
 After=systemd-udevd.service
 Wants=systemd-udevd.service
 StartLimitIntervalSec=0

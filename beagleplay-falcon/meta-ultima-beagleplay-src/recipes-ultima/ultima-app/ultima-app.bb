@@ -2,7 +2,7 @@ SUMMARY = "Ultima fullscreen Qt5 QML gauge cluster"
 LICENSE = "CLOSED"
 
 DEPENDS = "qtbase qtdeclarative"
-RDEPENDS:${PN} = "qtbase-plugins qtdeclarative-qmlplugins iproute2 kernel-module-tidss"
+RDEPENDS:${PN} = "qtbase-plugins qtdeclarative-qmlplugins iproute2"
 
 inherit qmake5 systemd
 
@@ -13,7 +13,7 @@ inherit qmake5 systemd
 # Buildroot's own "local" site method already does for this same package.
 ULTIMA_APP_EXTERNAL_SRC = "/home/builder/yocto/ultima-app-src"
 
-SRC_URI = "file://ultima-app.service file://70-can.rules file://tidss-modules-load.conf"
+SRC_URI = "file://ultima-app.service file://70-can.rules"
 S = "${WORKDIR}/ultima-app-src"
 
 python do_unpack:append() {
@@ -37,15 +37,18 @@ do_install() {
     install -d ${D}${sysconfdir}/udev/rules.d
     install -m 0644 ${WORKDIR}/70-can.rules ${D}${sysconfdir}/udev/rules.d/70-can.rules
 
-    # tidss (creates /dev/fb0, which linuxfb needs) ships as a module here
-    # and CONFIG_DRM_TIDSS=y gets silently downgraded back to =m by a
-    # Kconfig dependency we haven't chased down (see ultima-display.cfg) —
-    # force it to load at boot instead of relying on udev coldplug timing,
-    # which real hardware showed never actually loading it (ultima-app
-    # crash-looped continuously, zero "tidss"/fb0 lines in minutes of boot
-    # log — see beagleplay-falcon/NOTES.md).
-    install -d ${D}${sysconfdir}/modules-load.d
-    install -m 0644 ${WORKDIR}/tidss-modules-load.conf ${D}${sysconfdir}/modules-load.d/tidss.conf
+    # tidss used to ship as a module here (CONFIG_DRM_TIDSS=m), and
+    # /etc/modules-load.d/tidss.conf + a kernel-module-tidss RDEPENDS forced
+    # it to load at boot rather than relying on udev coldplug, which real
+    # hardware showed never actually loading it (ultima-app crash-looped,
+    # zero "tidss"/fb0 lines in minutes of boot log — see
+    # beagleplay-falcon/NOTES.md). Root-caused and fixed properly 2026-08-09:
+    # CONFIG_DRM=m was capping it — see ultima-display.cfg. tidss is now
+    # genuinely built into the kernel (verified against the built .config),
+    # so there's no module to force-load and no kernel-module-tidss package
+    # to RDEPEND on anymore — removing both was required, not just cleanup:
+    # do_rootfs failed outright ("nothing provides kernel-module-tidss")
+    # once that package stopped being produced.
 
     # Persistent odometer state — a plain rootfs directory for now (the
     # Buildroot boards use a separate /data partition; not replicated here
@@ -53,4 +56,4 @@ do_install() {
     install -d ${D}/data
 }
 
-FILES:${PN} += "${bindir}/ultima-app ${systemd_unitdir}/system/ultima-app.service ${sysconfdir}/udev/rules.d/70-can.rules ${sysconfdir}/modules-load.d/tidss.conf /data"
+FILES:${PN} += "${bindir}/ultima-app ${systemd_unitdir}/system/ultima-app.service ${sysconfdir}/udev/rules.d/70-can.rules /data"

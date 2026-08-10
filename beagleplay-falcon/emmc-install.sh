@@ -69,8 +69,14 @@ T3E_MMCDEV=$(strings t3e.bin | grep -E '^mmcdev=' || true)
 [ "$T3E_MMCDEV" = "mmcdev=0" ] || die "t3e.bin is not the eMMC SPL variant (got '${T3E_MMCDEV:-none}', need mmcdev=0)"
 
 # --- 2. eMMC user area ---
-umount /run/media/boot-mmcblk0p1   2>/dev/null || true
-umount /run/media/rootfs-mmcblk0p2 2>/dev/null || true
+# umount by device, not by a guessed /run/media/<label>-<dev> path: systemd's
+# auto-mount naming follows the filesystem LABEL (this eMMC's rootfs is
+# labeled "root", not "rootfs", so it lands at /run/media/root-mmcblk0p2, not
+# rootfs-mmcblk0p2 — a hardcoded path guess silently no-ops here). `umount`
+# resolves a device argument via /proc/mounts regardless of where it's
+# actually mounted, so this works no matter what label/mountpoint is in use.
+umount /dev/mmcblk0p1 2>/dev/null || true
+umount /dev/mmcblk0p2 2>/dev/null || true
 if grep -q mmcblk0 /proc/mounts; then die "eMMC still mounted — see /proc/mounts"; fi
 
 say "writing image to /dev/mmcblk0 (~1 min)"
@@ -99,7 +105,12 @@ if grep -q differ /root/cmp.out; then die "eMMC content differs from image: $(ca
 # Compared live device against live device, after the eMMC write, rather than
 # against the image: either device may have been signature-patched by hand in
 # the past, and only what is actually on them now matters.
-sig() { dd if="$1" bs=512 count=1 2>/dev/null | dd bs=1 skip=440 count=4 2>/dev/null | od -An -tx1 | tr -d ' \n'; }
+# `od -An -tx1` is GNU-only: this board's BusyBox od rejects -A/-t outright
+# (silently exits nonzero under `set -e`'s pipeline, both sides read as ""
+# and compare equal) -- verified by hand: it falsely triggered "SD signature
+# collides with the eMMC's" against two genuinely different signatures.
+# BusyBox's own `hexdump -e` covers the same "N raw bytes -> hex string" job.
+sig() { dd if="$1" bs=512 count=1 2>/dev/null | dd bs=1 skip=440 count=4 2>/dev/null | hexdump -e '4/1 "%02x"'; }
 EMMC_SIG=$(sig /dev/mmcblk0)
 SD_SIG=$(sig /dev/mmcblk1)
 say "disk signature: emmc=$EMMC_SIG sd=$SD_SIG"
@@ -122,7 +133,14 @@ BS=$(dumpe2fs -h /dev/mmcblk0p2 2>/dev/null | awk -F: '/^Block size:/{print $2+0
 [ -n "$BC" ] && [ -n "$BS" ] || die "dumpe2fs could not read a superblock from /dev/mmcblk0p2"
 FS_KB=$(( BC * BS / 1024 ))
 say "mmcblk0p2: partition ${PART_KB}KB vs superblock ${FS_KB}KB"
-[ "$PART_KB" = "$FS_KB" ] || die "superblock/partition size mismatch (${FS_KB} vs ${PART_KB})"
+# A filesystem smaller than its partition is normal and boots fine (trailing
+# unused space) -- the .wic's last partition is sized "rest of disk" at build
+# time, and actual SD/eMMC media of the same nominal size commonly differ by
+# a few KB in real sector count, so exact equality is the wrong check here.
+# Only a superblock LARGER than its partition is the real hazard this guards
+# against ("bad geometry", unbootable) -- verified against this same eMMC:
+# partition 868254KB vs superblock 868252KB, 2KB of harmless slack.
+[ "$FS_KB" -le "$PART_KB" ] || die "superblock bigger than partition (${FS_KB} vs ${PART_KB})"
 
 # --- 5. eMMC boot0: the eMMC-targeting R5 SPL ---
 # boot0 is read-only by default. PARTITION_CONFIG (EXT_CSD byte 179) ships as

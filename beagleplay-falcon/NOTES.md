@@ -31,6 +31,12 @@ path.
 ~8.9s, not the ~12.3s eyeballed off a raw log earlier. See "Boot-time
 measurement" below and `measure-boot.sh`.
 
+**Update (2026-08-10): optimized further, ~8.9s → ~2.3s to framebuffer**
+(**~6.9s to the gauge cluster actually rendering**, a number not previously
+measured at all). Root-caused the `CONFIG_DRM_TIDSS` silent-downgrade this
+file used to flag as unsolved, quieted the boot console, and trimmed unused
+services. See "Boot-time optimization" below.
+
 ## Build environment
 
 - `Dockerfile` + `run.sh` — builds a Yocto/TI SDK (`tisdk`) container.
@@ -204,7 +210,12 @@ table above, tight but not a hardware-verified zero), and auto-stops a few
 seconds past the `tidss` framebuffer-ready line. Output goes to
 `boot-logs/boot-<timestamp>.log` (gitignored).
 
-Three consecutive runs, same board, same SD-booted falcon image:
+Three consecutive runs, same board, same falcon image. **Correction (2026-08-10):**
+this was actually eMMC-booted, not SD as originally written here — the raw log
+shows `Trying to boot from MMC1`, and `k3_r5_falcon_bootmode()` maps
+`mmcdev=0`→`MMC1`→eMMC, `mmcdev=1`→`MMC2`→SD. Matters because SD and eMMC have
+different raw I/O speed; see "Boot-time optimization" below, which re-measured
+on a confirmed-eMMC boot for a true apples-to-apples comparison.
 
 | Run | falcon payload load | ATF start | kernel entry | **framebuffer ready** |
 |---|---|---|---|---|
@@ -225,6 +236,103 @@ Framebuffer-ready is not the same as "app visibly rendering" — there's some
 gap between `/dev/fb0` existing and Qt's first frame hitting it that this
 method doesn't capture (would need an app-side render-ready log line, which
 doesn't exist yet).
+
+## Boot-time optimization (2026-08-10) — ~8.9s → ~2.3s to framebuffer
+
+Three changes, in order of impact:
+
+1. **`CONFIG_DRM_TIDSS` root-caused and fixed.** The prior "not root-caused"
+   silent-downgrade (`ultima-display.cfg` requesting `=y`, landing as `=m`)
+   was `CONFIG_DRM=m` capping everything downstream in the same Kconfig
+   `choice` group. Fix: explicitly force `CONFIG_DRM=y`,
+   `CONFIG_DRM_KMS_HELPER=y`, `CONFIG_DRM_TIDSS=y`, `CONFIG_DRM_ITE_IT66121=y`,
+   `CONFIG_DRM_DISPLAY_HELPER=y`, `CONFIG_DRM_DISPLAY_CONNECTOR=y`, and
+   `# CONFIG_DRM_POWERVR is not set` (the competing choice member) in
+   `ultima-display.cfg`. Verified against the built `.config`. This also let
+   `kernel-module-tidss` + `/etc/modules-load.d/tidss.conf` be deleted
+   entirely (`ultima-app.bb`) — tidss is now genuinely built-in, no module to
+   force-load. This is the dominant win: tidss init moved from kernel_ts
+   ~7.8s to **~0.5s**.
+2. **Quiet boot.** Synchronous printk to a 115200-baud UART is real critical-path
+   cost, not just log noise — measured ~38KB of console text by the old
+   tidss-ready point, ~3.3s of pure UART wire time. The kernel's own
+   `CMDLINE_EXTEND` doesn't exist on this kernel/arch (arm64 only has
+   `CMDLINE_FROM_BOOTLOADER`/`CMDLINE_FORCE`), and a static `CONFIG_CMDLINE`
+   can't work either (this image boots from both SD and eMMC with different
+   PARTUUIDs, fixed up at runtime). Fix: patch U-Boot's
+   `k3_falcon_fdt_fixup()` directly (`arch/arm/mach-k3/common.c`) to append
+   `quiet` to the falcon cmdline it already generates —
+   `meta-falcon-beagleplay-src/recipes-bsp/u-boot/u-boot-ti-staging/0002-*.patch`.
+   Side effect: `measure-boot.sh`'s serial-log landmark regexes for "kernel
+   entry" (`Linux version`) and "framebuffer ready" (`tidssdrmfb`/`Initialized
+   tidss`) no longer appear on the console at all — those printks are exactly
+   what `quiet` suppresses. Post-boot numbers now come from SSH
+   `dmesg`/`journalctl -o short-monotonic` instead (kernel ring buffer keeps
+   everything regardless of console level).
+3. **Trimmed 5 unused services** (`docker-moby`, `containerd-opencontainers`,
+   `lldpd`, `netperf`, `systemd-telnetd`) via `SYSTEMD_AUTO_ENABLE:${PN} =
+   "disable"` bbappends (`meta-ultima-beagleplay-src/recipes-ultima/boot-trim/`).
+   `psplash` also disabled the same way. `docker.socket` resisted the same
+   fix (a higher-priority TI-layer bbappend competes) — not chased further,
+   socket activation means near-zero boot cost anyway.
+
+**Considered and reverted:** gating `ultima-app.service` on `dev-fb0.device`
+via `Requires=`/`After=` to fix the crash-loop race noted in "ultima-app
+integration" below. `Requires=` on a `.device` unit does not wait for it to
+appear — it fails outright if not already active, which would have shipped a
+cluster that never starts (worse than the crash-loop). Reverted; tidss now
+being built-in makes fb0 exist before systemd starts probing it, which
+appears to have made the race moot (zero SIGABRT across all eMMC/SD runs
+since). Re-open only if a boot log ever shows the SIGABRT again.
+
+### Results, confirmed-eMMC, same power-on-proxy methodology as the original baseline
+
+Root device confirmed both times via the raw serial log's `Trying to boot
+from MMC1` (see correction above) / `findmnt -no SOURCE /` on the board.
+Kernel-relative timestamps converted to wall time via an offset derived from
+two independent anchor points in the same boot's serial log (both agreed to
+the millisecond: +1.492s for this run).
+
+| Landmark | Before | After |
+|---|---|---|
+| `/dev/fb0` ready | ~8.9s | **~2.29s** |
+| Gauge cluster actually rendering | not previously measured | **~6.94s** |
+
+The old metric only covered fb0 existing, not the app visibly rendering; the
+new number is more complete (full Qt/QML startup included) and still beats
+it by ~2s. The dominant remaining cost shifted from tidss (fixed) to
+systemd's own path to starting `ultima-app.service` (kernel_ts 0.8s → 4.0s,
+~3.2s on eMMC vs ~6.9s for the same gap on SD in an interim test — eMMC's
+faster I/O matters a lot here). That gap is the next lever if further
+optimization is wanted.
+
+Caveat: this run's bootloader stage (payload-load → ATF-start) measured
+~0.4s slower than the original 3-run baseline table (1.324s vs 0.918s to
+ATF-start) — the reset was triggered via `reboot` over SSH rather than a
+physical power cycle, and the log shows a watchdog-disable delay right
+before SPL starts that the power-cycled baseline wouldn't have hit. Doesn't
+affect the post-kernel-entry numbers above.
+
+### `emmc-install.sh` bugs found and fixed while re-flashing eMMC for this test
+
+- `sig()` used `od -An -tx1` (GNU-only flags) to compare eMMC/SD disk
+  signatures. This board's BusyBox `od` rejects `-A`/`-t` outright; both
+  sides of the comparison silently read as empty strings, which compare
+  equal and falsely trigger the "signatures collide" branch every time.
+  Fixed: `hexdump -e '4/1 "%02x"'` (BusyBox supports this). No data was
+  corrupted by the false positive — the collision-avoidance branch just ran
+  unnecessarily and repatched the SD's disk signature, which is
+  self-correcting (PARTUUID is read fresh from the live partition table at
+  every falcon boot).
+- The partition/superblock size check required exact equality
+  (`PART_KB = FS_KB`), but real SD/eMMC media of the same nominal size
+  commonly differ by a few KB in actual sector count, and the `.wic`'s last
+  partition is sized "rest of disk" at build time — so exact equality
+  doesn't hold across different physical media even for a good write
+  (confirmed: this eMMC's partition came out 2KB larger than its
+  superblock). The actual hazard the check guards against is a superblock
+  *larger* than its partition ("bad geometry", unbootable). Fixed:
+  `[ "$FS_KB" -le "$PART_KB" ]`.
 
 ## Board boot-source behavior
 
@@ -368,6 +476,12 @@ it can't silently drop out of the image. This sidesteps udev coldplug
 entirely rather than trying to fix whatever was wrong with it.
 **Not yet hardware-verified this actually fixes it** — image rebuilt, not
 yet reflashed/rebooted as of this writing.
+
+**Superseded (2026-08-10):** the module-load workaround above worked but left
+the real Kconfig bug unfixed. Root-caused later — `CONFIG_DRM=m` was capping
+the whole choice group, not something deeper — and fixed directly, so
+`CONFIG_DRM_TIDSS` is now genuinely built-in and the module-load-and-RDEPENDS
+workaround was removed entirely. See "Boot-time optimization" further down.
 
 **CAN**: `70-can.rules` mirrored byte-for-byte (see the comment in the
 copy for why it's a copy and not a shared file — Yocto recipes need files

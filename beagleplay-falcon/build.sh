@@ -42,7 +42,11 @@ docker run --rm \
 TTY_ARGS=()
 [ -t 0 ] && TTY_ARGS=(-it) || true
 
-docker run --rm "${TTY_ARGS[@]}" --cap-add SYS_PTRACE \
+# "${TTY_ARGS[@]+...}" rather than a bare "${TTY_ARGS[@]}": macOS ships bash
+# 3.2, which throws "unbound variable" expanding a genuinely empty array
+# under set -u (fixed upstream in bash 4.4) — this is the standard portable
+# guard for that.
+docker run --rm ${TTY_ARGS[@]+"${TTY_ARGS[@]}"} --cap-add SYS_PTRACE \
   -v "$VOLUME:/home/builder/yocto" \
   -v "$ULTIMA_APP_SRC:/home/builder/yocto/ultima-app-src:ro" \
   "$IMAGE" bash -c "

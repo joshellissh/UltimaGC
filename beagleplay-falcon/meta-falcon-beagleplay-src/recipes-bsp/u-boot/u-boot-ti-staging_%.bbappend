@@ -35,3 +35,19 @@ SRC_URI:append = " file://0001-arm-dts-k3-am625-beagleplay-add-falcon-boot-binma
 # fetched via SRC_URI never lands in configs/ where the merge-config make rule
 # looks for it.
 SRC_URI:append = " file://0001-k3_r5_falcon-enable-eMMC-raw-boot-support.patch"
+
+# k3_falcon_fdt_fixup() (arch/arm/mach-k3/common.c) builds the falcon
+# kernel cmdline with a fixed snprintf, not from a file — a uEnv.txt/
+# bootargs edit can't touch it. Appends "quiet": printk to a 115200-baud
+# UART console is synchronous and systemd itself also honors "quiet" to
+# suppress its own [ OK ]/Started spam — measured ~3.3s of pure UART wire
+# time (38KB of console text) on the critical path before tidss inits on an
+# unpatched boot. Tried doing this from the kernel side first
+# (CONFIG_CMDLINE_EXTEND) — dead end, that Kconfig choice member doesn't
+# exist on this kernel's arm64 Kconfig (only CMDLINE_FROM_BOOTLOADER/
+# CMDLINE_FORCE), and CMDLINE_FORCE would replace the whole cmdline with a
+# static string, losing the dynamically-derived root=PARTUUID this same
+# image needs for both SD and eMMC boot (different PARTUUID each). See
+# meta-ultima-beagleplay-src's ultima-display.cfg history for the two
+# silent-downgrade rounds that ruled that path out.
+SRC_URI:append = " file://0002-k3_r5_falcon-add-quiet-to-falcon-boot-cmdline.patch"
