@@ -125,6 +125,10 @@ before touching that board again.
 - `beagleplay-falcon/build.sh [target]` syncs the Yocto layer into the build volume
   and runs bitbake — defaults to `tisdk-base-image`. See `beagleplay-falcon/NOTES.md`
   for the full build/flash/verify cycle.
+- eMMC (the board's default boot source, no USR held): `build-emmc-spl.sh` builds
+  the eMMC-targeting R5 SPL, then `emmc-serve.sh` (Mac) + `emmc-install.sh` (board,
+  booted from SD) install it. Falcon's boot device is compile-time, so **SD and
+  eMMC need different `tiboot3.bin` builds** — see NOTES.md "eMMC boot".
 
 ## Git commit conventions
 

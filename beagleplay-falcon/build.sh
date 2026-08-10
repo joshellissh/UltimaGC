@@ -37,7 +37,12 @@ docker run --rm \
     }
   '
 
-docker run --rm -it --cap-add SYS_PTRACE \
+# -t only when there is a terminal, so this stays runnable from a script or CI
+# ("the input device is not a TTY" otherwise).
+TTY_ARGS=()
+[ -t 0 ] && TTY_ARGS=(-it) || true
+
+docker run --rm "${TTY_ARGS[@]}" --cap-add SYS_PTRACE \
   -v "$VOLUME:/home/builder/yocto" \
   -v "$ULTIMA_APP_SRC:/home/builder/yocto/ultima-app-src:ro" \
   "$IMAGE" bash -c "

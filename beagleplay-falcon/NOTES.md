@@ -20,6 +20,13 @@ top of this**, falcon boot and all — see "ultima-app integration" and
 "Hardware verification" further down. This directory now does more than
 just prove falcon mode works in isolation.
 
+**Update (2026-08-09): this all runs from eMMC by default** — power on with
+no button held, no SD card inserted, and the board goes ROM → falcon SPL →
+kernel → gauge cluster. Verified on hardware: a login prompt flashes for an
+instant and the cluster takes the display. See "eMMC boot" below. The SD card
+remains a working falcon boot device when USR is held, and is the recovery
+path.
+
 ## Build environment
 
 - `Dockerfile` + `run.sh` — builds a Yocto/TI SDK (`tisdk`) container.
@@ -32,10 +39,15 @@ just prove falcon mode works in isolation.
   BitBake multiconfig, `mc:k3r5`).
 - To pull built images out of the volume onto the host:
   ```
-  docker run --rm -v falcon-yocto-build:/src -v "$(pwd)/deploy:/dst" \
+  docker run --rm -v falcon-yocto-build:/src -v "$(pwd)/deploy-falcon:/dst" \
     falcon-yocto:latest bash -c \
-    'cp -a /src/tisdk/build/arago-tmp-default-glibc/deploy/images/beagleplay-ti/. /dst/'
+    'cp -aL /src/tisdk/build/deploy-ti/images/beagleplay-ti/tisdk-base-image-beagleplay-ti.rootfs.wic.xz \
+            /src/tisdk/build/deploy-ti/images/beagleplay-ti/tisdk-base-image-beagleplay-ti.rootfs.wic.bmap \
+            /src/tisdk/build/deploy-ti/images/beagleplay-ti/tiboot3.bin /dst/'
   ```
+  Note the deploy path is `build/deploy-ti/images/...`, not the
+  `build/arago-tmp-default-glibc/deploy/images/...` an earlier revision of this
+  file claimed. Most entries there are symlinks, so `cp -aL`, not `cp -a`.
 
 ## What was actually wrong upstream
 
@@ -115,10 +127,16 @@ heredoc/shell redirection.
 
 ## Build artifacts
 
-- `deploy-falcon/` — falcon-mode image (used going forward):
-  - `tisdk-base-image-beagleplay-ti.rootfs.wic.xz` — flashable SD card image
+- `deploy-falcon/` — falcon-mode image (used going forward; gitignored):
+  - `tisdk-base-image-beagleplay-ti.rootfs.wic.xz` — flashable SD card image,
+    also what gets written to the eMMC user area
   - `tisdk-base-image-beagleplay-ti.rootfs.wic.bmap`
-  - `tiboot3-falcon.bin` — R5 SPL built with `k3_r5_falcon.config` merged in
+  - `tiboot3-falcon.bin` — R5 SPL built with `k3_r5_falcon.config` merged in,
+    **SD variant** (`mmcdev=1`). This is also the copy baked into the `.wic`;
+    the standalone file is only kept for inspection.
+  - `tiboot3-falcon-emmc.bin` — same SPL built for eMMC (`mmcdev=0`,
+    `bootpart=0:2`), produced by `./build-emmc-spl.sh`. Goes in the eMMC's
+    `boot0` hardware partition. See "eMMC boot" below.
 - `deploy/` — baseline (non-falcon) image, kept for comparison
 
 ## Flashing
@@ -127,6 +145,11 @@ heredoc/shell redirection.
 Defaults to `deploy-falcon/tisdk-base-image-beagleplay-ti.rootfs.wic.xz`.
 No interactive confirmation prompt (removed on request) — it only refuses
 disks `diskutil info` reports as `Internal: Yes`.
+
+After writing the image it patches the card's MBR disk signature to
+`deadbeef`, so the SD and the eMMC (flashed from the same image) can't end up
+with the same PARTUUID — see "PARTUUID collision" below for why that
+otherwise breaks SD recovery boots in a way that looks like a dead card.
 
 **Must be run interactively by the user, not backgrounded by the
 assistant** — a `sudo dd` to a raw disk device launched from a
@@ -168,22 +191,26 @@ timeout, not falcon-specific).
 
 ## Board boot-source behavior
 
-- The board still boots from whatever `BOOTMODE`/switch state it's set to;
-  holding the **USR** button at boot forces boot from SD card (overriding
-  eMMC as the default source) — this needs to be held every time you want
-  to boot from the freshly-flashed SD card rather than eMMC, unless eMMC
-  itself is reflashed with the falcon image.
+- Default (no button): boots from **eMMC** — now falcon mode with the gauge
+  cluster on it, see "eMMC boot" below.
+- Holding the **USR** button forces boot from the SD card instead. This is the
+  recovery path; keep the SD bootable, because repairing the eMMC rootfs
+  requires booting something else.
+- **USR must be held for the entire boot sequence, not just tapped at
+  power-on.** It must be down *before* power/reset is applied and stay down
+  for a couple of seconds after. Empirically, releasing it partway through
+  makes the LEDs go fully dark (looks like a power loss, not a fallback to
+  eMMC) — hold until a stable login prompt, or at least ~15-20s. Tapping it
+  late silently boots stale eMMC content instead, which looks like a real
+  failure but isn't.
 - Exact USR-hold timing relative to reset was **not** confirmed against the
-  TRM/reference manual — don't state a specific duration without checking
-  the datasheet if this matters later.
+  TRM/reference manual beyond the above — don't state anything more specific
+  without checking the datasheet.
 
 ## Not yet done (optional follow-ups, not requested yet)
 
-- Persist the falcon image to eMMC (`dd` from a running Linux shell on the
-  board onto `/dev/mmcblk0`) so it boots falcon by default without holding
-  USR.
 - Tune/remove the GRUB menu timeout — separate, non-falcon optimization,
-  only relevant to the baseline/eMMC image if it's still GRUB-based.
+  only relevant to the baseline image if it's still GRUB-based.
 
 ## ultima-app integration (2026-08-08)
 
@@ -424,3 +451,567 @@ fast once it's confirmed looping, don't leave it running for extended
 diagnosis — this rootfs has no read-only protection the way the Buildroot
 boards do (see "Data persistence" above), so a write-heavy loop is a real
 risk to the card, not just wasted time.
+
+## eMMC boot — solved (2026-08-09)
+
+The board boots falcon mode, and therefore the gauge cluster, straight from
+eMMC with **no USR button held**. The SD card remains a working falcon boot
+device when USR *is* held, and is the recovery path — keep it that way, since
+repairing the eMMC rootfs requires booting something else.
+
+Three separate things all have to be right, and each fails in its own
+distinctly-diagnosable way:
+
+1. A bootloader in the eMMC's **`boot0` hardware partition**. The TI K3 ROM
+   does not look in the user area for eMMC the way it does for SD.
+2. That bootloader must be a **separate SPL build targeting eMMC** — falcon's
+   boot device is compile-time, from two env vars, not from wherever the ROM
+   happened to load the SPL.
+3. A **valid filesystem in the eMMC user area**, whose ext4 superblock size
+   matches the partition size.
+
+### Procedure
+
+**No serial console is needed for any of this** — the board is reachable over
+SSH (see "Board access over SSH" below), which is how the files and commands
+get there.
+
+```
+./build-emmc-spl.sh                  # once per u-boot rebuild
+./flash.sh 4                         # SD card, gets a unique disk signature
+                                     # boot the board with USR held
+./emmc-push.sh                       # copies everything over SSH and runs it
+```
+then remove the SD card and power on with USR **not** held.
+
+`emmc-push.sh` refuses to run unless the board is actually booted from the SD
+(`findmnt` says `mmcblk1p*`), since overwriting the eMMC from a system running
+on it is exactly the mistake worth preventing. It ends with a clean
+`sync; poweroff`.
+
+`emmc-install.sh` does the eMMC side and verifies every step — md5 of the
+transferred files, that the SPL really is the `mmcdev=0` variant, image written
+and read back off the media with caches dropped, superblock size vs partition
+size, boot0 content vs source, SD/eMMC signature distinctness — stopping at the
+first failure rather than leaving a half-installed eMMC. Its log is
+`/root/emmc-install.log` on the board.
+
+If the board has no network, `./emmc-serve.sh` serves the same files over HTTP
+and prints a serial-console one-liner instead. Even then the files move over
+the network rather than being typed — see "Serial console caveats" below; past
+~80-90 characters the console reliably drops and duplicates characters.
+
+**Provenance / what is and isn't script-verified.** The boot is
+hardware-verified: confirmed 2026-08-09 booting to the gauge cluster from eMMC
+with the SD card removed and no button held. The eMMC was populated by hand
+first (in the standalone `~/code/falcon` working tree, whose build shares this
+repo's `falcon-yocto-build` Docker volume, so the artifacts are the same bits).
+
+- `build-emmc-spl.sh` — **run and verified against the live board.** Its
+  output's SPL payload (everything past the x509 cert) is byte-identical to
+  what is sitting in the running board's eMMC `boot0` and booting it today:
+  ```
+  # board                                    # Mac
+  head -c 273749 /dev/mmcblk0boot0 |         tail -c +1268 \
+      tail -c +1268 | md5sum                     deploy-falcon/tiboot3-falcon-emmc.bin | md5
+  # both: 0609b690b4fbf1b89031332fc19b0ec6
+  ```
+- `flash.sh` — **run and verified end to end**, including the new disk-signature
+  patch. A card flashed with it booted the board, and the running kernel
+  reported `root=PARTUUID=deadbee5-02` while the eMMC stayed on `076c4a2a-02`.
+  That is also the empirical proof that patching the *card* is sufficient and
+  the `.wic` needs no patching: `k3_falcon_fdt_fixup()` read the patched
+  signature off the live partition table at boot.
+- `emmc-push.sh` — preflight and the "refuse unless booted from SD" guard are
+  live-tested in both directions (refused against an eMMC-booted board, and the
+  guard's `case` accepts the real `/dev/mmcblk1p2`). The install it drives has
+  not been run end to end.
+- `emmc-install.sh` / `emmc-serve.sh` — codify the manual procedure with
+  verification added, but **have not been run**, because the eMMC was already
+  correct by the time they existed. Their parsers (`sig()`, the
+  `/proc/partitions` and `dumpe2fs` awk) were tested against real data under
+  busybox; every tool they use is confirmed present on the board; and the fd-3
+  progress channel is confirmed to survive a non-interactive `ssh host 'sh
+  script'`. Still: read `/root/emmc-install.log` the first time rather than
+  assuming a silent success.
+
+### Non-destructive verification pass (2026-08-09)
+
+Run from an SD-booted board over SSH, with the eMMC deliberately left alone —
+enough to exercise everything except the eMMC write itself:
+
+| Check | Result |
+|---|---|
+| `findmnt -no SOURCE /` | `/dev/mmcblk1p2` — genuinely the SD |
+| SD PARTUUID | `deadbee5-02` (flash.sh's patch, live) |
+| eMMC PARTUUID | `076c4a2a-02` — distinct, no collision |
+| `/proc/cmdline` | `root=PARTUUID=deadbee5-02` |
+| eMMC filesystem | `clean`, 3794688 blocks — untouched |
+| eMMC `boot0` SPL | still `mmcdev=0` / `bootpart=0:2` — untouched |
+| `ultima-app` | `active`, cluster on the display |
+
+Note the board reaches the cluster roughly half a minute before it answers on
+the network — the app does not wait for DHCP. "No SSH yet" right after boot
+means wait, not broken.
+
+### On rebuilding the eMMC SPL: it won't be byte-identical
+
+`tiboot3.bin` is a 1267-byte x509 certificate followed by the SPL image. Two
+builds of identical source differ in ~94 bytes, all inside that certificate —
+the serial number (offsets 16-35) and the signature (1204-1263). The SPL
+payload after the certificate is bit-for-bit reproducible, and the banner
+string is too (`SOURCE_DATE_EPOCH` pins the build timestamp). This is a GP
+(General Purpose) device, so the ROM doesn't verify the signature; a differing
+cert is expected and harmless. Compare payloads, not whole files:
+
+```
+python3 -c "
+d=open('a.bin','rb').read(); r=open('b.bin','rb').read()
+print(d[1267:]==r[1267:])"
+```
+
+### Falcon's boot device is compile-time — and it's TWO env vars
+
+Falcon mode does **not** use whichever device the ROM loaded the SPL from.
+`arch/arm/mach-k3/am62x/am625_init.c` routes `spl_boot_device()` through
+`k3_r5_falcon_bootmode()` (`arch/arm/mach-k3/r5/common.c`) when
+`CONFIG_SPL_OS_BOOT_SECURE` is set, and that reads the **environment**:
+
+```c
+int k3_r5_falcon_bootmode(void)
+{
+	char *mmcdev = env_get("mmcdev");
+	if (!mmcdev) return BOOT_DEVICE_NOBOOT;
+	if (strncmp(mmcdev, "0", sizeof("0")) == 0) return BOOT_DEVICE_MMC1;      // eMMC
+	else if (strncmp(mmcdev, "1", sizeof("1")) == 0) return BOOT_DEVICE_MMC2; // SD
+	else return BOOT_DEVICE_NOBOOT;
+}
+```
+
+There is **no writable environment** in this build (every `CONFIG_ENV_IS_IN_*`
+is unset, `CONFIG_ENV_SIZE=0x20000` notwithstanding), so this is baked in at
+compile time from `board/beagle/beagleplay/beagleplay.env` — which is
+board-specific, so editing it doesn't affect TI's other AM62x boards (unlike
+the shared `board/ti/am62x/am62x.env`).
+
+Setting `mmcdev=0` alone is **not enough**. It gets as far as:
+
+```
+Trying to boot from MMC1          <- correct, eMMC
+Loading falcon payload from MMC1  <- payload loaded fine
+MMC: no card present
+** Bad device specification mmc 1 **
+k3_falcon_fdt_fixup: Failed to get part details for mmc 1:2 [-19]
+```
+
+because `k3_falcon_fdt_fixup()` (`arch/arm/mach-k3/common.c`) separately reads
+`boot` and `bootpart` to derive the kernel's root PARTUUID:
+
+```c
+strlcpy(bootmedia, env_get("boot"), sizeof(bootmedia));    // "mmc"
+strlcpy(bootpart, env_get("bootpart"), sizeof(bootpart));  // "1:2" <- still SD
+ret = blk_get_device_part_str(bootmedia, bootpart, &dev_desc, &info, 0);
+snprintf(str, ..., "console=%s root=PARTUUID=%s rootwait", ..., info.uuid);
+```
+
+So **both** must change together:
+
+| `beagleplay.env` | SD (default build) | eMMC |
+|---|---|---|
+| `mmcdev` | `1` | `0` |
+| `bootpart` | `1:2` | `0:2` |
+
+`build-emmc-spl.sh` flips them, recompiles just the R5 SPL
+(`bitbake -c compile -f mc:k3r5:u-boot-ti-staging`), extracts
+`tiboot3.bin` → `deploy-falcon/tiboot3-falcon-emmc.bin`, then puts the source
+back and recompiles again so the volume is left producing the SD variant. It
+asserts that last part rather than assuming it — silently deploying an
+eMMC-targeting SPL into an SD `.wic` produces exactly the confusing
+"`MMC: no card present`, from a card that is plainly present" failure above.
+
+Note the multiconfig scoping: the R5/falcon SPL lives entirely under the
+`k3r5` BitBake multiconfig (`meta-ti-bsp/conf/multiconfig/k3r5.conf`,
+auto-enabled via `BBMULTICONFIG` in `mc_k3r5.inc`). Unscoped
+`u-boot-ti-staging` / `virtual/bootloader` targets build the unrelated A53
+U-Boot instead — `bitbake -c cleansstate virtual/bootloader` cleans the wrong
+thing and looks like it did nothing.
+
+### Which `tiboot3.bin` goes where
+
+Easy to mix up, and a mismatch fails in a confusing way:
+
+| Location | Variant | `mmcdev` / `bootpart` | Host file |
+|---|---|---|---|
+| SD FAT partition (`tiboot3.bin`) | SD | `1` / `1:2` | built into the `.wic` image |
+| eMMC `boot0` | eMMC | `0` / `0:2` | `deploy-falcon/tiboot3-falcon-emmc.bin` |
+
+Reflashing the SD only replaces the SD variant; the eMMC `boot0` copy is
+untouched by `flash.sh` and survives. Check any given file with
+`strings tiboot3.bin | grep -E '^mmcdev=|^bootpart='`.
+
+### The bug that cost the most time: `tifalcon.bin` is not `tiboot3.bin`
+
+Worth reading before touching eMMC boot again, because it burned two sessions
+and produced a confident, wrong "needs JTAG" conclusion.
+
+Symptom: eMMC-only boot (SD removed, USR not held) failed completely — no
+heartbeat, no LEDs, i.e. stuck before Linux — with serial showing one repeating
+frame, identical each time and padded out with `C` (0xCC) bytes:
+
+```
+01000000011a0000616d36327800000000000000475020200100010001000100CCCC...
+```
+
+That decodes to ASCII `am62x` and `GP ` (General Purpose device type): the K3
+ROM's own boot notification frame, looping because the ROM found no valid image
+and fell back to waiting for a UART image transfer.
+
+Root cause: the file being written into `boot0` was **`/boot/tifalcon.bin`**,
+the falcon *payload* (the minimal U-Boot that SPL loads and hands off to,
+~995KB), not **`tiboot3.bin`**, the R5 SPL the ROM actually loads (~274KB,
+x509-wrapped). The ROM rejected it every time. The tell is right there in the
+byte counts — any real `tiboot3.bin` in this build is 273,749 bytes.
+
+Everything the failing sessions chased instead was a dead end, and all of it is
+now **ruled out**, so don't re-investigate:
+
+- `PARTITION_CONFIG` (EXT_CSD byte 179) ships as `0x48` — boot partition 1
+  enabled, boot-ack on. `mmc bootpart enable 1 1 /dev/mmcblk0` is a no-op.
+- `BOOT_BUS_CONDITIONS` (byte 177) ships as `0x02` — x8, reset-to-x1-after-boot,
+  SDR-backward-compatible. `mmc bootbus set ...` is a no-op.
+- Writing `boot1` as well as `boot0` is unnecessary; `PARTITION_CONFIG=0x48`
+  selects the partition Linux exposes as `mmcblk0boot0`.
+- "boot0 content doesn't survive power cycles" — the observed corruption was a
+  ~995KB file compared against itself across sessions where the wrong thing was
+  being written anyway. There is no evidence of a boot-partition endurance
+  problem.
+- BeagleBoard's own docs show `mmc bootpart enable 1 2 /dev/mmcblk0`; on this
+  board's mmc-utils the syntax is `enable <boot_partition> <send_ack> <device>`
+  with `send_ack` only ever 0 or 1. The doc's `2` is a different version's
+  semantics — don't copy it literally.
+
+`mmc-utils` isn't in TI's opkg feed; it's in the image because
+`tisdk-base-image.bbappend` adds it to `IMAGE_INSTALL`.
+
+Note `cmp file /dev/mmcblk0boot0` always exits 1 with "EOF on file" because the
+device is larger than the image — that is *not* a failure. Use
+`head -c <exact size>` to get a meaningful exit code (`emmc-install.sh` does).
+
+### PARTUUID collision between SD and eMMC
+
+Both devices get flashed from the same image, and a Linux MBR PARTUUID is
+derived from the 4-byte disk signature at file offset 440 (`0x1B8`) — which the
+wic builder emits **deterministically, not randomized per flash** (confirmed by
+forcing a `bitbake -c image_wic -f tisdk-base-image` rebuild and diffing:
+byte-identical). So flashing both gives both the identical
+`PARTUUID=076c4a2a-02`.
+
+The kernel's `root=PARTUUID=...` takes the first matching device, and eMMC
+(`mmc0`) finishes async probing before SD (`mmc1`), so on a collision an
+SD-forced recovery boot mounts the eMMC's rootfs — or panics with `Unable to
+mount root fs on "PARTUUID=076c4a2a-02"` if it isn't ready — **on every boot,
+regardless of SD card health**. This produced a very convincing fake "the SD
+card is dead" regression.
+
+Fix: `flash.sh` patches every freshly-flashed SD card's disk signature to
+`deadbee5` after writing the image, and `emmc-install.sh` independently
+compares the two **live devices** after writing the eMMC and patches the SD if
+they still match.
+
+Why `deadbee5` and not the obvious `deadbeef`: `flash.sh` runs on the Mac and
+can't read the eMMC's signature, so it picks a value safe under every plausible
+eMMC state — the eMMC is on `076c4a2a` today, but an earlier session patched it
+to `deadbeef` live, and a card flashed now might meet a board in either state.
+`deadbee5` differs from both. `emmc-install.sh` compares live-to-live precisely
+because that guesswork is avoidable once you're on the board.
+
+Nothing needs patching inside the image: `k3_falcon_fdt_fixup()` derives
+`root=PARTUUID` from the live partition table at boot
+(`CONFIG_SPL_PARTITION_UUIDS=y`), so the FIT's baked-in cmdline string is
+overwritten anyway. An earlier attempt patched that string at a fixed `.wic`
+file offset — unnecessary, and it made every rebuild require re-patching.
+
+Doing it by hand, host-side on macOS:
+```
+diskutil unmountDisk /dev/disk4                          # else "Resource busy"
+sudo dd if=/dev/rdisk4 of=/tmp/mbr.bin bs=512 count=1    # read sector 0
+printf '\xef\xbe\xad\xde' | dd of=/tmp/mbr.bin bs=1 seek=440 count=4 conv=notrunc
+sudo dd if=/tmp/mbr.bin of=/dev/rdisk4 bs=512 count=1    # write the sector back
+sync
+```
+Raw disk devices on macOS require **sector-aligned (512-byte) reads and
+writes** — `dd bs=1` directly against `/dev/rdiskN` silently no-ops. Always
+read/patch/write a full sector via a local intermediate file. (On Linux, on the
+board, `dd bs=1 seek=440` against the block device is fine.)
+
+### Stale ext4 superblock on the eMMC (bad geometry)
+
+The eMMC's p2 can carry a superblock from a previous install whose size doesn't
+match the partition table our image writes:
+
+```
+EXT4-fs (mmcblk0p2): bad geometry: block count 3794688 exceeds size of device (198767 blocks)
+```
+
+These two numbers must agree:
+```
+grep mmcblk0 /proc/partitions                                     # p2 size in KB
+dumpe2fs -h /dev/mmcblk0p2 | grep -i "Block count:\|Block size:"  # count x 4096
+```
+`emmc-install.sh` compares them automatically and refuses to continue on a
+mismatch. Right after a fresh write: 868572 KB vs 217143 × 4096 = 868572 KB.
+**These numbers change again on first successful boot** — a growpart/resize2fs
+service expands p2 to fill the device and both settle at 15178752 KB /
+3794688 × 4096. So `3794688` is the correct steady-state value for a grown
+eMMC; it's only a problem when the partition table disagrees.
+
+**Caveat on verifying a `dd` to a block device from a running system.** An
+`xzcat f.xz | cmp - /dev/mmcblk0` once reported a byte-perfect match while the
+very next boot still read the *old* superblock — most likely because `cmp` read
+back through the page cache rather than the physical media (`conv=fsync` flushes
+at the end but does not invalidate the cache). Drop caches first; it costs
+nothing:
+```
+sync; echo 3 > /proc/sys/vm/drop_caches
+```
+
+### Known-good eMMC boot signature (for diffing)
+
+Diffing a bad boot against a known-good one was by far the most effective
+diagnostic technique in this project — much more so than reasoning about
+symptoms. Reference for a healthy no-USR eMMC boot with the SD removed:
+
+```
+Trying to boot from MMC1
+Loading falcon payload from MMC1
+Starting ATF on ARM64 core...
+[    0.000000] Kernel command line: console=ttyS2,115200n8 root=PARTUUID=<emmc-sig>-02 rootwait
+[    2.262286] EXT4-fs (mmcblk0p2): mounted filesystem ... ro with ordered data mode.
+beagleplay-ti login:
+```
+then a login prompt for an instant before the gauge cluster takes the display.
+
+Healthy-boot invariants:
+- `MMC1` (not `MMC2`) on both the "Trying to boot" and "Loading falcon payload"
+  lines. MMC2 there means the SD-variant SPL ended up in `boot0`.
+- Root mounts from `mmcblk0p2`; **no** `recovery required` line.
+- `<emmc-sig>` is whatever the eMMC's own MBR disk signature currently is, not
+  a fixed value — `k3_falcon_fdt_fixup()` derives it at boot. **Confirmed
+  2026-08-09 over SSH: the eMMC is on the image's stock `076c4a2a-02`**, so the
+  live `deadbeef` patch an earlier session applied was undone by a later image
+  write. **The invariant that matters is that the SD's and the eMMC's differ**,
+  not what either one is. Check with `blkid /dev/mmcblk0p2` and
+  `blkid /dev/mmcblk1p2`.
+- The **only** `[FAILED]` is psplash — cosmetic, present in every successful
+  boot on this image.
+- `wl18xx` wifi firmware errors are normal and harmless (that firmware isn't
+  installed). They appear in every good boot and are *not* a hang, even though
+  output often pauses around them.
+- With the SD inserted, expect extra `mmcblk1` lines; those are inert. Root
+  must still be `mmcblk0p2` — if it's `mmcblk1p2`, the PARTUUIDs collide.
+- Nothing about eMMC changes how the app starts: `ultima-app.service` is
+  `WantedBy=multi-user.target` and tidss is force-loaded from
+  `/etc/modules-load.d/`. If the cluster doesn't come up, look at the image on
+  the user area, not at the boot path.
+
+## Always shut down cleanly — `sync; poweroff`
+
+Repeatedly yanking power (especially out of the `### ERROR ### Please RESET the
+board ###` state during a failed eMMC boot test) leaves the ext4 rootfs dirty
+enough that fsck can no longer auto-repair it. The symptom is **very
+misleading** — it looks exactly like a hard hang:
+
+- board alive, heartbeat LED blinking
+- display shows a blinking cursor
+- keyboard appears to do nothing
+- serial goes completely silent partway through boot
+
+It is not hung. It is sitting in systemd **emergency mode** waiting for input
+that never arrives:
+
+```
+[FAILED] Failed to start File System Check on Root Device.
+[  OK  ] Started Emergency Shell.
+[  OK  ] Reached target Emergency Mode.
+Press Enter for maintenance
+(or press Control-D to continue):
+```
+
+Diagnose by diffing against a known-good log. The tell is *which* fsck failed:
+a failure on an automount is harmless and appears in healthy boots too, but
+`File System Check on **Root Device**` is fatal.
+
+This bit us **three times**:
+
+- **SD rootfs**, twice, from power-cycling out of the `### ERROR ###` state
+  during failed eMMC boot tests. Fixed by reflashing (12s) — and with `flash.sh`
+  now patching the disk signature, that no longer silently reintroduces a
+  PARTUUID collision the way a manual reflash used to.
+- **eMMC rootfs**, from pulling power to remove the SD card right after the
+  first successful eMMC boot. The give-away in the log:
+  ```
+  EXT4-fs (mmcblk0p2): INFO: recovery required on readonly filesystem
+  EXT4-fs (mmcblk0p2): recovery complete
+  root: fsck 0.0% complete...  [FAILED] Failed to start File System Check on Root Device.
+  EXT4-fs (mmcblk0p2): warning: mounting fs with errors, running e2fsck is recommended
+  ```
+
+In one case the kernel had already force-remounted read-write to recover, which
+makes `systemd-fsck-root.service` refuse to run at all (it won't fsck an
+already-rw-mounted filesystem) and fail outright — that failure is what drops
+you into emergency mode. Reflashing is the fast fix there; in-place repair only
+works from a system where that filesystem isn't the root.
+
+### Repairing the eMMC rootfs (offline, from an SD boot)
+
+The SD card is the recovery path — keep it bootable. Boot it (hold USR) so the
+eMMC is not the root filesystem, then:
+
+```
+findmnt -no SOURCE /                       # confirm /dev/mmcblk1p2 (SD), not mmcblk0p2
+umount /run/media/rootfs-mmcblk0p2         # release the automounts
+umount /run/media/boot-mmcblk0p1
+mount | grep -c mmcblk0                    # must be 0
+e2fsck -f -y /dev/mmcblk0p2
+sync; poweroff
+```
+
+**`e2fsck` exit code 1 means "errors corrected" — that is success, not
+failure.** 0 = already clean, 1 = fixed, 2 = fixed but reboot needed, ≥4 =
+uncorrected errors (only then is it actually bad). Confirm with
+`dumpe2fs -h /dev/mmcblk0p2 | grep -i state:` → `clean`.
+
+## Board access over SSH (use this, not serial)
+
+An earlier session recorded "the board has no network (`eth0`/`eth1`/`wlan0`
+all `DOWN`)" and concluded serial was the only way in. **That was wrong**, and
+it cost a lot of time. A booted board answers on the network with no setup:
+
+```
+ssh root@beagleplay-ti.local            # no password
+```
+
+What makes it work, all already in the image (verified in the built rootfs):
+
+- `systemd-networkd.service` enabled, with `10-eth.network` / `15-eth.network`
+  matching `eth0`/`eth*` at `DHCP=yes` — ethernet configures itself at boot.
+- `dropbear.socket` enabled (socket-activated SSH), with `-B` in
+  `/etc/default/dropbear` to permit blank-password logins.
+- `root::` in `/etc/shadow` — no root password at all.
+- `avahi-daemon` enabled, so `beagleplay-ti.local` resolves over mDNS without
+  needing to know the DHCP lease.
+
+The earlier "no network" observation was almost certainly a board sitting in
+emergency mode, or one with no cable in — not a property of the image.
+
+**Passwordless root over SSH is wide open to anything on the same network.**
+That is fine for a bench board on a home LAN and is what makes the tooling
+here simple, but don't put this image on a hostile network as-is.
+
+Practical notes:
+
+- **The host key changes whenever a card is reflashed** — `dropbearkey`
+  generates a fresh one on first boot, and the SD and eMMC systems both call
+  themselves `beagleplay-ti`. Pinning them makes every reflash produce
+  `REMOTE HOST IDENTIFICATION HAS CHANGED` and a hard refusal, so the scripts
+  pass `-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null`.
+- `ssh root@beagleplay-ti.local 'sync; poweroff'` is the clean-shutdown path
+  with no console attached. Given how many times unclean power-off has
+  corrupted a rootfs on this board, this alone is worth having.
+- File transfer uses `ssh 'cat > /path'` rather than `scp`, so it depends on
+  nothing but a shell on the far end.
+- Serial is still the only way to see anything *before* Linux starts — ROM
+  messages, SPL, falcon handoff. For everything after that, SSH is better in
+  every respect.
+
+## Serial console caveats (macOS)
+
+Serial is `/dev/cu.usbserial-0001` @ 115200 8N1. Several independent traps
+here, each of which produced silent, misleading "nothing is happening"
+symptoms:
+
+- **`cat` buffers.** `cat <&3 > logfile` can sit on kilobytes of captured data
+  without flushing, so the log looks empty (0 bytes) while the board is
+  actually talking. Always use **`cat -u`**. `lsof -p <pid>` showing a nonzero
+  offset on the log file while `wc -c` says 0 is the giveaway.
+- **Stale readers steal bytes.** A `cat` from a previous capture that was never
+  killed keeps the port open and silently consumes input, so new captures come
+  up empty with no error. Always
+  `for p in $(lsof -t /dev/cu.usbserial-0001); do kill -9 $p; done` before
+  arming a new one.
+- **TX can fail while RX still works.** At one point every
+  `printf ... > /dev/cu.usbserial-0001` did nothing while boot logs kept
+  arriving perfectly — a loose TX wire at the header. Reseating fixed it. Test
+  with: send `\r`, expect the getty to reprint `beagleplay-ti login:`.
+- **Long commands get corrupted.** Beyond ~80-90 characters, expect dropped and
+  duplicated characters (`dd` → `ddd`, filenames split by injected CR). Keep
+  commands short (~60-70 chars), `clear` before each so the tail is easy to
+  read, redirect output to a file and `cat` it back, and prefer **downloading a
+  script over HTTP** to typing anything complex — which is exactly what
+  `emmc-serve.sh` / `emmc-install.sh` are for.
+- **Don't try to parse live echo.** The console's `\r`-only line rewrites
+  interleave with kernel messages and make raw output very hard to read
+  correctly. Write to a file on the board and `cat` it back. To check a file's
+  contents, prefer several short `grep -c <substring>` calls (each individually
+  easy to eyeball) over one long pattern or a hash string — long strings are
+  exactly what gets corrupted in transit.
+- **The CP2102 adapter itself can wedge.** Symptom: the device node exists and
+  `ioreg` still lists the adapter, but `stty` fails with
+  `tcsetattr: Invalid argument` and the port stays stuck reporting
+  `speed 9600 baud`. Unplugging and replugging the **USB end** clears it. Worth
+  checking whenever a capture goes silent — it looks identical to a dead board.
+
+### Transferring files to the board
+
+Don't type them. Bring up ethernet and pull over HTTP — `./emmc-serve.sh` on
+the Mac does the staging and prints the exact board-side line. There is no
+WiFi in this build; wired ethernet is the only network path.
+
+### Shell gotcha worth remembering: `pipefail` + `grep -q`
+
+`strings f | grep -q PATTERN` inside a `set -o pipefail` script reports
+**failure on a successful match**: `grep -q` exits at the first hit, `strings`
+then dies of SIGPIPE (141), and `pipefail` surfaces that as the pipeline's
+status. This produced a completely misleading "not the eMMC variant" refusal on
+a file that plainly was. Capture instead — plain `grep` drains its input:
+
+```sh
+V=$(strings "$f" | grep -E '^mmcdev=' || true)
+[ "$V" = "mmcdev=0" ] || die ...
+```
+
+### Serial automation lessons (for next time this board needs live debugging)
+
+- `screen -X stuff` (remote command injection into a daemonized `screen`
+  session) **does not work** in this assistant's execution environment —
+  confirmed via an isolated test unrelated to the board. Daemon-mode
+  (`-dmS`) `screen` is fine for passive logging (`-L`) but can't be driven
+  interactively this way.
+- `expect`'s `spawn screen <device> <baud>` (a direct foreground spawn, not
+  daemon+reattach+`-X stuff`) **does** work for interactive read/write.
+- Empirically, a fresh `expect` spawn sometimes captures zero bytes even
+  though the board is fine and the port isn't held by anything else
+  (checked via `lsof` and `ioreg`) — a physical USB-serial adapter replug
+  immediately before the `expect` attempt reliably fixed this, though the
+  underlying cause was never root-caused. Not every dead-looking attempt is
+  this, though: once, "no board response" turned out to be the board
+  genuinely idle at a `sulogin` maintenance prompt that doesn't reprint
+  itself on a bare `\r` — always check for real evidence (a raw `cat`/`dd`
+  read with zero bytes, not just an expect-pattern miss) before assuming
+  it's a connection problem.
+- A `screen -ls`/`quit` sweep plus an `lsof` check on the device node before
+  every new attempt avoids "Resource busy" from a previous attempt's
+  half-dead session still holding the port.
+- A new failure mode (2026-08-09, not seen earlier in this project): the
+  daemon `screen` session itself vanished outright — `screen -ls` went from
+  showing it `(Attached)` to "No Sockets found" with no `quit`/kill issued —
+  multiple times in one sitting, each time needing a fresh `-dmS` session
+  under a new name. Not root-caused (macOS terminal/pty churn? adapter
+  hiccup that didn't drop the `/dev` node itself?). Before concluding "no
+  data = broken connection": a raw `cat`/`dd` read showing zero bytes only
+  rules out screen-level issues — it does NOT distinguish "board genuinely
+  silent because it's idle and nothing's been sent to it" from "connection
+  actually broken." Send an actual keystroke (not just passive read) before
+  drawing conclusions, and ask what the heartbeat LED is doing — that's the
+  fastest ground-truth check for "is it even powered/running" independent
+  of serial entirely.

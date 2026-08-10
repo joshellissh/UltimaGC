@@ -1,0 +1,18 @@
+--- a/configs/k3_r5_falcon.config
++++ b/configs/k3_r5_falcon.config
+@@ -29,11 +29,13 @@
+ CONFIG_SPL_STACK_R_MALLOC_SIMPLE_LEN=0x2700000
+ 
+ # Disable all unsupported boot media to save space
+-# CONFIG_SPL_SYS_MMCSD_RAW_MODE is not set
+ # CONFIG_SPL_SPI_FLASH_SUPPORT is not set
+ # CONFIG_SPL_YMODEM_SUPPORT is not set
+-# CONFIG_SUPPORT_EMMC_BOOT is not set
+ # CONFIG_SPL_NAND_SUPPORT is not set
+ # CONFIG_SPL_NOR_SUPPORT is not set
+ # CONFIG_SPL_RAM_DEVICE is not set
+ # CONFIG_SPL_FS_FAT is not set
++
++# ultima: re-enabled for eMMC boot0/boot1 raw-mode falcon boot support
++CONFIG_SPL_SYS_MMCSD_RAW_MODE=y
++CONFIG_SUPPORT_EMMC_BOOT=y

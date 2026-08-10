@@ -15,3 +15,23 @@ PACKAGES:prepend:beagleplay-ti = "${FALCON_PKG} "
 # variant BeaglePlay actually builds.
 FILESEXTRAPATHS:prepend := "${THISDIR}/u-boot-ti-staging:"
 SRC_URI:append = " file://0001-arm-dts-k3-am625-beagleplay-add-falcon-boot-binman-.patch"
+
+# k3_r5_falcon.config disables raw MMC/eMMC boot support
+# (CONFIG_SPL_SYS_MMCSD_RAW_MODE, CONFIG_SUPPORT_EMMC_BOOT) "to save space",
+# since falcon mode reads tifalcon.bin/fitImage off an ext4 partition and only
+# needs filesystem boot. This patch re-enables both, for eMMC boot.
+#
+# Honest scope note: this is part of the configuration that is hardware-verified
+# to boot from eMMC, but it was never independently re-tested with the patch
+# removed, and it is NOT what fixed the long ROM-level failure that section
+# "eMMC persistence" in NOTES.md describes — that was the falcon *payload*
+# (tifalcon.bin, ~995KB) being written into boot0 where the ROM expects the R5
+# SPL (tiboot3.bin, ~274KB). Keep it unless you have a reason and a board in
+# hand to retest without it.
+#
+# Patching the fragment file in place is deliberate: a second
+# UBOOT_CONFIG_FRAGMENTS entry does not work here. Unlike k3_r5_falcon.config,
+# which is a real file already in the u-boot source tree's configs/, a file only
+# fetched via SRC_URI never lands in configs/ where the merge-config make rule
+# looks for it.
+SRC_URI:append = " file://0001-k3_r5_falcon-enable-eMMC-raw-boot-support.patch"
