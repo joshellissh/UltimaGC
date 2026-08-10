@@ -347,19 +347,63 @@ Window {
         text: sim.tripOdo.toFixed(1)
     }
 
-    // Trip reset button
-    Text {
+    // Trip reset button - a circular-arrow icon drawn on a Canvas rather
+    // than the U+21BA Text glyph this used to be. Neither bundled font
+    // (bahnschrift, range) contains that glyph, and this app has no
+    // guaranteed system fallback font to borrow it from (BeaglePlay's
+    // Yocto image ships none at all), so it rendered as a missing-glyph
+    // box on target. Canvas is proven to render here already (see
+    // boostRing above, same QT_QUICK_BACKEND=software path).
+    Item {
+        id: tripReset
         x: 1040
-        y: tripText.y
-        font.pixelSize: 24
-        color: tripResetArea.pressed ? "#ffffff" : "#aaaaaa"
-        text: "\u21BA"
+        y: tripText.y - 2
+        width: 26
+        height: 26
         z: 200
+
+        Canvas {
+            id: resetIcon
+            anchors.fill: parent
+            property color strokeColor: tripResetArea.pressed ? "#ffffff" : "#aaaaaa"
+            onStrokeColorChanged: requestPaint()
+            onPaint: {
+                var ctx = getContext("2d")
+                ctx.reset()
+                var cx = width / 2
+                var cy = height / 2
+                var r = width / 2 - 4
+
+                // Arc sweeps clockwise the long way from 9 o'clock round to
+                // 6 o'clock, leaving a gap in the bottom-left quadrant.
+                // Ending exactly at 6 o'clock (PI/2) means the direction of
+                // travel there is straight left - an axis-aligned arrowhead,
+                // no trig needed for its shape.
+                ctx.strokeStyle = strokeColor
+                ctx.lineWidth = 2.5
+                ctx.lineCap = "round"
+                ctx.beginPath()
+                ctx.arc(cx, cy, r, Math.PI, Math.PI / 2, false)
+                ctx.stroke()
+
+                var tipX = cx - r
+                var tipY = cy + r
+                var headLen = 6
+                var headWidth = 7
+                ctx.fillStyle = strokeColor
+                ctx.beginPath()
+                ctx.moveTo(tipX - headLen, tipY)
+                ctx.lineTo(tipX + headLen * 0.6, tipY - headWidth / 2)
+                ctx.lineTo(tipX + headLen * 0.6, tipY + headWidth / 2)
+                ctx.closePath()
+                ctx.fill()
+            }
+        }
 
         MouseArea {
             id: tripResetArea
             anchors.fill: parent
-            anchors.margins: -10
+            anchors.margins: -6
             onClicked: {
                 sim.tripOdo = 0
                 sim.save()

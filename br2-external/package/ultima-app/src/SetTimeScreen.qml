@@ -64,7 +64,6 @@ Item {
 
             StepButton {
                 anchors.horizontalCenter: parent.horizontalCenter
-                glyph: "▲"
                 onClicked: root.hour12 = root.hour12 === 12 ? 1 : root.hour12 + 1
             }
             Text {
@@ -77,7 +76,7 @@ Item {
             }
             StepButton {
                 anchors.horizontalCenter: parent.horizontalCenter
-                glyph: "▼"
+                pointDown: true
                 onClicked: root.hour12 = root.hour12 === 1 ? 12 : root.hour12 - 1
             }
         }
@@ -96,7 +95,6 @@ Item {
 
             StepButton {
                 anchors.horizontalCenter: parent.horizontalCenter
-                glyph: "▲"
                 onClicked: root.minute = root.minute === 59 ? 0 : root.minute + 1
             }
             Text {
@@ -109,7 +107,7 @@ Item {
             }
             StepButton {
                 anchors.horizontalCenter: parent.horizontalCenter
-                glyph: "▼"
+                pointDown: true
                 onClicked: root.minute = root.minute === 0 ? 59 : root.minute - 1
             }
         }
@@ -120,7 +118,6 @@ Item {
 
             StepButton {
                 anchors.horizontalCenter: parent.horizontalCenter
-                glyph: "▲"
                 onClicked: root.isPM = !root.isPM
             }
             Text {
@@ -133,7 +130,7 @@ Item {
             }
             StepButton {
                 anchors.horizontalCenter: parent.horizontalCenter
-                glyph: "▼"
+                pointDown: true
                 onClicked: root.isPM = !root.isPM
             }
         }
@@ -156,9 +153,15 @@ Item {
         }
     }
 
+    // Up/down triangle drawn on a Canvas rather than a Text glyph — neither
+    // bundled font (bahnschrift, range) contains U+25B2/U+25BC, and this app
+    // has no guaranteed system fallback font to borrow them from (BeaglePlay's
+    // Yocto image ships none at all), so the glyphs rendered as missing-glyph
+    // boxes on target. Canvas is proven to render here already (see
+    // boostRing in main.qml, same QT_QUICK_BACKEND=software path).
     component StepButton: Rectangle {
         id: stepBtn
-        property alias glyph: glyphText.text
+        property bool pointDown: false
         signal clicked()
 
         width: 70
@@ -168,11 +171,30 @@ Item {
         border.color: "#555555"
         border.width: 1
 
-        Text {
-            id: glyphText
+        Canvas {
+            id: glyphCanvas
             anchors.centerIn: parent
-            font.pixelSize: 20
-            color: stepArea.pressed ? "white" : "#aaaaaa"
+            width: 20
+            height: 12
+            property color triColor: stepArea.pressed ? "white" : "#aaaaaa"
+            onTriColorChanged: requestPaint()
+            onPaint: {
+                var ctx = getContext("2d")
+                ctx.reset()
+                ctx.fillStyle = triColor
+                ctx.beginPath()
+                if (stepBtn.pointDown) {
+                    ctx.moveTo(0, 0)
+                    ctx.lineTo(width, 0)
+                    ctx.lineTo(width / 2, height)
+                } else {
+                    ctx.moveTo(0, height)
+                    ctx.lineTo(width, height)
+                    ctx.lineTo(width / 2, 0)
+                }
+                ctx.closePath()
+                ctx.fill()
+            }
         }
 
         MouseArea {
