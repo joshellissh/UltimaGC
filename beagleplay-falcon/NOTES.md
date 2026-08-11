@@ -56,6 +56,13 @@ and an odometer-persistence correctness scare that turned out to be a test
 methodology bug, not a real one — worth reading before trusting the
 `ultima-app.service` unit file's `Wants=`/`Requires=` choice again.
 
+**Confirmed with a real serial capture (2026-08-11, same day, eMMC,
+`measure-boot.sh`): power-on → first Qt frame is now 5.238s** — down from
+6.664s/7.298s (the two hardware runs in "Boot-time measurement: first Qt
+frame" below), a genuine **1.4–2.1s faster**, real power-on `t=0`, not
+proxied or estimated from kernel-clock deltas. See "Round-2 serial
+verification" further down for the raw capture.
+
 ## Build environment
 
 - `Dockerfile` + `run.sh` — builds a Yocto/TI SDK (`tisdk`) container.
@@ -875,6 +882,32 @@ not the QML-side work. Odometer on the fresh eMMC install reads the image's
 default (`2347.0`/`0.0`) — expected, `emmc-install.sh` writes the whole
 `.wic` including `/data`'s partition, and this bench board has no real
 drive history to preserve.
+
+### Round-2 serial verification: real power-on to first Qt frame, no proxy
+
+The kernel-clock numbers above are real and internally consistent, but
+every eMMC test in "round 2" was done over SSH/journalctl after the board
+was already up — none of it re-establishes a genuine power-on `t=0` the way
+the original "Boot-time measurement: first Qt frame" section's serial
+captures did. Closed that gap with one more `measure-boot.sh` run, eMMC,
+drain-to-2s-silence done by hand first (the "stale UART backlog" gotcha
+that section documents — confirmed 0 bytes drained, so `t=0` here is
+trustworthy, not contaminated):
+
+```
+falcon payload load      0.308s
+ATF start                1.079s   (+0.771s)
+first Qt frame            5.238s   (+4.159s)
+```
+
+`kernel entry`/`framebuffer ready` read "not seen" as expected (`quiet`
+cmdline, per "Boot-time optimization" above) — not a failure. Full log:
+`boot-logs/boot-20260811T122048.log`.
+
+**Power-on → first Qt frame: 5.238s**, directly comparable to the original
+two hardware runs (6.664s, 7.298s) with the same methodology, same
+instrument, same landmark. **1.4–2.1s faster**, real number, not estimated
+from a kernel-clock delta plus an assumed bootloader offset.
 
 ## Board boot-source behavior
 
