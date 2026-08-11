@@ -8,6 +8,26 @@ Window {
     visibility: Window.Windowed
     color: "black"
 
+    // Startup self-test: on launch, sweep every needle to full deflection
+    // and back while flashing every tell-tale icon, like a normal car's
+    // cluster does on power-up. Each needle/icon binding below checks
+    // startupActive and falls back to its real sim-driven expression once
+    // the sequence finishes, so this is purely a launch-time overlay — it
+    // doesn't change steady-state behavior.
+    property bool startupActive: true
+    property real startupFrac: 0
+    property bool startupFlash: false
+
+    SequentialAnimation {
+        running: true
+        PropertyAction { target: root; property: "startupFlash"; value: true }
+        NumberAnimation { target: root; property: "startupFrac"; to: 1; duration: 1000; easing.type: Easing.OutQuad }
+        PauseAnimation { duration: 200 }
+        NumberAnimation { target: root; property: "startupFrac"; to: 0; duration: 1000; easing.type: Easing.InQuad }
+        PropertyAction { target: root; property: "startupFlash"; value: false }
+        PropertyAction { target: root; property: "startupActive"; value: false }
+    }
+
     // Background layers, back to front: boost circle, gauge overlay, car
     //
     // The boost ring wraps the tachometer (same center/sweep as rpmGauge:
@@ -43,7 +63,7 @@ Window {
         readonly property real endAngle: 503
         readonly property real maxBoost: 30
 
-        property real displayBoost: sim.boost
+        property real displayBoost: startupActive ? startupFrac * maxBoost : sim.boost
         Behavior on displayBoost {
             NumberAnimation { duration: 250; easing.type: Easing.OutCubic }
         }
@@ -121,7 +141,7 @@ Window {
         width: 50; height: 50
         fillMode: Image.PreserveAspectFit
         source: "qrc:/icon_cruise.png"
-        visible: sim.cruiseControl
+        visible: startupActive ? startupFlash : sim.cruiseControl
     }
 
     // Left gauge: Speedometer — pivot at (351, 342)
@@ -131,7 +151,7 @@ Window {
         y: 342 - height / 2
         width: 600
         height: 600
-        value: sim.speed
+        value: startupActive ? minValue + startupFrac * (maxValue - minValue) : sim.speed
         minValue: 0
         maxValue: 220
         startAngle: 216.5
@@ -145,7 +165,7 @@ Window {
         y: 343 - height / 2
         width: 600
         height: 600
-        value: sim.rpm / 1000
+        value: startupActive ? minValue + startupFrac * (maxValue - minValue) : sim.rpm / 1000
         minValue: 0
         maxValue: 8
         startAngle: 270
@@ -159,7 +179,7 @@ Window {
         y: 602 - height / 2
         width: 200
         height: 200
-        value: sim.fuelLevel
+        value: startupActive ? minValue + startupFrac * (maxValue - minValue) : sim.fuelLevel
         minValue: 0
         maxValue: 1
         startAngle: 217
@@ -177,7 +197,7 @@ Window {
         y: 602 - height / 2
         width: 200
         height: 200
-        value: sim.coolantTemp
+        value: startupActive ? minValue + startupFrac * (maxValue - minValue) : sim.coolantTemp
         minValue: 160
         maxValue: 240
         startAngle: 142
@@ -194,7 +214,7 @@ Window {
         x: 25
         y: 23
         source: "qrc:/left_indicator.png"
-        visible: true
+        visible: startupActive ? startupFlash : sim.leftIndicator
     }
 
     // Right turn signal indicator (mirrored)
@@ -202,7 +222,7 @@ Window {
         x: 1600 - 25 - width
         y: 23
         source: "qrc:/left_indicator.png"
-        visible: true
+        visible: startupActive ? startupFlash : sim.rightIndicator
         mirror: true
     }
 
@@ -220,39 +240,43 @@ Window {
     Image {
         x: 800 - width / 2; y: 558 - height / 2
         source: "qrc:/icon_axle_lift.png"
-        visible: true
+        visible: startupActive ? startupFlash : sim.axleLift
     }
 
-    // Top indicator row — evenly spaced at 80px intervals, centered at x=800
+    // Top indicator row — evenly spaced at 80px intervals, centered at x=800.
+    // Oil/battery/coolant are true warnings, so once startup is done they
+    // also gate on _warnFlash to blink at 300ms; check engine and the beam
+    // indicators are steady state lamps, not warnings, so they just track
+    // their sim property directly.
     Image {
         x: 640 - width / 2; y: 23
         source: "qrc:/icon_oil_pressure.png"
-        visible: true
+        visible: startupActive ? startupFlash : (sim.oilPressureWarn && _warnFlash)
     }
     Image {
         x: 720 - width / 2; y: 23
         source: "qrc:/icon_check_engine.png"
-        visible: true
+        visible: startupActive ? startupFlash : sim.checkEngine
     }
     Image {
         x: 800 - width / 2; y: 23
         source: "qrc:/icon_low_beam.png"
-        visible: true
+        visible: startupActive ? startupFlash : sim.lowBeams
     }
     Image {
         x: 800 - width / 2; y: 23
         source: "qrc:/icon_high_beam.png"
-        visible: true
+        visible: startupActive ? startupFlash : sim.highBeams
     }
     Image {
         x: 880 - width / 2; y: 23
         source: "qrc:/icon_battery.png"
-        visible: true
+        visible: startupActive ? startupFlash : (sim.batteryWarn && _warnFlash)
     }
     Image {
         x: 960 - width / 2; y: 23
         source: "qrc:/icon_coolant_warn.png"
-        visible: true
+        visible: startupActive ? startupFlash : (sim.coolantWarn && _warnFlash)
     }
 
     // Fonts
