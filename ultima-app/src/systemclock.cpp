@@ -20,7 +20,7 @@ SystemClock::SystemClock(QObject *parent) : QObject(parent)
 }
 
 #ifdef __linux__
-// Best-effort — silently does nothing if there's no /dev/rtc0 (e.g. RPi5).
+// Best-effort — silently does nothing if there's no /dev/rtc0.
 static void writeHardwareRtc(time_t t)
 {
     int fd = open("/dev/rtc0", O_RDONLY);

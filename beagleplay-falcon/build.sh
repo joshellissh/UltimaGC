@@ -4,7 +4,7 @@
 # (see run.sh/NOTES.md for how that volume was first populated).
 #
 # Bind-mounts the shared, board-agnostic Qt app source
-# (br2-external/package/ultima-app/src) read-only into the container —
+# (../ultima-app/src) read-only into the container —
 # see meta-ultima-beagleplay-src/recipes-ultima/ultima-app/ultima-app.bb,
 # which copies it into WORKDIR before building rather than building in
 # place, so this mount can stay read-only and the shared source tree is
@@ -17,7 +17,7 @@ cd "$(dirname "$0")"
 
 IMAGE=falcon-yocto:latest
 VOLUME=falcon-yocto-build
-ULTIMA_APP_SRC="$(cd ../br2-external/package/ultima-app/src && pwd)"
+ULTIMA_APP_SRC="$(cd ../ultima-app/src && pwd)"
 TARGET="${1:-tisdk-base-image}"
 
 # Sync this directory's layer into the volume — the volume is the only

@@ -371,7 +371,7 @@ rebuilding from a fresh volume.
 **What was missing, and why**: this Yocto/Arago build had **no Qt5 at all**
 — checked every layer already in `bblayers.conf`, zero `qtbase`/
 `qtdeclarative` recipes, only an inactive Qt6 dynamic-layer hook. Ultima-app
-is qmake/Qt5/QML (`br2-external/package/ultima-app/`, shared and
+is qmake/Qt5/QML (`ultima-app/`, shared and
 board-agnostic with the RPi5/Buildroot builds — see UltimaGC's `CLAUDE.md`).
 Copying Buildroot's already-built Qt5 5.15.14 libs over was considered and
 rejected: Buildroot's toolchain is glibc 2.40, this Yocto build is glibc
@@ -402,7 +402,7 @@ the Yocto tree instead.
 
 **ultima-app recipe** (`recipes-ultima/ultima-app/ultima-app.bb`): builds
 the exact same source tree as the Buildroot RPi5/BeaglePlay builds
-(`br2-external/package/ultima-app/src`) rather than a duplicated copy —
+(`ultima-app/src`) rather than a duplicated copy —
 bind-mounted read-only into the container at `/home/builder/yocto/ultima-app-src`
 (`build.sh`), then copied into `${WORKDIR}` by a `do_unpack:append` python
 function before `qmake5`'s `do_configure` runs, so the build never writes
@@ -631,7 +631,7 @@ checked whether the new QML had even reached the board — it hadn't:
 (just `ultima-app.service` + `70-can.rules`) — nothing hashes the contents
 of `ULTIMA_APP_EXTERNAL_SRC`, the bind-mounted external source tree the
 `do_unpack:append` python actually copies from.** A source-only edit (QML,
-C++, anything under `br2-external/package/ultima-app/src`) leaves every
+C++, anything under `ultima-app/src`) leaves every
 task's signature unchanged, so bitbake reuses the stale sstate object and
 silently ships the OLD binary. Confirmed directly: two full image builds in
 a row after editing the QML produced zero "ultima-app" task lines in either

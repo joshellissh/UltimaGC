@@ -7,7 +7,7 @@ RDEPENDS:${PN} = "qtbase-plugins qtdeclarative-qmlplugins iproute2"
 inherit qmake5 systemd
 
 # Same shared, board-agnostic source UltimaGC's Buildroot RPi5/BeaglePlay
-# builds use (br2-external/package/ultima-app/src) — bind-mounted read-only
+# builds used (ultima-app/src) — bind-mounted read-only
 # at a fixed container path (see build.sh) and copied into WORKDIR here so
 # the build never writes into the shared source tree, mirroring what
 # Buildroot's own "local" site method already does for this same package.

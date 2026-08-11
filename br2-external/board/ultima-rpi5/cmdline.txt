@@ -1,1 +1,0 @@
-root=/dev/mmcblk0p2 rootwait ro console=ttyAMA10,115200 loglevel=1 quiet logo.nologo vt.global_cursor_default=0 numa=off nokaslr

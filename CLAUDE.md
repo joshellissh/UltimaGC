@@ -1,80 +1,63 @@
 # Ultima
 
 Minimal Linux image that boots directly into a fullscreen Qt5/QML gauge cluster, fed
-live data from a car's CAN bus. Ships on Raspberry Pi 5, with a BeaglePlay (AM625) port
-that's hardware-verified and running.
+live data from a car's CAN bus. Ships on BeaglePlay (AM625), hardware-verified and
+running.
 
-**The two boards use two entirely different build systems — this split is
-permanent, not incidental:**
+BeaglePlay's build is Yocto/TI SDK: `beagleplay-falcon/`,
+`beagleplay-falcon/NOTES.md`. It uses TI's downstream `ti-u-boot` fork rather than
+mainline U-Boot because TI Falcon boot mode (R5 SPL jumping straight to the kernel,
+skipping A53 SPL/U-Boot-proper/GRUB — the biggest boot-time win found on this board)
+needs logic that only exists in that fork.
 
-- **RPi5 → Buildroot.** `br2-external/`, `SETUP-RPI5.md`. Mainline U-Boot has
-  everything this board needs.
-- **BeaglePlay → Yocto/TI SDK.** `beagleplay-falcon/`, `beagleplay-falcon/NOTES.md`.
-  Not a Buildroot target and never has been as a *working* path — a Buildroot
-  BeaglePlay board config existed early on but was scaffolded without hardware in
-  hand, got hardware-verified once, and was then deleted once the Yocto path proved
-  out end-to-end (2026-08-08) and made it redundant. The reason for the split is real,
-  not historical accident: BeaglePlay's TI Falcon boot mode (R5 SPL jumping straight
-  to the kernel, skipping A53 SPL/U-Boot-proper/GRUB — the biggest boot-time win
-  found on this board) needs logic that only exists in TI's downstream `ti-u-boot`
-  fork, not in the mainline U-Boot Buildroot pins. **So: if the conversation is about
-  BeaglePlay, assume Yocto and look in `beagleplay-falcon/`. If it's about RPi5,
-  assume Buildroot.** Don't go looking for a `br2-external/board/ultima-beagleplay/`
-  or an `ultima_beagleplay_defconfig` — they don't exist anymore.
+The project previously also shipped on Raspberry Pi 5 via a separate Buildroot build
+(`br2-external/`, `SETUP-RPI5.md`). That board and its whole build system have been
+removed — don't go looking for `br2-external/`, `ultima_rpi5_defconfig`, or
+`SETUP-RPI5.md`; none of it exists anymore. The Qt app source that used to live at
+`br2-external/package/ultima-app/` now lives at top-level `ultima-app/` (see below).
 
-Both boards run the same Qt app source (`br2-external/package/ultima-app/`,
-board-agnostic) — Buildroot builds it directly as a package; the Yocto side
-bind-mounts that same source directory in and builds it via its own recipe
-(`beagleplay-falcon/meta-ultima-beagleplay-src/`). One app, two unrelated build
-pipelines around it.
-
-**Read `SETUP-RPI5.md` first** for anything touching the RPi5 build, boot sequence,
-kernel config, or Qt app structure — it's a complete, maintained reproduction guide
-(host setup, VM setup, defconfig, kernel fragments, init scripts, CAN bus integration,
-flashing, EEPROM, debugging). This file only covers what isn't obvious from reading
-that guide or the code. **Read `beagleplay-falcon/NOTES.md` first** for the BeaglePlay
-port — it's the equivalent reproduction/status doc for the Yocto build, including
-hardware gotchas (boot-mode switch timing, a kernel-module-autoload bug that looked
-like an app crash, an SD-card write-error scare from a crash-loop) worth knowing
-before touching that board again.
+**Read `beagleplay-falcon/NOTES.md` first** for anything touching the build, boot
+sequence, kernel config, or flashing — it's the reproduction/status doc for the
+Yocto build, including hardware gotchas (boot-mode switch timing, a
+kernel-module-autoload bug that looked like an app crash, an SD-card write-error
+scare from a crash-loop) worth knowing before touching the board again. **Read
+`GAUGE-CLUSTER.md`** for the Qt app's structure (source/QML/asset layout) and the
+CAN bus integration (ECU, DBC, frame map, debugging) — that content is board-agnostic
+and doesn't belong in the Yocto-specific notes.
 
 ## Repo layout
 
-- `br2-external/package/ultima-app/` — the Qt app source. **Shared, board-agnostic.**
-  No RPi-specific code lives here (confirmed by audit); don't fork it per board.
-- `br2-external/board/ultima-rpi5/`, `br2-external/configs/ultima_rpi5_defconfig` —
-  RPi5's Buildroot board config: boot config, kernel fragments, DT overlays, init
-  overlay, KMS config.
-- `scripts/` — `setup-vm.sh`, `dev-build.sh`, `dev-build-wsl.sh` are shared (VM deps
-  and local app-only dev builds don't depend on the target board). `build-rpi5.sh`,
-  `flash-rpi5.sh`, `read-logs-rpi5.sh` are RPi5/Buildroot-specific.
+- `ultima-app/` — the Qt app source. Board-agnostic; the Yocto build bind-mounts
+  `src/` in read-only and builds it via its own recipe
+  (`beagleplay-falcon/meta-ultima-beagleplay-src/`). `can/` holds the reference
+  `.dbc` file (see `GAUGE-CLUSTER.md`).
+- `scripts/` — `dev-build.sh` and `dev-build-wsl.sh` are local native dev builds of
+  the Qt app (macOS/WSL2), don't depend on target hardware.
 - `beagleplay-falcon/` — the whole BeaglePlay side: Yocto/TI-SDK (`tisdk`,
-  Docker-based, runs via local Docker/OrbStack on the Mac, not the `ssh ubuntu@orb`
-  VM Buildroot uses) build producing TI Falcon boot mode plus `ultima-app` on top of
-  it. `meta-ultima-beagleplay-src/` is the Yocto layer with the app recipe, Qt5/
-  `linuxfb` packaging, and kernel fragments; `meta-falcon-beagleplay-src/` is the
-  separate layer that wires up TI's falcon-boot logic (kept apart from the app
-  layer — unrelated concerns). See `beagleplay-falcon/NOTES.md` for the full story.
+  Docker-based, runs via local Docker/OrbStack on the Mac) build producing TI Falcon
+  boot mode plus `ultima-app` on top of it. `meta-ultima-beagleplay-src/` is the
+  Yocto layer with the app recipe, Qt5/`linuxfb` packaging, and kernel fragments;
+  `meta-falcon-beagleplay-src/` is the separate layer that wires up TI's
+  falcon-boot logic (kept apart from the app layer — unrelated concerns). See
+  `beagleplay-falcon/NOTES.md` for the full story.
 
 ## Environment
 
-- **RPi5/Buildroot** build happens on an OrbStack Ubuntu VM (`ssh ubuntu@orb`,
-  Buildroot cloned to `~/ultima/buildroot`), not on this Mac. Sync source with
-  `rsync` before building.
-- **BeaglePlay/Yocto** build happens via local Docker (OrbStack) directly on this
-  Mac, not the VM — `beagleplay-falcon/build.sh` / `run.sh`. Build state lives in a
-  Docker-managed volume (`falcon-yocto-build`), not a bind mount — see
-  `beagleplay-falcon/NOTES.md` for why.
-- The Mac can run the Qt app natively for QML/layout iteration (`scripts/dev-build.sh`,
-  Qt 6 via Homebrew) — see "Local macOS Dev Build" in `SETUP-RPI5.md`. `CanBus`
-  simulates driving data on non-Linux instead of reading real CAN.
-- Target hardware (Pi or BeaglePlay + Syvecs S7+ ECU + CAN adapter) is not available
-  in every session — don't assume you can flash or CAN-sniff live; ask before
-  assuming access.
+- Build happens via local Docker (OrbStack) directly on this Mac —
+  `beagleplay-falcon/build.sh` / `run.sh`. Build state lives in a Docker-managed
+  volume (`falcon-yocto-build`), not a bind mount — see `beagleplay-falcon/NOTES.md`
+  for why.
+- The Mac can run the Qt app natively for QML/layout iteration
+  (`scripts/dev-build.sh`, Qt 6 via Homebrew) — see "Local macOS Dev Build" in
+  `GAUGE-CLUSTER.md`. `CanBus` simulates driving data on non-Linux instead of
+  reading real CAN.
+- Target hardware (BeaglePlay + Syvecs S7+ ECU + CAN adapter) is not available in
+  every session — don't assume you can flash or CAN-sniff live; ask before assuming
+  access.
 
 ## Rules that are easy to get wrong
 
-**Car / ECU — applies regardless of which board is driving the dash:**
+**Car / ECU:**
 
 - **CAN1 is the powertrain bus on the ECU — never touch it.** Only CAN2 carries dash
   data; that's the only bus this project reads or writes.
@@ -83,18 +66,7 @@ before touching that board again.
 - Syvecs `.SC` config files are proprietary/encrypted — don't try to parse one to
   recover CAN Tx config. Ask the user for a SCal screenshot instead.
 
-**RPi5/Buildroot-specific (see `SETUP-RPI5.md` for full context):**
-
-- Don't remove the `remount,rw` line from the inittab overlay — it looks redundant
-  next to `S00remountro` but removing it breaks VC4 display init.
-- Kernel `cma=` can't go below 320MB, or `raspberrypi-clk` fails to probe and VC4
-  DRM breaks.
-- The app launches before udev (for boot speed), so anything reading `/dev` or a
-  network interface at startup (CanBus's `can0`) must retry, not assume presence.
-  **This is a Buildroot-only pattern** — the Yocto/BeaglePlay build boots normally
-  under systemd/udev and does not do this; don't port this assumption over.
-
-**BeaglePlay/Yocto-specific (see `beagleplay-falcon/NOTES.md` for full context):**
+**BeaglePlay/Yocto (see `beagleplay-falcon/NOTES.md` for full context):**
 
 - Holding **USR** forces SD boot over eMMC — but it must be held *before* power/reset
   is applied and kept down for a couple seconds after, not tapped once boot is
@@ -111,17 +83,11 @@ before touching that board again.
   diagnose — a rapid crash-loop hammering journald/coredump writes onto a live SD
   card produced real `I/O error`s on the rootfs partition in one session. Reflash
   fresh afterward rather than trust that card's state.
-- No WiFi in this build (unlike the Buildroot boards) — only wired Ethernet gives
-  SSH/dropbear a path in; otherwise it's serial-console-only.
+- No WiFi in this build — only wired Ethernet gives SSH/dropbear a path in;
+  otherwise it's serial-console-only.
 
 ## Workflow shortcuts
 
-**RPi5/Buildroot:**
-- Overlay/init script change only: `make` (no dirclean).
-- App source change: `make ultima-app-dirclean && make`.
-- Fast iteration without a full reflash: see "Hot-Deploy to Pi" in `SETUP-RPI5.md`.
-
-**BeaglePlay/Yocto:**
 - `beagleplay-falcon/build.sh [target]` syncs the Yocto layer into the build volume
   and runs bitbake — defaults to `tisdk-base-image`. See `beagleplay-falcon/NOTES.md`
   for the full build/flash/verify cycle.

@@ -4,14 +4,13 @@
 #include <QObject>
 
 // Lets the QML time-set screen push a new wall-clock time to the kernel.
-// The app runs as root (see S11app), so clock_settime() needs no privilege
-// escalation on target.
+// The app runs as root (its systemd unit has no User=), so clock_settime()
+// needs no privilege escalation on target.
 //
 // Also best-effort writes through to a battery-backed hardware RTC at
 // /dev/rtc0 if one is present, so the new time survives a reboot. BeaglePlay
-// has one (onboard BQ32002); RPi5 doesn't. Rather than fork this class per
-// board, it just probes for /dev/rtc0 at runtime and silently skips the
-// write when it's absent — same pattern CanBus uses for can0.
+// has one (onboard BQ32002). Probes for /dev/rtc0 at runtime and silently
+// skips the write when it's absent — same pattern CanBus uses for can0.
 class SystemClock : public QObject
 {
     Q_OBJECT
