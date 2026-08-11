@@ -63,6 +63,20 @@ frame" below), a genuine **1.4–2.1s faster**, real power-on `t=0`, not
 proxied or estimated from kernel-clock deltas. See "Round-2 serial
 verification" further down for the raw capture.
 
+**Update (2026-08-11): round 3 — another ~1.1s found, fixed, and confirmed
+with a real serial capture, same day.** `ultima-data-mount.service` and
+`ultima-app.service` both carried a stale `After=systemd-udevd.service`, the
+same class of bug as the already-fixed `fb0`/tidss holdover — the block
+device they actually need comes from devtmpfs at kernel driver-probe time
+(~0.48s), over a second before udevd finishes starting (~2.7s). Proven with
+a live hand-edit, ported to source, rebuilt, reflashed to SD then eMMC
+(first frame kernel_ts 4.470s → 3.338s on eMMC), odometer-persistence
+re-verified clean twice along the way. **Real serial power-on capture:
+4.536s**, down from round 2's confirmed 5.238s and **2.13–2.76s faster than
+the original 6.664s/7.298s baseline**. See "Boot-time optimization, round
+3" below for the full investigation, including a `build.sh`
+stale-image-pull trap hit and fixed along the way.
+
 ## Build environment
 
 - `Dockerfile` + `run.sh` — builds a Yocto/TI SDK (`tisdk`) container.
@@ -908,6 +922,151 @@ cmdline, per "Boot-time optimization" above) — not a failure. Full log:
 two hardware runs (6.664s, 7.298s) with the same methodology, same
 instrument, same landmark. **1.4–2.1s faster**, real number, not estimated
 from a kernel-clock delta plus an assumed bootloader offset.
+
+## Boot-time optimization, round 3: a second stale-udevd holdover, ~1.1s more (2026-08-11)
+
+Round 2 fixed `ultima-app.service` waiting on `basic.target`'s
+`systemd-resolved`/D-Bus. That left `ultima-app.service` starting at
+kernel_ts 2.913s (see "Final eMMC comparison" above). Going back to ask
+"what's left to trim in the pre-app path" surfaced a second, bigger bug in
+the same family.
+
+### The finding
+
+`ultima-data-mount.service` carries `After=systemd-udevd.service
+Wants=systemd-udevd.service`, and `ultima-app.service` carries the same pair
+(plus its real dependency on `ultima-data-mount.service`). Both looked
+reasonable — the data-mount unit mounts a block device, udev feels like the
+obvious prerequisite. **It isn't.** `ultima-data-mount.sh` derives `/data`'s
+device from `findmnt -no SOURCE /` and does simple string substitution
+(`mmcblk0p2` → `mmcblk0p3`) — a raw device node, deliberately never a udev
+`by-uuid`/`by-label` symlink (see that script's own comment: SD and eMMC are
+`dd`'d from the same image, so UUID/LABEL would collide the moment both are
+visible at once). Checked the actual boot log for when that raw node
+appears:
+
+```
+[    0.479902] beagleplay-ti kernel: mmcblk0: mmc0:0001 TB2916 14.6 GiB
+[    0.481564] beagleplay-ti kernel:  mmcblk0: p1 p2 p3
+```
+
+The kernel's own MMC block-layer partition scan creates `/dev/mmcblk0p3` via
+devtmpfs at **kernel_ts 0.48s** — driver-probe time, nothing to do with
+udev — over a second before `systemd-udevd` even starts (`Starting
+Rule-based Manager for Device Events and Files...` doesn't appear until
+~2.23s in the same boot, and it doesn't finish until ~2.70s). `/data`'s
+mountpoint directory is baked into the rootfs at build time too (`install -d
+${D}/data` in `ultima-app.bb`), not created by `systemd-tmpfiles` at
+runtime, so there's no other hidden prerequisite hiding behind the udevd
+wait either. This is the exact same shape as the `dev-fb0.device` trap
+`ultima-app.service`'s own comment already warns about (tidss being
+kernel-built-in makes the framebuffer device exist via devtmpfs before
+systemd even starts) — just not yet found for udevd specifically.
+
+`ultima-app.service`'s own `After=systemd-udevd.service` had even less
+justification: its own comment already flagged this as "very likely a
+holdover from when tidss was still a module," CAN self-retries
+(`CanBus::tryConnect()`), and it was never acted on.
+
+### Fix and verification (hardware, not yet ported through a full Yocto rebuild)
+
+Tested with the same fast-iteration technique used for the app binary, but
+on the two unit files instead: remounted `/` rw over SSH, hand-edited both
+`/usr/lib/systemd/system/{ultima-data-mount,ultima-app}.service` in place to
+drop `systemd-udevd.service` from `After=`/`Wants=` (keeping everything
+else, including `ultima-app.service`'s real `After=Wants=ultima-data-mount.service`),
+`systemctl daemon-reload`, rebooted.
+
+| | Round 2 (before) | Round 3 (after, hand-edit) |
+|---|---|---|
+| `ultima-data-mount.service` starts | kernel_ts 2.746s | **kernel_ts 1.860s** |
+| `ultima-app.service` starts | kernel_ts 2.914s | **kernel_ts 2.250s** |
+| first frame rendered | kernel_ts 4.470s | **kernel_ts 3.09–3.34s** (two reboots, run-to-run variance) |
+
+Zero failed units, zero ordering cycles, both reboots. `local-fs.target`
+itself is now reached (3.376s) *after* first frame — direct confirmation
+the app was never waiting on anything else in that target, only on this
+one stale `After=`.
+
+**Odometer-persistence correctness re-checked** (this is the exact ordering
+area that produced false-positive failures in round 2 — see "Odometer-
+persistence correctness test" above): `systemctl stop ultima-app`, wrote a
+distinctive test value (`totalOdo: 99999, tripOdo: 42`) to
+`/data/odometer.json`, rebooted with the service left enabled. Value
+survived intact, and the app's own journal confirmed it loaded (not
+defaulted) and re-saved it: `OdoStore: saved totalOdo=99999.0
+tripOdo=42.0`. Clean.
+
+**Source ported** (`ultima-app.service`, `ultima-data-mount.service` in
+`meta-ultima-beagleplay-src/recipes-ultima/`) with the reasoning above
+recorded in each unit's own comment.
+
+### `build.sh` doesn't pull the built image out — a stale-flash trap
+
+Rebuilt from the ported source (`./build.sh`, all 8231 tasks succeeded, 2
+benign "tainted from a forced run" warnings, both pre-existing) and flashed
+to SD to verify. First attempt still showed the *old*
+`After=systemd-udevd.service` on the board after flashing. Root cause:
+**`build.sh` only runs bitbake inside the Docker volume — it does not copy
+the resulting `.wic.xz` out to the host.** Its own last line says so
+("Pull images out with the docker cp command..."), easy to miss since nothing
+errors. `flash.sh` flashes whatever's already sitting in `deploy-falcon/` on
+the host, so it silently re-flashed the stale round-2 image (confirmed by
+file mtime: `deploy-falcon/tisdk-base-image-beagleplay-ti.rootfs.wic.xz` was
+timestamped from the earlier eMMC-push build, hours before this rebuild
+finished). Fixed by actually running the `docker cp`-equivalent command from
+"Build environment" above before flashing. **Lesson: after `./build.sh`,
+always re-pull the image before flashing — a successful build log proves
+nothing about what's sitting in `deploy-falcon/`.**
+
+### Verified from the real from-source build (not the hand-edit), SD
+
+| | kernel_ts |
+|---|---|
+| `/data` mount starts → finishes | 2.042s → 2.336s |
+| `ultima-app.service` starts | 2.415s |
+| `app main()` entered | 2.857s |
+| first frame rendered | **3.829s** |
+
+Zero failed units, zero ordering cycles. (SD is slower than eMMC per the
+established pattern elsewhere in this file — not directly comparable to the
+round-2 eMMC numbers; the eMMC comparison is still pending, see below.)
+Odometer-persistence re-verified a second time on this actual from-source
+build (not just the earlier hand-edit): `systemctl stop ultima-app`, wrote
+`totalOdo: 88888, tripOdo: 7`, rebooted with the service enabled — value
+survived, `OdoStore: saved totalOdo=88888.0 tripOdo=7.0` in the journal.
+Clean.
+
+### Pushed to eMMC, final eMMC comparison
+
+`emmc-push.sh` from the SD-booted board (first attempt correctly used the
+freshly re-pulled `.wic.xz`, not the stale one from the earlier trap above).
+Clean install, zero failed units, zero ordering cycles on the production
+device:
+
+| | Round 2 (eMMC) | Round 3 (eMMC, from-source) |
+|---|---|---|
+| `/data` mount starts → finishes | 2.746s → 2.852s | **1.891s → 2.178s** |
+| `ultima-app.service` starts | 2.914s | **2.261s** |
+| first frame rendered (kernel_ts) | 4.470s | **3.338s** |
+
+### Round-3 serial verification: real power-on to first Qt frame
+
+Same instrument, same methodology as every other number in this file:
+drain-to-2s-silence confirmed (0 bytes) with the board powered off, then a
+real power-on `t=0` via `measure-boot.sh`:
+
+```
+falcon payload load      0.308s
+ATF start                1.078s   (+0.770s)
+first Qt frame            4.536s   (+3.457s)
+```
+
+**Power-on → first Qt frame: 4.536s.** Down from the round-2-confirmed
+**5.238s** (0.70s faster, matching the kernel-clock delta above almost
+exactly), and **2.13–2.76s faster than the original 6.664s/7.298s
+baseline** this whole investigation started from. Full log:
+`boot-logs/boot-20260811T135201.log`.
 
 ## Board boot-source behavior
 
