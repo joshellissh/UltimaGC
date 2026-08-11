@@ -37,6 +37,15 @@ measured at all). Root-caused the `CONFIG_DRM_TIDSS` silent-downgrade this
 file used to flag as unsolved, quieted the boot console, and trimmed unused
 services. See "Boot-time optimization" below.
 
+**Update (2026-08-11): power-on → first Qt frame measured directly, not
+proxied.** The ~6.94s number above was actually `ultima-app.service`
+starting, not a frame on screen. `ultima-app` now hooks
+`QQuickWindow::afterRendering`/`frameSwapped` and logs the real first paint
+to `/dev/kmsg` at level 3, which survives the `quiet` cmdline and lands on
+the serial console in the same timeline as power-on — no cross-clock
+offset math needed. Two hardware runs: **6.664s and 7.298s**. See
+"Boot-time measurement: first Qt frame" below.
+
 ## Build environment
 
 - `Dockerfile` + `run.sh` — builds a Yocto/TI SDK (`tisdk`) container.
@@ -333,6 +342,115 @@ affect the post-kernel-entry numbers above.
   superblock). The actual hazard the check guards against is a superblock
   *larger* than its partition ("bad geometry", unbootable). Fixed:
   `[ "$FS_KB" -le "$PART_KB" ]`.
+
+## Boot-time measurement: first Qt frame (2026-08-11) — done, hardware-measured
+
+The "Gauge cluster actually rendering" row above (~6.94s) was never actually
+a frame — it was `journalctl`/`dmesg`-derived, and the closest thing to a
+render signal available at the time was `ultima-app.service` starting.
+Between process start and an actual QML frame hitting the framebuffer there's
+Qt/QML engine init, scene graph setup, and the first paint — unmeasured. This
+closes that gap with a real render-completion signal.
+
+**Instrumentation** (`ultima-app/src/main.cpp`): `main()` already logged
+`t0`-`t3` timestamps (via `/proc/uptime`, same clock family as kernel
+monotonic time — no wall-clock conversion needed) up through QML component
+construction, but that happens *before* `app.exec()` even starts the event
+loop, so it's construction, not a frame. Added a one-shot hook on the root
+`QQuickWindow`'s `afterRendering()` and `frameSwapped()` signals
+(`Qt::DirectConnection`, guarded by `std::atomic<bool>` so it's safe
+regardless of which thread the software render loop fires them on — cheap
+insurance, not confirmed to matter here). Logs both to stderr (journal, same
+as the existing `t0`-`t3` lines) and to `/dev/kmsg` at level 3.
+
+**Why `/dev/kmsg` and not just the journal**: the "Boot-time optimization"
+`quiet` patch above sets `console_loglevel=4`, and printk only suppresses a
+message if its level is `>=` that — a level-3 write still reaches the serial
+console. Verified empirically before touching any code, over SSH with a
+serial capture watching: `echo '<3>ultima-kmsg-test: hello world' > /dev/kmsg`
+landed on console as `[23010.325822] ultima-kmsg-test: hello world`. This
+means power-on through first-frame now lives in **one serial capture, one
+timeline, no offset arithmetic** — a real improvement over the "Boot-time
+optimization" run above, which had to reconstruct a wall-time offset from two
+separate anchor points because its landmarks straddled a `quiet`/non-`quiet`
+boundary.
+
+`measure-boot.sh` updated to match: new `first Qt frame` landmark
+(`ultima-app: \[.*\] first frame rendered`), now the stop landmark instead of
+the dead `framebuffer ready` regex. `kernel entry`/`framebuffer ready` are
+expected to read "not seen" on this image — annotated in the script so that
+doesn't look like a failure to whoever runs it next.
+
+### New serial gotcha: stale UART backlog contaminates `t=0`
+
+Cost two wasted captures before being caught. The tty driver buffers bytes
+that arrive with no reader attached (up to its buffer size), and they flush
+out as soon as something opens the port — even if that data is from a boot
+that finished, or partly happened, before the capture started. `measure-boot.sh`
+treats the *first byte it reads* as `t=0` (power-on proxy), so a leftover
+byte from a previous shutdown or boot silently produces a completely wrong
+zero point, and everything downstream looks plausible (increasing
+timestamps, real-looking landmark text) right up until the numbers don't
+line up with a previous run. Existing "kill stale readers" guard doesn't
+catch this — the port isn't held by anything, the bytes are just sitting in
+the driver's own buffer.
+
+Symptom in practice: one capture's very first line was
+`[  196.691147] reboot: Power down` (a stale byte from an unrelated earlier
+shutdown), and the real boot didn't start until 13.4s of wall-clock time
+*later* — the script's own landmark table was silently 13.4s off for that
+run. Recovered by hand by finding the true power-on line (`U-Boot SPL
+2025.01...`, the first line that's actually part of a real boot) and
+re-deriving every landmark relative to that instead of the script's `t=0` —
+usable, but shouldn't be necessary.
+
+**Fix for next time**: drain the port to 2s of confirmed silence
+*immediately* before arming a capture, not just at session start:
+```
+exec 3<>/dev/cu.usbserial-0001
+stty -f /dev/fd/3 115200 cs8 -cstopb -parenb raw -echo
+python3 -c "
+import os, select
+while True:
+    r, _, _ = select.select([3], [], [], 2.0)
+    if not r: break
+    os.read(3, 65536)
+"
+exec 3<&-
+```
+Confirm the board is actually powered off before doing this (otherwise
+"quiet" just means nothing's printing, not that a fresh capture is safe).
+Not yet folded into `measure-boot.sh` itself — done by hand for this
+session's runs, worth adding as an automatic pre-arm step if this bites
+again.
+
+### Results: two hardware runs, real power-on to first Qt frame
+
+| Landmark | Run 1 (reconstructed, see above) | Run 2 (clean) |
+|---|---|---|
+| falcon payload load | 0.170s | 0.307s |
+| ATF start | 0.939s | 1.077s |
+| **first Qt frame** (afterRendering) | **7.298s** | **6.664s** |
+| first Qt frame (frameSwapped) | 7.307s | 6.675s |
+
+Both are real, physical-power-cycle boots, no USR held (eMMC, same image
+this whole file already describes). Run 2 is the clean capture — `t=0`
+correctly anchored, `measure-boot.sh`'s own landmark table matches the
+by-hand numbers exactly. Run 1's numbers are hand-derived from a
+contaminated `t=0` (see gotcha above); kept because the underlying boot was
+real and complete, not because it's as trustworthy as run 2.
+
+Note the two runs disagree on which stage is slower: run 2's bootloader
+stage (payload-load → ATF-start) is ~0.14s slower than run 1's, but its
+kernel-entry-to-first-frame stretch is ~0.77s *faster* (5.587s vs 6.359s),
+netting out faster overall. This is consistent with "Boot-time optimization"
+already flagging the post-bootloader/pre-app stretch as the least
+deterministic remaining phase (systemd's path to starting
+`ultima-app.service`) — not a new finding, just corroborating it with a
+tighter instrument. **Power-on → first Qt frame currently lands in the
+6.7–7.3s range**; a third run was judged not worth another physical
+power-cycle for this session, but would be the natural next step to tighten
+this the way the original 3-run baseline table did.
 
 ## Board boot-source behavior
 
@@ -655,8 +773,13 @@ reaching for a full image build + SD flash + USR-held reboot:**
 ./build.sh ultima-app        # builds just the recipe (~1min once source-tracked)
 docker run --rm -v falcon-yocto-build:/src -v /tmp/hotdeploy:/dst falcon-yocto:latest \
   cp /src/tisdk/build/arago-tmp-default-glibc/work/aarch64-oe-linux/ultima-app/1.0/image/usr/bin/ultima-app /dst/
-scp /tmp/hotdeploy/ultima-app root@beagleplay-ti.local:/root/ultima-app.new
-ssh root@beagleplay-ti.local 'mv /root/ultima-app.new /usr/bin/ultima-app; systemctl restart ultima-app'
+scp /tmp/hotdeploy/ultima-app root@beagleplay-ti.local:/tmp/ultima-app.new
+ssh root@beagleplay-ti.local '
+  mount -o remount,rw / &&
+  mv /tmp/ultima-app.new /usr/bin/ultima-app &&
+  mount -o remount,ro / &&
+  systemctl restart ultima-app
+'
 ```
 Overwriting `/usr/bin/ultima-app` in place while it's running fails with
 `ETXTBSY` (scp's sftp backend reports it as a generic "dest open" failure) —
@@ -665,6 +788,21 @@ since the running process keeps its own reference to the old inode. This
 whole loop is minutes and needs zero physical access to the board, versus a
 full image build + card swap + held-button power-on. Doesn't help for
 kernel/DT/bootloader changes, only app source.
+
+**Updated 2026-08-11 for read-only-rootfs** (see "Read-only rootfs" below,
+which shipped after this loop was first written): the original version
+staged the upload in `/root` and moved it into place directly, both of
+which are on the now-`ro` root partition and fail outright. Stage in `/tmp`
+(tmpfs) instead, and bracket the move with `remount,rw`/`remount,ro` — same
+pattern as the live unit-file-edit trick in "Read-only rootfs" → "Two
+regressions...". `remount,ro` failed once with `mount point is busy`
+(some transient writer, not root-caused — `fuser -m /` wasn't useful, it
+lists nearly every PID since almost everything maps something off root).
+Don't fight it by hand: the binary swap had already landed by that point
+(verify with `md5sum`), so a plain `reboot` over SSH resolves it safely —
+systemd's own shutdown sequence remounts read-only as part of normal
+shutdown, succeeding where a live remount attempt didn't. Confirmed
+afterward: `findmnt` back to `ro`, binary md5 unchanged, service active.
 
 ## Hardware verification (2026-08-08) — done, working end to end
 

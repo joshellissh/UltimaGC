@@ -10,7 +10,7 @@
 # reset. Only power on (or reset) the board AFTER the "Capture armed"
 # prompt, never before.
 #
-# Auto-stops a few seconds after the framebuffer-ready landmark, or at
+# Auto-stops a few seconds after the first-Qt-frame landmark, or at
 # max_seconds regardless (covers a boot that never gets that far).
 #
 # Usage:
@@ -44,13 +44,26 @@ max_duration, grace, outpath = float(sys.argv[1]), float(sys.argv[2]), sys.argv[
 
 # Same landmark strings NOTES.md already uses to describe these boots, so a
 # capture here reads as a direct, sourced replacement for the by-hand numbers.
+#
+# "kernel entry" and "framebuffer ready" are expected to show "not seen" on
+# the current image: NOTES.md's "Boot-time optimization" patched U-Boot to
+# append `quiet` to the falcon kernel cmdline, which suppresses the printks
+# these regexes matched (console_loglevel=4 drops them). They're kept here
+# only so a still-`quiet` boot doesn't get mistaken for a hang if someone
+# reintroduces verbose logging later — don't read "not seen" on those two as
+# a failure on this image. "first Qt frame" is the current meaningful stop
+# landmark: ultima-app writes it to /dev/kmsg at level 3 (below
+# console_loglevel=4), so it survives `quiet` and still reaches the serial
+# console in the same timeline as power-on — see main.cpp's afterRendering/
+# frameSwapped hooks.
 LANDMARKS = [
     ("falcon payload load", re.compile(r"Loading falcon payload")),
     ("ATF start",           re.compile(r"Starting ATF on ARM64 core")),
     ("kernel entry",        re.compile(r"Linux version")),
     ("framebuffer ready",   re.compile(r"tidssdrmfb frame buffer device|Initialized tidss")),
+    ("first Qt frame",      re.compile(r"ultima-app: \[.*\] first frame rendered")),
 ]
-STOP_LANDMARK = "framebuffer ready"
+STOP_LANDMARK = "first Qt frame"
 
 fd = 0  # stdin, redirected by the wrapper to the open serial fd
 armed_at = time.time()
@@ -76,7 +89,7 @@ while True:
             print(f"\n[stopping: reached max duration {max_duration:.0f}s]")
             break
         if STOP_LANDMARK in hit and now - t0 > hit[STOP_LANDMARK] + grace:
-            print(f"\n[stopping: {grace:.0f}s past framebuffer-ready]")
+            print(f"\n[stopping: {grace:.0f}s past {STOP_LANDMARK}]")
             break
 
     ready, _, _ = select.select([fd], [], [], 0.5)
@@ -107,7 +120,7 @@ for name, _ in LANDMARKS:
 PYEOF
 
 echo "Capture armed on $DEV. Power on (or reset) the board NOW."
-echo "Auto-stops ${GRACE}s after framebuffer-ready, or after ${MAX_DURATION}s regardless."
+echo "Auto-stops ${GRACE}s after first-Qt-frame, or after ${MAX_DURATION}s regardless."
 echo
 
 exec 3<>"$DEV"

@@ -1,9 +1,11 @@
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include <QQuickWindow>
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <atomic>
 #include <signal.h>
 #include <unistd.h>
 
@@ -67,6 +69,34 @@ int main(int argc, char *argv[])
     double t3 = readUptime();
     fprintf(stderr, "[%6.2f] ready to render (+%.2fs)\n", t3, t3-t2);
     fprintf(stderr, "[%6.2f] total app startup: %.2fs\n", t3, t3-t0);
+
+    // "ready to render" above is just QML component construction, before
+    // app.exec() even starts the event loop — it's not a frame. These hooks
+    // catch the actual first paint, logged to both the journal (stderr) and
+    // /dev/kmsg (level 3, so it survives the `quiet` kernel cmdline falcon
+    // boot appends and still lands on the serial console for
+    // measure-boot.sh to pick up in the same timeline as power-on).
+    auto rootWindow = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+    std::atomic<bool> renderedOnce{false};
+    std::atomic<bool> swappedOnce{false};
+    auto logFirstFrame = [t0](std::atomic<bool> &done, const char *label) {
+        if (bool expected = false; !done.compare_exchange_strong(expected, true))
+            return;
+        double t = readUptime();
+        fprintf(stderr, "[%6.2f] %s (+%.2fs since app main())\n", t, label, t-t0);
+        if (FILE *kmsg = fopen("/dev/kmsg", "w")) {
+            fprintf(kmsg, "<3>ultima-app: [%.2f] %s\n", t, label);
+            fclose(kmsg);
+        }
+    };
+    if (rootWindow) {
+        QObject::connect(rootWindow, &QQuickWindow::afterRendering, rootWindow, [&]() {
+            logFirstFrame(renderedOnce, "first frame rendered (afterRendering)");
+        }, Qt::DirectConnection);
+        QObject::connect(rootWindow, &QQuickWindow::frameSwapped, rootWindow, [&]() {
+            logFirstFrame(swappedOnce, "first frame swapped (frameSwapped)");
+        }, Qt::DirectConnection);
+    }
 
     return app.exec();
 }
