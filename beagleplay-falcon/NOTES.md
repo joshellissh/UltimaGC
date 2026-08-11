@@ -77,6 +77,21 @@ the original 6.664s/7.298s baseline**. See "Boot-time optimization, round
 3" below for the full investigation, including a `build.sh`
 stale-image-pull trap hit and fixed along the way.
 
+**Update (2026-08-11): investigated a pre-cluster boot splash — the kernel's
+built-in fbcon boot logo doesn't work on this DRM/tidss path, confirmed
+empirically on hardware, not just in config.** All the kernel config it needs
+(`CONFIG_FRAMEBUFFER_CONSOLE`/`CONFIG_LOGO`/`CONFIG_LOGO_LINUX_CLUT224=y`,
+deferred-takeover off) is already enabled — but a raw `/dev/fb0` dump at rest
+was **all zero bytes**, and writing text to `/dev/tty1` only ever produced a
+few hundred nonzero bytes (the text glyphs), never the logo. Also found and
+fixed a real bug along the way: `getty@tty1` was overwriting the console with
+a login prompt before Qt's first frame. See "Boot splash investigation"
+further down for the full evidence and the panel facts (1600×720, stride
+6400, 32bpp, 4 online CPUs) worth keeping for whatever replaces this — likely
+a small userspace program that blits directly to `/dev/fb0`, which this
+investigation confirmed is writable and gets a real ~2.5s window
+(fbcon binds at kernel_ts 0.77s; first Qt frame at 3.34s).
+
 ## Build environment
 
 - `Dockerfile` + `run.sh` — builds a Yocto/TI SDK (`tisdk`) container.
@@ -2182,3 +2197,86 @@ V=$(strings "$f" | grep -E '^mmcdev=' || true)
   drawing conclusions, and ask what the heartbeat LED is doing — that's the
   fastest ground-truth check for "is it even powered/running" independent
   of serial entirely.
+
+## Boot splash investigation (2026-08-11): fbcon's built-in logo doesn't render
+
+**Goal**: show something on screen before the gauge cluster starts, without
+adding meaningful boot time. Two candidate mechanisms: the kernel's built-in
+fbcon/`CONFIG_LOGO` boot logo (in theory free — piggybacks on driver init
+that already happens), or a small userspace program that blits an image
+straight to `/dev/fb0`, started unordered relative to `ultima-app.service`.
+
+**fbcon logo: config is already fully enabled, but it doesn't produce
+pixels.** Checked directly against the running kernel's `/proc/config.gz`,
+not assumed:
+
+```
+CONFIG_FRAMEBUFFER_CONSOLE=y
+CONFIG_FRAMEBUFFER_CONSOLE_DETECT_PRIMARY=y
+# CONFIG_FRAMEBUFFER_CONSOLE_DEFERRED_TAKEOVER is not set
+CONFIG_LOGO=y
+CONFIG_LOGO_LINUX_CLUT224=y
+CONFIG_VT=y
+CONFIG_FB=y
+CONFIG_DRM_FBDEV_EMULATION=y
+```
+
+Deferred-takeover being off matters: it rules out the usual "logo doesn't
+show until first console write" gotcha. `dmesg` confirms fbcon actually
+binds to the real hardware framebuffer, not a placeholder:
+
+```
+[   0.517256] [drm] Initialized tidss 1.0.0 for 30200000.dss on minor 0
+[   0.773285] Console: switching to colour frame buffer device 200x45
+[   0.797765] tidss 30200000.dss: [drm] fb0: tidssdrmfb frame buffer device
+```
+
+Only one `fb0:` registration ever appears (no earlier `simple-framebuffer`
+to rebind away from), so a detect-primary rebind-to-a-blank-device theory
+doesn't hold up either.
+
+**Empirical proof it's not rendering** (masked `ultima-app.service` first so
+nothing else could touch the framebuffer, removing any race):
+
+- `dd if=/dev/fb0 bs=6400 count=720` (full 1600×720×32bpp frame, stride 6400)
+  right after a clean boot → **0 nonzero bytes out of 4,608,000**. Not "hard
+  to see" — genuinely never drawn.
+- `echo hello > /dev/tty1` (forces a real console write, the "first output"
+  trigger) then re-dumped fb0 → **426 nonzero bytes**. That's consistent with
+  just the text glyphs (a handful of characters × ~8×16px cells, mostly
+  background), not a logo — a small CLUT224 image would be tens of thousands
+  of bytes minimum. So the fbcon→fb0 pixel path genuinely works (proven with
+  real text pixels), but the dedicated `fb_show_logo()` boot-logo blit
+  specifically never fires on this kernel/DRM-driver combination. Not chased
+  further into fbcon source — likely a known-ish incompatibility between the
+  classic fbcon logo path and DRM's generic fbdev-emulation helpers on a
+  modern (6.12) kernel, not something specific to this board's config.
+- Also found for real along the way, independent of the logo question:
+  `getty@tty1` was active and writing a login prompt to the same console —
+  `agetty -o "-p -- \u" --noclear` — which would visually intrude on any
+  splash regardless of the logo mechanism. Masking it
+  (`systemctl mask getty@tty1`) is straightforward and doesn't affect serial
+  or SSH access.
+
+**Verdict**: the free/zero-cost option doesn't work as shipped. The
+remaining path is a small userspace program that `mmap`s `/dev/fb0` and
+blits a raw image directly, launched unordered relative to
+`ultima-app.service` (proven writable, see above). Panel facts to design
+around, all confirmed on hardware:
+
+| Fact | Value |
+|---|---|
+| Resolution | 1600×720 |
+| Bits per pixel | 32 (`rgba 8/16,8/8,8/0,0/0` — XRGB8888) |
+| Stride | 6400 bytes/line |
+| Online CPUs | 4 (fbcon tiles one logo copy per CPU — moot for a custom blitter, but size art near full panel width if this project ever revisits fbcon) |
+| fbcon binds to real hw fb | kernel_ts 0.773s |
+| First Qt frame (eMMC, round 3) | kernel_ts 3.338s |
+| Visible-window budget | ~2.5s, before anything else lands on screen |
+
+**Rootfs is read-only** (see CLAUDE.md's BeaglePlay rules, corrected this
+same session) — a live-hand-edit test needs `mount -o remount,rw /` first;
+it reverts to `ro` on the next reboot since fstab itself wasn't touched.
+`getty@tty1` and `ultima-app.service` were both masked live during this
+investigation and unmasked again afterward — board confirmed back to a
+verified-good cluster on screen before moving on.

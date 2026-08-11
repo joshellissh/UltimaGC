@@ -78,11 +78,18 @@ and doesn't belong in the Yocto-specific notes.
   without checking the built `.config`. The fix in place is forcing the module to
   load via `/etc/modules-load.d/tidss.conf` rather than relying on udev coldplug,
   which real hardware showed never actually loading it.
-- **This rootfs is not read-only.** If `ultima-app` (or anything else) starts
-  crash-looping, power the board off immediately rather than leave it running to
-  diagnose — a rapid crash-loop hammering journald/coredump writes onto a live SD
-  card produced real `I/O error`s on the rootfs partition in one session. Reflash
-  fresh afterward rather than trust that card's state.
+- **The rootfs (`/`) is mounted read-only** — a stock, uncustomized fstab
+  (`/dev/root / auto ro`), confirmed on both SD and eMMC. `/var/log`, `/var/lib`,
+  `/var/cache`, `/var/spool`, and `/var/tmp` are all symlinked/overlaid onto
+  `/var/volatile` (tmpfs), so journald and coredumps land in RAM, not on the
+  physical partition. `/data` (`mmcblk0p3`) is the only persistent writable
+  partition — that's where odometer persistence and similar app state belongs.
+  For a live hand-edit (e.g. testing a systemd unit change before porting it to
+  source), `mount -o remount,rw /` first — it reverts to `ro` on the next reboot,
+  fstab isn't touched. Still power the board off immediately if `ultima-app` (or
+  anything else) starts crash-looping rather than leave it running to diagnose —
+  an earlier session saw a crash-loop produce real `I/O error`s on the rootfs
+  partition, on a build where this may have hit real storage rather than tmpfs.
 - No WiFi in this build — only wired Ethernet gives SSH/dropbear a path in;
   otherwise it's serial-console-only.
 
