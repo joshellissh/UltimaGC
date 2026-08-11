@@ -46,6 +46,16 @@ the serial console in the same timeline as power-on — no cross-clock
 offset math needed. Two hardware runs: **6.664s and 7.298s**. See
 "Boot-time measurement: first Qt frame" below.
 
+**Update (2026-08-11): further-optimized round, ~5.4s → ~4.5s kernel-clock
+to first frame on eMMC** (`ultima-app.service` decoupled from
+`multi-user.target`'s wait on `systemd-resolved`/D-Bus, plus a boost-ring
+`Canvas` size fix and a wasted-decode fix). See "Boot-time investigation"
+and "Boot-time optimization, round 2" below for the full investigation,
+a real bug found and fixed on hardware (not caught by the macOS dev build),
+and an odometer-persistence correctness scare that turned out to be a test
+methodology bug, not a real one — worth reading before trusting the
+`ultima-app.service` unit file's `Wants=`/`Requires=` choice again.
+
 ## Build environment
 
 - `Dockerfile` + `run.sh` — builds a Yocto/TI SDK (`tisdk`) container.
@@ -451,6 +461,420 @@ tighter instrument. **Power-on → first Qt frame currently lands in the
 6.7–7.3s range**; a third run was judged not worth another physical
 power-cycle for this session, but would be the natural next step to tighten
 this the way the original 3-run baseline table did.
+
+## Boot-time investigation: where the remaining ~6.7s goes (2026-08-11)
+
+Static analysis (source + kernel config + unit files + existing boot logs),
+no hardware touched this pass. Goal was to find where to spend further
+optimization effort — corrects an apportionment mistake made mid-investigation,
+worth recording so it isn't repeated.
+
+### Apportionment: pre-app vs. app-side — do this on the kernel clock, not wall clock
+
+Run 2's log (the clean 6.664s capture) gives a rock-solid wall↔kernel offset,
+agreeing to the millisecond across all four landmarks that appear on both
+scales: **wall = kernel_ts + 1.245s**. First Qt frame is at kernel_ts
+**5.419s**.
+
+The "Boot-time optimization" section above (2026-08-10) measured, via
+journalctl on that day's boot, that `ultima-app.service` itself starts at
+**kernel_ts ≈ 4.0s** (the "systemd's own path to starting ultima-app.service"
+finding, kernel_ts 0.8s→4.0s). That number comes from a different boot
+session than run 2 (a day earlier, before the kmsg first-frame instrumentation
+existed) — the kernel/rootfs are the same image family, but this is still an
+approximation, not two landmarks from one capture. Treat it as directionally
+right, not precise.
+
+Combining them properly (both on kernel_ts, not mixing one kernel-relative
+number with one wall-clock number — an error made and caught mid-investigation
+here): **service start ~4.0s, first frame at 5.419s → app-side (process exec
+to first frame) is ~1.4s, and everything before the service even starts
+(kernel driver probe + systemd's sysinit→basic→multi-user chain) is ~4–5.2s
+of the ~6.7s wall total.**
+
+That's roughly a 3:1 split in favor of the pre-app path. **This inverts the
+naive read of "quiet boot means we can't see where kernel-to-app time goes,
+so guess from the app side"** — the bigger lever is on the systemd/kernel
+side, not in `ultima-app`'s own QML/image startup, even though the latter is
+far easier to reason about from source alone.
+
+### Measured directly on hardware (2026-08-11), board already up — no power cycle
+
+`systemd-analyze` isn't installed on this image (`sh: systemd-analyze: command
+not found` — this is a trimmed Arago image, not a full distro), so the
+apportionment came from `journalctl -b -o short-monotonic --no-pager`
+(unit-transition timestamps, all on the kernel monotonic clock — no offset
+math needed) plus `journalctl -b -o short-monotonic -u ultima-app` for the
+app's own `t0`–`t3`. Both are one SSH command against an already-booted
+board, no serial capture, no reflash. Full captures saved (gitignored, like
+the serial `boot-logs/` above) to `boot-logs/journalctl-timeline-20260811T095X.txt`
+and `boot-logs/journalctl-ultima-app-20260811T095X.txt`; key transitions:
+
+| kernel_ts | Event |
+|---|---|
+| 0.976 | root (`mmcblk0p2`) mounted ro, devtmpfs mounted |
+| 2.741 | `systemd-udevd` started |
+| 2.778–2.888 | `ultima-data-mount.service` runs, `/data` (`mmcblk0p3`) mounted rw |
+| 2.919 | **Local File Systems target reached** |
+| 3.170→3.627 | `systemd-resolved` starting→started (**0.457s**, not needed by this app) |
+| 3.629 | System Initialization target (`sysinit.target`) |
+| 3.685→3.915 | D-Bus system bus starting→started (**0.230s**, not needed by this app) |
+| 3.932 | **Basic System target reached (`basic.target`)** |
+| 4.046 | `ultima-app.service` starts |
+| 4.505 | app's own `t0` (`main()` entered) — **0.46s after systemd starts the unit**, this is process exec + dynamic-linking Qt/QML shared libs |
+| 4.632 | `t1`: `QGuiApplication` created (**+0.16s** — platform-plugin init, fast) |
+| 5.355 | `t2`: QML loaded (**+0.72s** — the dominant app-side cost, see Candidates 2/3 below) |
+| 5.356 | `t3`: ready to render (+0.00s) |
+| 5.418 | **first frame rendered** (+0.06s past `t3`) |
+| 6.215 | Multi-User System target reached (well *after* first frame — sibling units like getty, network config, `/data`+boot-partition fsck all run concurrently with, not ahead of, the app) |
+| 6.447 | systemd's own "Startup finished" line: 1.068s kernel + 5.378s userspace |
+
+Two things settled precisely, replacing the earlier estimates:
+
+1. **App-side (`t0`→first frame) is 0.94s**, split 0.16s Qt init / 0.72s QML
+   load / 0.06s first paint — confirms the QML-load step (image decode +
+   first `Canvas` paint) is where nearly all of it goes, exactly what
+   Candidates 2 and 3 below target.
+2. **`ultima-app.service` doesn't start until 4.046s, but its real
+   prerequisites (`systemd-udevd` + `/data` mounted) are done by 2.919s.**
+   The ~1.1s in between is `basic.target`'s other dependents —
+   `systemd-resolved` (0.457s) and D-Bus (0.230s) are the two biggest single
+   pieces — none of which this app uses. **This is a real, now-measured
+   ~1.0–1.1s available, not a hypothetical.**
+
+Also checked while here: `/data/odometer.json` currently holds
+`{"totalOdo":2347,"tripOdo":0}` — the hardcoded default, being re-saved every
+30s. **Not a bug** — confirmed via `findmnt`/`stat`: `/data` is mounted
+correctly (rw, `mmcblk0p3`) and the file is genuinely fresh (this is a bench
+board with no real drive history yet), not a symptom of a mount race. Also
+confirms current margin under the *existing* config: the mount completes at
+2.888s and `main()` doesn't run until 4.505s — over 1.6s of slack today, which
+is exactly the slack Candidate 1 below would spend.
+
+### Candidate 1 (biggest, ~1.0–1.1s, now measured — but still a real correctness risk): stop `ultima-app.service` waiting on `basic.target`
+
+`ultima-app.service` is `WantedBy=multi-user.target` with default systemd
+dependencies, which implicitly adds `After=basic.target` — confirmed above,
+it waits for `systemd-resolved` and D-Bus to fully start even though it uses
+neither:
+
+- `/dev/fb0` doesn't need waiting for — `tidss` is fully kernel-built-in
+  (`CONFIG_DRM_TIDSS=y` etc., see "Boot-time optimization" above), so the
+  device node exists via devtmpfs before systemd (PID 1) even execs, not via
+  a udev coldplug/module-load event the way it used to. The `After=
+  systemd-udevd.service`/`Wants=systemd-udevd.service` in the unit today is
+  very likely a holdover from when tidss was still a module.
+- CAN doesn't need waiting for — `CanBus::tryConnect()` already retries every
+  1s if the interface isn't present (`canbus.cpp`), by design, specifically
+  so app start never races udev (see `GAUGE-CLUSTER.md`).
+- `/data` (odometer persistence) genuinely does matter, and is already
+  ordered correctly today — but only *incidentally*: `ultima-data-mount.service`
+  carries `Before=local-fs.target ultima-app.service`, and both units
+  currently end up in the same boot transaction because both are reachable
+  from `multi-user.target`. That ordering guarantee would break if
+  `ultima-app.service` stopped being pulled in through that same transaction.
+
+`ultima-data-mount.service` already proves the pattern works on this hardware
+(`DefaultDependencies=no` + explicit minimal `After=`, see its own `[Unit]`
+comment) — mirroring it on `ultima-app.service` (rough shape:
+`DefaultDependencies=no`, `WantedBy=sysinit.target` or similar, drop the
+`multi-user.target` wait) is the obvious next move. **Two traps, both silent
+until they bite:**
+
+1. **`Before=`/`After=` is ordering only, not a dependency that pulls a unit
+   into the transaction.** If `ultima-app.service` is reachable from
+   `sysinit.target` independently of `local-fs.target`, systemd can start it
+   without `ultima-data-mount.service` ever running first — the existing
+   `Before=` on the data-mount unit has nothing to order against in that
+   transaction. Silent failure mode: `OdoStore::load()` falls back to
+   `DEFAULT_TOTAL_ODO = 2347.0`, and the 30s autosave `Timer` in `main.qml`
+   writes that default over the real `/data/odometer.json` — a quiet
+   odometer reset that looks like random data corruption, not a boot-order
+   bug. (This exact symptom — `totalOdo=2347.0` on every save — is what's
+   currently on the bench board for the unrelated, benign reason above; a
+   real instance of this bug would look identical, which is exactly why it's
+   dangerous.) Fix: add an explicit `Requires=ultima-data-mount.service` +
+   `After=ultima-data-mount.service` on `ultima-app.service` itself, don't
+   rely on the other unit's `Before=` alone. (Unlike the `dev-fb0.device`
+   trap this file already warns about, `After=` on a `Type=oneshot` +
+   `RemainAfterExit=yes` unit genuinely does wait for it to finish — that
+   scar tissue doesn't apply here.)
+2. **`DefaultDependencies=no` also drops the automatic
+   `Conflicts=shutdown.target`/`Before=shutdown.target`** that currently
+   makes `ultima-app`'s `SIGTERM` handler (which saves the odometer, see
+   `sigHandler` in `main.cpp`) run before `/data` gets unmounted on shutdown.
+   Needs re-adding explicitly, the same way `volatile-binds`' own service
+   template does.
+
+Given this file's two prior hardware-discovered ordering bugs in this exact
+area, implement this carefully and re-run the same `journalctl` timeline
+after, checking specifically: `ultima-app.service`'s start time moved earlier
+by roughly the expected amount, `/data/odometer.json` still shows real
+(non-reset) content after a save cycle, and a clean `ssh ... reboot` still
+persists an odometer write made just before it.
+
+### Candidate 2 (small, safe, on the direct first-frame critical path): shrink the boost-ring `Canvas`
+
+`main.qml`'s `boostRing` `Canvas` is `anchors.fill: parent` — a full
+1600×720 backing store allocated and painted under `QT_QUICK_BACKEND=software`
+(CPU rendering, no GPU), just to draw a pie-wedge mask around the tachometer
+(center 1251,343, radius `max(width,height)*1.5`). It paints
+unconditionally before first frame (`Component.onCompleted: loadImage(...)`
+→ `onImageLoaded: requestPaint()`). Sizing the `Canvas` down to just the
+tach's actual bounding box (~600×600 around 1251,343, matching `rpmGauge`'s
+own footprint) instead of the full window would cut both the backing-store
+allocation and the per-paint cost substantially — needs reworking the
+`centerX`/`centerY`/clip-arc math in `onPaint` to the smaller local coordinate
+space, not just a resize.
+
+### Candidate 3 (small, safe): collapse `car_lights_on.png`/`car_lights_off.png`
+
+Both are separate full-frame (1600×720 RGBA, ~4.6MB decoded) `Image`
+elements in `main.qml`, gated only by `visible:` — QtQuick decodes a local
+(qrc) `Image`'s source synchronously at load time regardless of `visible`,
+so both get decoded every boot even though only one is ever shown. Rough
+estimate ~50–150ms wasted. Two ways to fix, different tradeoffs:
+- One `Image` with `source` switched dynamically between the two — simplest,
+  but re-decodes on every on/off toggle (not just at boot).
+- Keep both elements, but mark whichever isn't the boot-default state
+  `asynchronous: true` (or move it behind a `Loader` activated after first
+  frame) — keeps instant toggling, moves the wasted decode off the critical
+  path instead of removing it.
+
+### Candidate 4 — tried, reverted: `CONFIG += qtquickcompiler` is actively broken on this Yocto build, not just low-value
+
+The reasoning for trying this was sound (root read-only + tmpfs `/tmp` means
+Qt's runtime QML disk cache can never persist here, so every boot pays full
+QML parse/compile cost with no way to amortize it) and it works cleanly on
+the macOS Qt6 Homebrew dev build (`scripts/dev-build.sh` — real
+`qmlcachegen` invocations per QML file, confirmed in the build log). **It is
+not safe on the Yocto/Qt5 build as this layer is configured today.**
+
+Adding `CONFIG += qtquickcompiler` to `ultima-app.pro` and rebuilding hung
+`ultima-app`'s `do_compile` indefinitely — not a clean failure, an infinite
+loop. Root cause, found by reading the live compile log (which had grown to
+36MB and was still climbing before being killed):
+`recipe-sysroot-native/usr/bin/qmlcachegen` **does not exist** in this
+build's native sysroot — meta-qt5's `qtdeclarative-native` recipe here isn't
+configured to produce it. Rather than qmake failing cleanly when the tool is
+missing, it re-invokes `qmake -o Makefile ...` in a loop that never
+converges, burning CPU indefinitely until something kills it. Confirmed by
+`ps`/`docker ps` there was no actual progress, just the same block repeating
+in the log.
+
+Reverted (`ultima-app.pro` back to no `qtquickcompiler`, see its own comment
+for the full story). Making this work for real means adding a
+`PACKAGECONFIG` to meta-qt5's `qtdeclarative` recipe to build `qmlcachegen`
+for `-native` — a real Yocto layer change with its own risk, not attempted
+here given the win was already estimated as tens of milliseconds, not
+seconds, before this cost was even known. **If this is revisited, confirm
+`qmlcachegen` actually lands in `recipe-sysroot-native/usr/bin/` before
+flipping the `CONFIG` line again** — don't re-trigger the same hang.
+
+### Candidate 5 (small, image-size lever, not critical-path): drop `wlcore`/`wl18xx`
+
+There is no WiFi hardware wired into this build (see `GAUGE-CLUSTER.md` /
+CLAUDE.md) — `wlcore`/`wl18xx` firmware-load failures appear in every boot
+log, always *after* first frame in the clean run (kernel_ts 6.36s vs. first
+frame at 5.42s), so this is **not** a critical-path fix. It's a `fitImage`
+size lever: the R5 SPL reads `tifalcon.bin` + `fitImage` off eMMC via its own
+ext4 driver before ATF even starts (falcon payload load → ATF start is
+~0.77s in run 2), and that read time scales with image size. Trimming
+`wlcore`/`wl18xx` out of the kernel/image entirely would shrink `fitImage`
+and remove genuinely pointless boot-time work (three firmware retries per
+boot for hardware that isn't there), just don't oversell it as a first-frame
+win.
+
+### Not investigated further this pass
+
+- Font enumeration: **partially resolved by the real data above** —
+  `t0`→`t1` (`QGuiApplication` construction) measured at only +0.16s, so
+  whatever the `QFontDatabase: Cannot find font directory /lib/fonts` warning
+  in the journal costs, it isn't a dominant chunk on its own. That warning
+  actually logs *during* the `t1`→`t2` QML-load window (kernel_ts 5.008, between
+  `t1`=4.632 and `t2`=5.355), triggered by the two `FontLoader`s in `main.qml`
+  — bounded inside the already-identified 0.72s QML-load cost, not a separate
+  lever. Not chased further given Candidates 2/3 already target that window
+  directly.
+- `SetTimeScreen.qml` is constructed eagerly (`visible: false`, no `Loader`)
+  as part of `main.qml`'s component tree — deferring it behind
+  `Loader { active: false }` would shave some component-construction cost,
+  but likely small next to the Canvas/image items above (0.72s QML-load total
+  covers parsing + image decode + this construction + the first `Canvas`
+  paint combined — no per-item breakdown finer than that was captured this
+  pass). Worth revisiting only after Candidates 2/3 are in and the window is
+  re-measured.
+
+## Boot-time optimization, round 2: implemented and hardware-verified (2026-08-11)
+
+Candidates 1, 2, 3, and 5 from the investigation above were implemented and
+tested on real hardware (SD card, USR held). Candidate 4
+(`qtquickcompiler`) was tried and reverted — see its own section above,
+turned out to actively hang the build, not just be low-value.
+
+**Changes:**
+- `ultima-app.service`: `DefaultDependencies=no` +
+  `Requires=`/`After=ultima-data-mount.service` +
+  `WantedBy=local-fs.target` (Candidate 1) — see the unit file's own comment
+  for the full reasoning.
+- `main.qml`: boost-ring `Canvas` shrunk from full-screen (1600x720) to a
+  bounded 640x640 box around the tach (Candidate 2), and
+  `car_lights_on.png` marked `asynchronous: true` (Candidate 3).
+- `ultima-no-wifi.cfg`: `CONFIG_WLCORE`/`CONFIG_WL18XX`/`CONFIG_WLCORE_SDIO`
+  disabled (Candidate 5).
+
+### Bug found on first hardware boot: Candidate 2's Canvas resize crashed drawImage
+
+The macOS Qt6 dev build (default GPU-accelerated Quick backend, not
+`QT_QUICK_BACKEND=software`) rendered the resized boost ring with no visible
+clipping, which was taken as verification — **wrong**. First real hardware
+boot logged `qrc:/main.qml:70: Error: drawImage(), index size error`
+immediately after first frame. Root cause: the Canvas's `x`/`y` were
+computed as `1251 - width/2` / `343 - height/2` with `width: height: 720`,
+and the tach center (343) is only 343px from the window's top edge (window
+is 1600x720) — `343 - 720/2 = -17`, a negative `y`. The 9-arg `drawImage`
+call's source rect then extended above the source image's actual bounds,
+which Qt5's software-backend `drawImage` implementation throws on (Qt6's
+default GPU path apparently clamps instead — **don't trust a dev-build
+verification that isn't running the same `QT_QUICK_BACKEND`/renderer as the
+target**, this was the direct cause of missing it). Fixed by computing the
+actual safe bounding box (`2*min(cx, W-cx)` × `2*min(cy, H-cy)` = 698×686 for
+this window/center) and using 640×640, comfortably inside it. Verified fixed
+via the hot-deploy loop (see below) before the next full image build.
+
+### Fast-iteration hot-deploy loop, exercised for real this session
+
+Used `NOTES.md`'s existing documented loop (build just `ultima-app`, `scp`
+the binary to `/tmp`, remount root rw, `mv` into place, remount ro, restart
+the service) to test the Canvas fix without a full image rebuild+reflash.
+Two new gotchas found, both about `mount -o remount,rw /` specifically (not
+previously documented for the *rw* direction, only *ro*):
+
+- It intermittently failed with the same `mount point is busy` this file's
+  "Two regressions..." section already documents for `remount,ro` — but
+  seen here on `remount,rw` instead, both directions of the same transient
+  issue. Retrying, or just checking `findmnt -no OPTIONS /` first (it may
+  already be rw from a prior attempt) and skipping the redundant remount,
+  both worked.
+- A file staged at `/tmp/ultima-app.new` disappeared between one `ssh` call
+  confirming its presence and a subsequent one trying to `mv` it — not yet
+  root-caused (no matching `tmpfiles.d` rule, `systemd-tmpfiles-clean.timer`
+  wasn't due for 8 more minutes), but reliably worked when the `scp` and the
+  `mv` happened back-to-back with no other commands (including diagnostic
+  ones) in between. Treat the upload and the move as needing to be adjacent,
+  not just "eventually consistent."
+
+### Odometer-persistence correctness test: real bug, then a chase, then confirmed clean
+
+This is the exact risk flagged when Candidate 1 was designed (an incomplete
+`ultima-app.service` ordering change could make `OdoStore` silently load its
+hardcoded default instead of the real persisted value) — worth recording the
+full test methodology, since the first three attempts gave a false positive
+for the bug being real.
+
+**The trap**: writing a distinctive test value to `/data/odometer.json`
+*while `ultima-app.service` is still running*, then rebooting, doesn't test
+what it looks like it tests. `main.cpp`'s `sigHandler` — the SIGTERM handler
+that's the entire point of `Conflicts=`/`Before=shutdown.target` in the
+Candidate 1 change — calls `CanBus::save()`, which pushes the app's own
+**in-memory** odometer value (whatever it loaded at *this* boot's own
+startup, stale by design if nothing drove real CAN data) back over the file
+during systemd's shutdown sequence, which happens *before* `/data` unmounts
+— correctly, that's what the fix was for. So a manually-edited value written
+while the service is live gets overwritten by the app's own legitimate
+shutdown save, every time, regardless of whether the boot-time mount
+ordering has any bug at all. Three reboot attempts in a row showed the test
+value reverted to the hardcoded default (`2347.0`/`0.0`) and looked exactly
+like the ordering bug this test was designed to catch.
+
+**Correct methodology**: `systemctl stop ultima-app` (itself sends SIGTERM
+and triggers the same save — so the *value on disk after the stop
+completes* is not yet the test value), *then* write the distinctive value,
+*then* either `systemctl start` (no reboot, tests `OdoStore::load()` in
+isolation) or reboot with the service left stopped (nothing left running to
+overwrite the file before shutdown, so the value survives untouched into
+the next boot's fresh `ultima-app` start).
+
+**Results, both clean:**
+- Live restart (service stopped → write `7777.7`/`3.3` → `systemctl start`):
+  first autosave (30s later) logged `saved totalOdo=7777.7 tripOdo=3.3` —
+  `OdoStore::load()` itself works correctly.
+- Full reboot (service stopped → write `4242.4`/`6.6` → `reboot`, USR held):
+  next boot's first autosave logged `saved totalOdo=4242.4 tripOdo=6.6` —
+  **the `/data`-before-`ultima-app` boot ordering is confirmed correct
+  across a real physical reboot.** `/data` mount consistently finishes
+  (`Finished Mount /data...`) at kernel_ts ~2.8–2.99s across every boot
+  captured this session, `main()` consistently enters at kernel_ts
+  ~3.4–3.6s — comfortable, repeatable margin, not a close call.
+
+Also confirmed clean each boot: zero `systemctl --failed` units, zero
+`journalctl -b | grep -i "ordering cycle"` hits, `/var/volatile/tmp` and
+`/var/volatile/log` both present (the read-only-rootfs checklist further up
+this file) — no regression in any of that from the `DefaultDependencies=no`
+change.
+
+### `Requires=` caught before it shipped: would have taken the whole cluster down on a `/data` mount failure
+
+Before the eMMC push, `ultima-app.service` had `Requires=ultima-data-mount.service`
+(not just `After=`). Caught in review, not on hardware: `Requires=` means a
+*failed* dependency stops this unit from starting at all — not just running
+with a wrong odometer value. `/data` is the one partition still mounted
+read-write (see "Read-only rootfs" above), and this board loses power with
+zero warning in the car — a torn `/data` mount on the next boot is a real
+scenario, not hypothetical. Under `Requires=`, that scenario would have
+produced **no gauge cluster at all**, directly contradicting this project's
+own design goal that a torn `/data` write "can't take the whole board down
+with it" (same section). Changed to `Wants=` — still pulls
+`ultima-data-mount.service` into the same boot transaction (so the `After=`
+ordering has something to resolve against, which was the entire point of
+adding it), but a mount failure now degrades to "cluster starts, `OdoStore`
+falls back to its default, autosave fails" instead of no dash. Rebuilt,
+reflashed, reverified clean (zero `systemctl --failed`, zero ordering-cycle
+hits) before pushing to eMMC.
+
+### Final eMMC comparison, same board, same methodology as the original baseline
+
+Pushed the corrected image to eMMC via `emmc-push.sh` — the first fully
+end-to-end run of that script (previously only dry-run/non-destructive
+checks had exercised `emmc-install.sh`, per "eMMC boot" above). Ran clean:
+disk signatures distinct (`emmc=2a4a6c07` vs `sd=e5beadde`), partition/
+superblock sizes matched, install log had no errors. Verified after
+power-cycling with no button held: `findmnt -no SOURCE /` → `/dev/mmcblk0p2`
+(eMMC), zero failed units, zero ordering-cycle hits.
+
+| | Before (2026-08-11 AM, eMMC) | After (2026-08-11 PM, eMMC) |
+|---|---|---|
+| `ultima-app.service` starts | kernel_ts 4.046s | kernel_ts 2.943s |
+| `t0`→`t1` (Qt init) | — | +0.24s |
+| `t1`→`t2` (QML load) | +0.72s | +0.87s |
+| first frame (afterRendering) | kernel_ts 5.419s | kernel_ts 4.470s |
+
+**Service start ~1.10s earlier, first frame ~0.95s earlier overall** —
+confirmed on the same board, same storage device, single before/after
+sample each side (this project's own "Boot-time measurement" section notes
+this phase isn't fully deterministic run to run, so treat both single
+samples as indicative, not final-decimal precise).
+
+**Be honest about what actually moved**: the ~1.10s service-start
+improvement cleanly matches Candidate 1's prediction and was reproduced
+across 6+ boots this session (SD and eMMC combined) — that part is solid.
+**QML-load time did not improve** (0.87s after vs. 0.72s before, and this
+session's SD-boot runs alone ranged 0.72–0.97s) — Candidates 2/3 (the
+`Canvas` resize, the deferred image decode) **did not demonstrably help in
+this single comparison**, and might even be a slight net regression (the
+9-arg cropped `drawImage` call could plausibly be more expensive per-pixel
+than the old 4-arg full-scale draw it replaced — not measured directly).
+Don't fold that into the systemd win. If this matters enough to chase
+further: multiple eMMC runs to establish real variance, and/or instrumenting
+around just the `Canvas`'s own `onPaint` specifically rather than inferring
+from the whole QML-load window.
+
+**Net result:** first Qt frame improved from ~5.42s to ~4.47s kernel-clock
+on eMMC (~0.95s, ~18%), overwhelmingly attributable to the systemd change,
+not the QML-side work. Odometer on the fresh eMMC install reads the image's
+default (`2347.0`/`0.0`) — expected, `emmc-install.sh` writes the whole
+`.wic` including `/data`'s partition, and this bench board has no real
+drive history to preserve.
 
 ## Board boot-source behavior
 

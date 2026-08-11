@@ -13,8 +13,47 @@ Description=Ultima gauge cluster
 # kernel (see ultima-display.cfg) should make fb0 exist before systemd even
 # starts, which likely makes this race moot. Re-open only if a boot log
 # still shows the SIGABRT after that change.
-After=systemd-udevd.service
-Wants=systemd-udevd.service
+#
+# DefaultDependencies=no + WantedBy=local-fs.target (2026-08-11): measured on
+# hardware that this unit's real prerequisites (systemd-udevd running, /data
+# mounted) are done by kernel_ts ~2.9s, but with the default WantedBy=
+# multi-user.target it didn't actually start until ~4.0s — waiting on
+# systemd-resolved and D-Bus finishing, neither of which this app touches
+# (see beagleplay-falcon/NOTES.md "Boot-time investigation"). Mirrors
+# ultima-data-mount.service's own already-hardware-proven pattern, and
+# WantedBy=local-fs.target specifically (not some other early target) keeps
+# both units in the same boot transaction — load-bearing, not stylistic: see
+# that unit's own comment for the ordering-cycle this project already hit
+# once from a similar DefaultDependencies change.
+#
+# Wants= (not just After=) on ultima-data-mount.service is also
+# load-bearing: After= alone only orders against a unit if something else
+# pulls it into the same transaction, and nothing else does once this unit
+# stops being reachable from multi-user.target. Without it, a boot could
+# start this app before /data is mounted, and OdoStore would silently fall
+# back to its hardcoded default odometer value — see main.cpp.
+#
+# Deliberately Wants=, not Requires=: Requires= means a failed
+# ultima-data-mount.service (a real possibility — /data is the one
+# partition still mounted rw, see "Read-only rootfs" above, and this board
+# loses power with zero warning in the car) takes this unit down with it —
+# no cluster at all, not just a wrong odometer reading. That directly
+# contradicts this project's own design goal that a torn /data write "can't
+# take the whole board down with it." Wants= still pulls the mount unit
+# into the same transaction (so the After= ordering below has something to
+# resolve against — the actual bug this whole comment is about), but a
+# mount failure only degrades to "cluster starts, OdoStore uses its
+# default, autosave fails" rather than no dash at all.
+#
+# Conflicts=/Before=shutdown.target are re-added explicitly because
+# DefaultDependencies=no also drops the automatic version of these, which is
+# what normally makes this unit's SIGTERM handler (saves the odometer, see
+# sigHandler in main.cpp) run before /data gets unmounted on shutdown.
+DefaultDependencies=no
+After=systemd-udevd.service ultima-data-mount.service
+Wants=systemd-udevd.service ultima-data-mount.service
+Conflicts=shutdown.target
+Before=shutdown.target
 StartLimitIntervalSec=0
 
 [Service]
@@ -29,4 +68,4 @@ StandardOutput=journal
 StandardError=journal
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=local-fs.target

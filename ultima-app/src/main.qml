@@ -16,10 +16,29 @@ Window {
     // sweeping in the same direction as the tach's own needle travel.
     Canvas {
         id: boostRing
-        anchors.fill: parent
+        // Was anchors.fill: parent (full 1600x720) — under software
+        // rendering that's a full-screen CPU backing store + paint just to
+        // draw a wedge around the tach. Bounded to a box around the gauge
+        // instead (same center as rpmGauge, with margin since the ring
+        // graphic itself may extend past the 600x600 gauge face).
+        //
+        // 640 is deliberate, not a round-number guess: the tach center
+        // (1251,343) sits only 343px from the window's top edge and 349px
+        // from its right edge (window is 1600x720), so the largest
+        // symmetric box centered there that stays inside the window is
+        // 698x686 — anything bigger clips negative on x/y and made the
+        // 9-arg drawImage below throw "index size error" on real hardware
+        // (Qt5/software backend; the macOS Qt6 dev build didn't catch this,
+        // it apparently clamps out-of-bounds source rects instead of
+        // throwing — don't trust that build alone for this kind of check
+        // again). 640 leaves real margin inside that limit.
+        x: 1251 - width / 2
+        y: 343 - height / 2
+        width: 640
+        height: 640
 
-        readonly property real centerX: 1251
-        readonly property real centerY: 343
+        readonly property real centerX: width / 2
+        readonly property real centerY: height / 2
         readonly property real startAngle: 270
         readonly property real endAngle: 503
         readonly property real maxBoost: 30
@@ -53,7 +72,13 @@ Window {
             ctx.arc(centerX, centerY, r, toRad(startAngle), toRad(sweepEnd), false)
             ctx.closePath()
             ctx.clip()
-            ctx.drawImage("qrc:/boost_circle.png", 0, 0, width, height)
+            // boost_circle.png is a full 1600x720 asset with the ring drawn
+            // at its natural (x, y) position in that composition — since
+            // this canvas is no longer full-screen, crop the matching
+            // window-space region out of the source image (9-arg drawImage)
+            // rather than scaling the whole image into the smaller canvas,
+            // which would squash/misplace the ring.
+            ctx.drawImage("qrc:/boost_circle.png", x, y, width, height, 0, 0, width, height)
             ctx.restore()
         }
     }
@@ -70,6 +95,13 @@ Window {
         anchors.fill: parent
         source: "qrc:/car_lights_on.png"
         visible: sim.lowBeams || sim.highBeams
+        // CanBus's lowBeams/highBeams both default false (canbus.h), so
+        // "off" is the true boot state — decoding this full-frame image
+        // synchronously on every boot is wasted work on the critical path
+        // to first frame. Async keeps instant on/off toggling once loaded;
+        // it just means the very first boot with lights already on could
+        // show a blank layer for a frame or two until the decode finishes.
+        asynchronous: true
     }
 
     // Periodic odometer save (every 30s) — CanBus owns integration and pushes
