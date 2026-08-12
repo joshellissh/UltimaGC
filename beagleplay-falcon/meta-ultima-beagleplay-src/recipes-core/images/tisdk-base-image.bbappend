@@ -1,5 +1,13 @@
 IMAGE_INSTALL:append:beagleplay-ti = " ultima-app can-utils mmc-utils ultima-hwclock-load ultima-data-mount volatile-binds"
 
+# GPU enablement spike (2026-08-12): explicit rather than relying on the
+# RRECOMMENDS chain (mesa-megadriver -> ti-img-rogue-driver ->
+# ti-img-rogue-umlibs, see mesa-pvr_24.0.1.bb) to pull the rogue stack in on
+# its own. kmscube/mesa-demos are smoke-test tools only for verifying the
+# GPU works before ultima-app is blamed for anything — remove both once the
+# spike is confirmed working, they don't belong in a shipped image.
+IMAGE_INSTALL:append:beagleplay-ti = " ti-img-rogue-driver ti-img-rogue-umlibs kmscube mesa-demos"
+
 # Adds a small ext4 /data partition (p3) after the stock boot+root layout —
 # see wic/ultima-beagleplay.wks.in for the full reasoning, including a corrected
 # mistake: p1 (vfat, --source bootimg-efi) holds tiboot3.bin and is required

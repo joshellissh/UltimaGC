@@ -2,7 +2,11 @@ SUMMARY = "Ultima fullscreen Qt5 QML gauge cluster"
 LICENSE = "CLOSED"
 
 DEPENDS = "qtbase qtdeclarative"
-RDEPENDS:${PN} = "qtbase-plugins qtdeclarative-qmlplugins iproute2"
+# ti-img-rogue-driver explicit here (not just via tisdk-base-image.bbappend's
+# IMAGE_INSTALL) so the GPU module can't silently drop out of the image if
+# that list changes later — same reasoning this project already used once
+# for kernel-module-tidss before tidss went built-in. See pvrsrvkm.conf below.
+RDEPENDS:${PN} = "qtbase-plugins qtdeclarative-qmlplugins iproute2 ti-img-rogue-driver"
 
 inherit qmake5 systemd
 
@@ -13,7 +17,7 @@ inherit qmake5 systemd
 # Buildroot's own "local" site method already does for this same package.
 ULTIMA_APP_EXTERNAL_SRC = "/home/builder/yocto/ultima-app-src"
 
-SRC_URI = "file://ultima-app.service file://70-can.rules"
+SRC_URI = "file://ultima-app.service file://70-can.rules file://pvrsrvkm.conf"
 S = "${WORKDIR}/ultima-app-src"
 
 python do_unpack:append() {
@@ -53,6 +57,14 @@ do_install() {
     install -d ${D}${sysconfdir}/udev/rules.d
     install -m 0644 ${WORKDIR}/70-can.rules ${D}${sysconfdir}/udev/rules.d/70-can.rules
 
+    # GPU enablement spike (2026-08-12): pvrsrvkm is out-of-tree, unlike
+    # built-in tidss, so nothing coldplugs it automatically. Force it via
+    # systemd-modules-load.service instead of relying on udev — see
+    # ultima-app.service's After=systemd-modules-load.service for the
+    # ordering half of this fix.
+    install -d ${D}${sysconfdir}/modules-load.d
+    install -m 0644 ${WORKDIR}/pvrsrvkm.conf ${D}${sysconfdir}/modules-load.d/pvrsrvkm.conf
+
     # tidss used to ship as a module here (CONFIG_DRM_TIDSS=m), and
     # /etc/modules-load.d/tidss.conf + a kernel-module-tidss RDEPENDS forced
     # it to load at boot rather than relying on udev coldplug, which real
@@ -73,4 +85,4 @@ do_install() {
     install -d ${D}/data
 }
 
-FILES:${PN} += "${bindir}/ultima-app ${systemd_unitdir}/system/ultima-app.service ${sysconfdir}/udev/rules.d/70-can.rules /data"
+FILES:${PN} += "${bindir}/ultima-app ${systemd_unitdir}/system/ultima-app.service ${sysconfdir}/udev/rules.d/70-can.rules ${sysconfdir}/modules-load.d/pvrsrvkm.conf /data"

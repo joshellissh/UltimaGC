@@ -298,12 +298,14 @@ Three changes, in order of impact:
 
 1. **`CONFIG_DRM_TIDSS` root-caused and fixed.** The prior "not root-caused"
    silent-downgrade (`ultima-display.cfg` requesting `=y`, landing as `=m`)
-   was `CONFIG_DRM=m` capping everything downstream in the same Kconfig
-   `choice` group. Fix: explicitly force `CONFIG_DRM=y`,
+   was `CONFIG_DRM=m` capping everything downstream via ordinary tristate
+   dependency capping — *not* a Kconfig `choice` group, see correction below.
+   Fix: explicitly force `CONFIG_DRM=y`,
    `CONFIG_DRM_KMS_HELPER=y`, `CONFIG_DRM_TIDSS=y`, `CONFIG_DRM_ITE_IT66121=y`,
-   `CONFIG_DRM_DISPLAY_HELPER=y`, `CONFIG_DRM_DISPLAY_CONNECTOR=y`, and
-   `# CONFIG_DRM_POWERVR is not set` (the competing choice member) in
-   `ultima-display.cfg`. Verified against the built `.config`. This also let
+   `CONFIG_DRM_DISPLAY_HELPER=y`, `CONFIG_DRM_DISPLAY_CONNECTOR=y` in
+   `ultima-display.cfg` (that fragment also left `# CONFIG_DRM_POWERVR is not
+   set`, but — see the correction below — that line was never load-bearing
+   for this fix). Verified against the built `.config`. This also let
    `kernel-module-tidss` + `/etc/modules-load.d/tidss.conf` be deleted
    entirely (`ultima-app.bb`) — tidss is now genuinely built-in, no module to
    force-load. This is the dominant win: tidss init moved from kernel_ts
@@ -330,6 +332,16 @@ Three changes, in order of impact:
    `psplash` also disabled the same way. `docker.socket` resisted the same
    fix (a higher-priority TI-layer bbappend competes) — not chased further,
    socket activation means near-zero boot cost anyway.
+
+**Correction (2026-08-12):** point 1 above originally called
+`CONFIG_DRM_POWERVR` "the competing choice member" against `CONFIG_DRM_TIDSS`.
+That's wrong — read directly against this kernel's source, there are zero
+Kconfig `choice` blocks anywhere under `drivers/gpu/`, and upstream's own
+arm64 defconfig sets `CONFIG_DRM_TIDSS=m` and `CONFIG_DRM_POWERVR=m`
+*together*. They're independent tristates; `CONFIG_DRM=m` capping
+`CONFIG_DRM_TIDSS` was the entire mechanism, and disabling PowerVR never had
+anything to do with fixing it. See "PowerVR GPU enablement" further down for
+the full investigation — PowerVR is no longer left disabled for this reason.
 
 **Considered and reverted:** gating `ultima-app.service` on `dev-fb0.device`
 via `Requires=`/`After=` to fix the crash-loop race noted in "ultima-app
@@ -1133,11 +1145,10 @@ the Yocto tree instead.
   own Yocto release) added to `sources/` and `bblayers.conf`. Its `qtbase`
   pins Qt **5.15.13** (the `b5.15-shared` branch) — close enough to
   Buildroot's 5.15.14 pin that behavior should match.
-- **No usable GPU driver here either** (same PowerVR AXE-1-16M situation as
-  the Buildroot BeaglePlay port — see UltimaGC's `SETUP-BEAGLEPLAY.md`
-  "Rendering: Why Software, Not GPU"). qtbase's default `PACKAGECONFIG_GL`
-  pulls in `eglfs kms gbm gles2` whenever `DISTRO_FEATURES` has `opengl`
-  without `x11` (true for arago's distro conf) — overridden via
+- **No usable GPU driver here either, at the time** (same PowerVR AXE-1-16M
+  situation as the now-removed Buildroot BeaglePlay port). qtbase's default
+  `PACKAGECONFIG_GL` pulls in `eglfs kms gbm gles2` whenever `DISTRO_FEATURES`
+  has `opengl` without `x11` (true for arago's distro conf) — overridden via
   `recipes-qt/qt5/qtbase_git.bbappend`, scoped `:beagleplay-ti` only (a
   global override was already proven to break unrelated recipes' QA checks
   earlier in the Falcon work above — same lesson, reapplied), to
@@ -1145,6 +1156,10 @@ the Yocto tree instead.
   `PACKAGECONFIG:append = "no-opengl linuxfb"`. **Verified**: `qtbase`
   builds clean with this, `qtbase-plugins` contains `libqlinuxfb.so`, no
   `eglfs`/eglfs-adjacent output anywhere in its work directory.
+  **Superseded (2026-08-12): see "PowerVR GPU enablement" further down** —
+  meta-ti's BSP turns out to already be fully wired for GPU on this exact
+  machine via TI's own rogue DDK; this bbappend now keeps the GL path and
+  adds `linuxfb` alongside it instead of removing it.
 - `QT_QUICK_BACKEND=software` is a runtime env var (set in the systemd
   unit below), not a build-time option — no qtdeclarative PACKAGECONFIG
   change needed for it.
@@ -2280,3 +2295,182 @@ it reverts to `ro` on the next reboot since fstab itself wasn't touched.
 `getty@tty1` and `ultima-app.service` were both masked live during this
 investigation and unmasked again afterward — board confirmed back to a
 verified-good cluster on screen before moving on.
+
+## PowerVR GPU enablement (2026-08-12) — spike, not yet hardware-verified
+
+Motivated by a question about compositing an RCA-video camera feed into the
+gauge cluster, which raised whether GPU rendering was worth revisiting.
+Every prior note in this file that calls the GPU unusable predates this
+investigation and was written without actually reading the kernel source or
+the Yocto build volume — this section corrects that.
+
+**The premise "no usable GPU driver here" no longer holds, and inspecting
+the volume shows the TI BSP is already fully wired for it on this exact
+machine:**
+
+- `meta-ti-bsp/conf/machine/beagleplay-ti.conf` requires `mesa-pvr.inc`,
+  which sets `mesa-pvr` as the provider for `virtual/egl`,
+  `virtual/libgles2`, `virtual/libgbm`, `virtual/mesa`.
+- `PREFERRED_PROVIDER_virtual/gpudriver` already resolves to
+  `ti-img-rogue-driver`, version-matched against `ti-img-rogue-umlibs` and
+  `mesa-pvr` by `ti-bsp.inc` (`25.2.6850647` / `25.2.6850647` / `24.0.1`) —
+  no hand-matching of repos required, meta-ti already did it.
+- arago's `DISTRO_FEATURES` already has `opengl wayland vulkan`, no `x11`.
+  meta-qt5's *default* `PACKAGECONFIG_GL` for a machine like that is already
+  `kms gbm gles2 eglfs` — the only thing turning it off was this project's
+  own `qtbase_git.bbappend`, confirmed by the built `qtbase/config.summary`
+  showing `EGL .... no` / `OpenGL ES 2.0 .... no` before this change.
+- The GPU device-tree node (`gpu@fd00000`, `compatible = "ti,am62-gpu",
+  "img,img-axe"`) has no `status` property (= enabled by default) and the
+  BeaglePlay `.dts` never touches it — confirmed in the *built* `.dtb`, not
+  just source, via `dtc` inside the build container.
+
+**Mainline `drm/imagination` was considered and rejected for this pass.**
+`CONFIG_DRM_POWERVR=m` would enable the in-tree open driver — present in
+this 6.12.57 tree, and its `of_device_id` match table
+(`drivers/gpu/drm/imagination/pvr_drv.c`) contains exactly `"img,img-axe"`,
+which the DT node's compatible list matches. But Qt 5.15's scenegraph needs
+**GLES2**, and Mesa's upstream PowerVR support is a *Vulkan* driver only —
+GLES arrives via Zink layered on top, which needs Mesa ~26.1 against this
+build's stock 24.0.7 (confirmed via websearch, not in this volume). That's
+a two-major backport that would also collide with `mesa-pvr`'s
+`PREFERRED_PROVIDER` claims, versus the TI stack being one
+`PACKAGECONFIG` line away. **`# CONFIG_DRM_POWERVR is not set` stays** in
+`ultima-display.cfg` for this reason — see that file's own comment, and the
+correction in "Boot-time optimization" above (the earlier claim that this
+line was needed to fix `tidss` was wrong; it was never load-bearing for
+that fix, and is kept now for a different, real reason: the in-tree driver
+and TI's out-of-tree `pvrsrvkm.ko` would contend for the same GPU node).
+
+**Changes made (not yet built or flashed):**
+
+- `qtbase_git.bbappend`: dropped the `PACKAGECONFIG:remove`/`no-opengl`,
+  keep `linuxfb` appended alongside the now-default GL set rather than
+  replacing it — a same-image fallback if the GPU path regresses boot time
+  or proves unstable (env-var-only revert, no rebuild — but revert is
+  *both* `QT_QPA_PLATFORM=linuxfb` and `QT_QUICK_BACKEND=software`, not
+  platform alone, since qtbase is now built `-opengl es2`).
+- `tisdk-base-image.bbappend`: explicit `IMAGE_INSTALL` for
+  `ti-img-rogue-driver ti-img-rogue-umlibs` (the RRECOMMENDS chain through
+  `mesa-megadriver` should pull these in on its own, but explicit beats
+  relying on a soft dependency) plus `kmscube mesa-demos` for smoke-testing
+  the GPU independent of Qt — both come back out once the spike is
+  confirmed working.
+- `ultima-app.service`: `QT_QPA_PLATFORM=eglfs` +
+  `QT_QPA_EGLFS_INTEGRATION=eglfs_kms`, `QT_QUICK_BACKEND=software` removed.
+- `pvrsrvkm.ko` is **out-of-tree**, unlike built-in `tidss`, so it needs an
+  explicit `/etc/modules-load.d/pvrsrvkm.conf` (installed by
+  `ultima-app.bb`, mirrors the removed `tidss.conf` workaround) *and*
+  `After=systemd-modules-load.service` on `ultima-app.service` — the `.conf`
+  file alone doesn't order anything, since `systemd-modules-load.service`
+  is itself `DefaultDependencies=no` and orders only against
+  `sysinit.target`, which this unit (also `DefaultDependencies=no`,
+  `WantedBy=local-fs.target` since round 3 above) has no relationship to.
+  If that's still not early enough on real hardware, the fallback is
+  restoring `After=/Wants=systemd-udevd.service` — the ~1.1s this project
+  already paid once and removed in round 3.
+
+**Pre-flight checked, not yet build-verified:** `mesa-pvr_24.0.1.bb` points
+at a personal fork (`gitlab.freedesktop.org/StaticRocket/mesa.git`, branch
+`powervr/24.0.1`); confirmed the pinned SRCREV
+(`68af6a102c2298569e77d1aa8bccc1ff61438b3e`) is still fetchable via
+`git fetch --depth=1` before starting anything else. Neither that fork nor
+the `git.ti.com` rogue repos had ever been fetched into this volume before
+this change — expect a multi-hour first build (arago also pulls in target
+LLVM via `gallium-llvm` for `mesa-pvr` specifically), not the incremental
+`build.sh` this project is used to.
+
+**Open question, only settleable on hardware:** both `libgles2-mesa` (from
+`mesa-pvr`) and `libgles2-rogue` (from the umlibs blob) package a
+`libGLESv2.so.*`, and the umlibs recipe deliberately declines to
+RPROVIDE/RCONFLICT the generic name so both can coexist in one rootfs.
+Arago's own graphics packagegroup never installs a `*-rogue` package,
+suggesting mesa-pvr's copy (linked against the blob behind the gallium
+`pvr` driver, which installs as `tidss_dri.so`) is the one meant to win —
+but neither the blob nor the mesa fork was ever fetched into this volume,
+so this couldn't be confirmed statically. Check `ldd /usr/bin/ultima-app`
+and the `eglinfo` renderer string once built.
+
+**Verification plan, in this order (prove the GPU independent of Qt before
+blaming the app — same lesson the tidss/fb0 crash-loop already taught
+this project once):** build and check `qtbase/config.summary` → flash/boot
+and check `lsmod`/`dmesg` for the DDK's `RGX Device registered BVNC` line →
+`kmscube` + `eglinfo` renderer string → only then `ultima-app` →
+`measure-boot.sh` against the round-3 baseline above (**3.338s to first Qt
+frame, eMMC** — recorded for comparison, not gating this pass) → sanity
+check the tach/boost `Canvas` elements specifically, since they were tuned
+against the software backend (see "Candidate 2" above) and macOS dev builds
+(GPU Qt6) have already proven a poor predictor of this target's behavior.
+
+### Hardware verification (2026-08-12) — done, working end to end on SD
+
+Built, flashed to SD (not eMMC — deliberately, so a bad spike doesn't touch
+the production boot), and verified in the exact order the plan specified:
+prove the GPU independent of Qt before blaming the app.
+
+- `qtbase/config.summary`: `EGL`, `OpenGL ES 2.0`–`3.2`, `Vulkan`, `EGLFS`,
+  `EGLFS GBM`, and `LinuxFB` (the fallback) all `yes` — previously all `no`.
+- `do_rootfs` succeeded outright — the `read-only-rootfs` postinst-failure
+  mode flagged as the likely first failure never happened.
+- On the board: `pvrsrvkm` loaded, `dmesg` shows the exact DDK success line
+  predicted from research — `Read BVNC 33.15.11.3 from HW device registers` /
+  `RGX Device registered with BVNC 33.15.11.3` / `Initialized pvr
+  25.2.6850647 for fd00000.gpu` / firmware `rgx.fw.33.15.11.3` loaded.
+- `ultima-app.service`: **`NRestarts=0`** — the module-load-ordering fix
+  (`After=systemd-modules-load.service`) worked on the first real boot, no
+  crash-loop.
+- `kmscube` + `eglinfo`, run independently with `ultima-app` stopped:
+  `renderer: "PowerVR A-Series AXE-1-16M"`, `vendor: "Imagination
+  Technologies"`, OpenGL ES 3.1 — genuine hardware acceleration confirmed,
+  not a software rasterizer.
+- **Settles the plan's one open question**: `/proc/<pid>/maps` for the
+  running `ultima-app` shows it links mesa's public `libGLESv2.so.2.0.0` /
+  `libEGL.so.1.0.0`, loads the gallium driver as `tidss_dri.so`, which in
+  turn pulls in the vendor implementation as suffixed
+  `libGLESv2_PVR_MESA.so.25.2.6850647` / `libsrv_um.so` / `libglslcompiler.so`
+  / `libusc.so`. No naming collision — the two `libGLESv2` builds never
+  contend, mesa-pvr's is what the app links, the blob sits behind it.
+- Visual QA on the physical dash: correct, no artifacts, tach/boost `Canvas`
+  elements fine.
+
+**Boot-time cost, real serial capture** (`measure-boot.sh`, landmark's own
+embedded kernel timestamp used rather than the capture's elapsed-since-arm
+column — the capture's `t=0` was contaminated by a stale UART backlog byte
+left over from the SSH session above, the same class of gotcha "Serial
+automation lessons" already documents): **kernel_ts 7.025s to first Qt
+frame**, vs. round-3's **3.338s** baseline — roughly **+3.7s**. Not a clean
+comparison: this run is SD, round-3's baseline is eMMC, and rootfs reads
+happen inside the measured kernel_ts window. A same-medium (eMMC) capture
+would be needed to isolate the true GPU-only cost. One data point that
+narrows it: the app's own self-timed `QGuiApplication` creation (EGL/platform-
+plugin init) took +1.90s on the cold post-flash boot vs. +0.42s on a warm
+`systemctl restart` — most of that delta is one-time GPU firmware/shader-
+compiler cache warm-up, not storage.
+
+### eMMC promotion (2026-08-12) — done, clean same-medium boot-time number
+
+`emmc-push.sh` run end to end for the first time ever (NOTES.md's own
+provenance notes had this and `emmc-install.sh` as codified-but-never-run as
+of the original eMMC boot work) — pushed the same GPU-enabled `.wic.xz` this
+section already verified on SD, plus the existing eMMC-variant SPL (no
+U-Boot/falcon changes in this GPU work, so it didn't need rebuilding).
+Completed and self-verified cleanly (md5 checks, superblock-vs-partition
+size, signature distinctness, all as `emmc-install.sh` already does) on the
+first real run. Board confirmed booting from `/dev/mmcblk0p2`, PARTUUID
+`076c4a2a-02` (the known eMMC signature) with USR not held. `ultima-app`:
+`NRestarts=0`, GPU registered clean, same as the SD verification above.
+
+**Real, uncounfounded boot-time comparison**, same serial-capture method as
+before (kernel_ts embedded in the "first frame rendered" log line, not the
+capture's elapsed-since-arm column — same stale-UART-backlog artifact at
+`t=0`, same fix): **kernel_ts 5.596s to first Qt frame, on eMMC**, vs.
+round-3's **3.338s** baseline (also eMMC, same landmark) — a real **+2.26s**
+GPU-path cost, this time isolated from storage medium. This also confirms the
+SD run's caveat was real: SD hit 6.999s for the same landmark, so ~1.4s of
+that number was genuinely storage speed, not GPU — the GPU-specific cost is
+the ~2.26s figure, not the ~3.7s one.
+
+**Not yet done:** `kmscube`/`mesa-demos` are still in the image
+(`tisdk-base-image.bbappend`) and should come out before this ships, per the
+plan. No decision yet on whether +2.26s to first frame is acceptable for a
+car dash.

@@ -63,6 +63,18 @@ Description=Ultima gauge cluster
 DefaultDependencies=no
 After=ultima-data-mount.service
 Wants=ultima-data-mount.service
+# GPU enablement spike (2026-08-12): pvrsrvkm.ko is out-of-tree (unlike
+# built-in tidss), so it has to actually be loaded before this unit starts —
+# see /etc/modules-load.d/pvrsrvkm.conf, installed by ultima-app.bb.
+# systemd-modules-load.service is itself DefaultDependencies=no and orders
+# only against sysinit.target, which this unit (also DefaultDependencies=no,
+# WantedBy=local-fs.target) has no relationship to — so the .conf file alone
+# is a per-boot race, not a fix. This explicit After= is the actual fix. If
+# the GPU still isn't up by the time this starts, restore
+# After=/Wants=systemd-udevd.service instead (the ~1.1s boot cost this
+# project removed once already — see NOTES.md "Boot-time optimization,
+# round 3") rather than assuming this ordering alone is sufficient.
+After=systemd-modules-load.service
 Conflicts=shutdown.target
 Before=shutdown.target
 StartLimitIntervalSec=0
@@ -70,8 +82,13 @@ StartLimitIntervalSec=0
 [Service]
 ExecStartPre=/bin/mkdir -p /tmp/runtime
 ExecStart=/usr/bin/ultima-app
-Environment=QT_QPA_PLATFORM=linuxfb
-Environment=QT_QUICK_BACKEND=software
+# GPU enablement spike (2026-08-12): eglfs/kms instead of linuxfb+software —
+# see NOTES.md "PowerVR GPU enablement". Revert is BOTH of these lines back
+# to Environment=QT_QPA_PLATFORM=linuxfb + Environment=QT_QUICK_BACKEND=software,
+# not just the platform line: qtbase is now built -opengl es2, so linuxfb
+# alone still leaves Quick trying the GL scenegraph with no GL context.
+Environment=QT_QPA_PLATFORM=eglfs
+Environment=QT_QPA_EGLFS_INTEGRATION=eglfs_kms
 Environment=XDG_RUNTIME_DIR=/tmp/runtime
 Restart=on-failure
 RestartSec=1
