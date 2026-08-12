@@ -2474,3 +2474,99 @@ the ~2.26s figure, not the ~3.7s one.
 (`tisdk-base-image.bbappend`) and should come out before this ships, per the
 plan. No decision yet on whether +2.26s to first frame is acceptable for a
 car dash.
+
+### GPU boot-time regression investigation (2026-08-12) — root-caused, both candidate fixes disproven
+
+Investigated where the +2.26s GPU-path cost (above) actually goes, since
+"acceptable for a car dash" needs a real answer, not a guess. All of this was
+live SSH testing against the eMMC-booted board — no rebuild needed for any of
+it, systemd drop-in overrides and env vars only.
+
+**Two hypotheses**, motivated by this section's own earlier number (+1.90s
+cold post-flash vs. +0.42s warm `systemctl restart` on `QGuiApplication`
+creation): **H1**, one-time GPU kernel-module/firmware/HW init that recurs on
+every real reboot regardless of anything userspace-controllable; or **H2**, a
+userspace shader/DDK cache that could be persisted somewhere durable (this
+board's rootfs is read-only — only `/data` survives a power cycle).
+
+**Systemd ordering is not the bottleneck.** `journalctl -o short-monotonic`
+on a real boot: `pvrsrvkm` module inserted at kernel_ts 2.098s,
+`ultima-app.service` starts firing 130ms later at 2.228s. The
+`After=systemd-modules-load.service` fix from the original GPU-enablement
+work above is working exactly as intended and costs nothing extra.
+
+**The regression is entirely inside the app process**, isolated by diffing
+this session's self-timed `journalctl -u ultima-app` startup log against the
+saved pre-GPU baseline (`boot-logs/journalctl-ultima-app-20260811T095X.txt`):
+
+| Phase | linuxfb (old) | eglfs_kms (GPU) | Delta |
+|---|---|---|---|
+| `QGuiApplication created` | 0.16s | 1.12s | +0.96s |
+| `QML loaded` | 0.72s | 1.85s | +1.13s |
+| main() → first frame | 0.94s | 3.05s | +2.11s |
+
+That +2.11s accounts for essentially the whole +2.26s kernel_ts regression.
+
+**H2 (shader-cache fix) tested and disproven.** Pointed
+`MESA_SHADER_CACHE_DIR` (and, as a free follow-up, the legacy
+`MESA_GLSL_CACHE_DIR` alongside it) at `/data/mesa_shader_cache` via a
+systemd drop-in (`mount -o remount,rw /`, then
+`/etc/systemd/system/ultima-app.service.d/override.conf`). Confirmed the env
+var actually reached the process (`/proc/<pid>/environ`), then confirmed the
+cache directory stayed empty after multiple app restarts — this driver
+stack's proprietary GLSL compiler (`libglslcompiler.so`/`libusc.so`, from
+`ti-img-rogue-umlibs`) doesn't honor Mesa's generic disk-cache mechanism. No
+`powervr.ini`/apphint config file exists anywhere on the rootfs either
+(searched `/`), so there's no discoverable vendor-side caching knob either.
+Also no `ShaderEffect` anywhere in the QML (checked all of
+`ultima-app/src/*.qml`) — only `Canvas` items, which raster on the CPU and
+upload as a plain texture, so the `QML loaded` delta isn't custom
+per-screen shader compilation; it's more likely Qt Quick's own small,
+fixed set of built-in scenegraph material/glyph shaders, compiled once
+against a slow embedded GLSL compiler.
+
+**A second candidate looked like a dramatic fix and wasn't.** Pinning
+`QT_QPA_EGLFS_KMS_CONFIG` to a static connector/mode (skipping `eglfs_kms`'s
+DRM auto-probe) — connector `HDMI-A-1` @ `1600x720`, read from
+`/sys/class/drm/card0-HDMI-A-1/`. On a warm `systemctl restart`,
+`QGuiApplication created` dropped from +1.12s to +0.42s and `QML loaded`
+from +1.85s to +0.58s — a huge apparent win. **A real reboot with the same
+config still active showed zero improvement**: kernel_ts 5.511s to first
+frame, `QGuiApplication created` back to +1.13s, `QML loaded` back to
++1.85s. The fast numbers were entirely a warm-restart artifact (DRM mode
+already locked, GPU already clocked up from the prior process) — the exact
+same trap as the original cold/warm confound this investigation set out to
+explain. Confirms **H1**: this cost is tied to real hardware state (HDMI
+link retrain, GPU power/clock domain bring-up, firmware boot handshake) that
+resets on every genuine power cycle, not anything reachable from userspace
+config.
+
+**Conclusion: the +2.26s is a per-boot cost, not a per-image one, and it's
+very likely intrinsic** to enabling GPU-accelerated rendering on this
+hardware/driver combo — display link retrain plus GPU firmware/power-domain
+cold-start, neither exposed as a tunable by TI's closed stack. Both cheap,
+zero-rebuild candidate fixes are ruled out with hardware evidence, not
+guesswork.
+
+**Not yet tried, would need a real `ultima-app` rebuild to test (uncertain
+payoff, see the no-`ShaderEffect` finding above):** deferring
+`DiagnosticScreen`/`SetTimeScreen` instantiation — currently eager children
+of `main.qml`, not behind a `Loader { active: false }` — to cut QML
+parse/binding-evaluation cost specifically. That's a different cost than the
+GLSL-compile cost this investigation isolated, and likely a smaller win
+since `main.qml` itself already exercises the same `Canvas`/`Image`/`Text`/
+custom-`FontLoader` built-in shader set the diagnostics screen would need.
+
+**Loose end, not chased:** the first reboot attempted for this investigation
+hit an unrelated anomaly — `xhci-hcd xhci-hcd.3.auto: can't setup: -110`
+(USB controller probe timeout) stalled the boot for ~14s, landing first Qt
+frame at kernel_ts 19.8s instead of ~5.5s. Didn't recur on any of the three
+other reboots this session. Worth knowing about so a future one-off slow
+boot doesn't get mistaken for a real regression — if it recurs, it's a USB
+enumeration issue unrelated to anything in this section.
+
+Live test artifacts (all removed from the board, rootfs restored to `ro`):
+`/etc/systemd/system/ultima-app.service.d/override.conf`,
+`/etc/xdg/eglfs_kms.json`, `/data/mesa_shader_cache/`. Nothing in this repo
+changed as a result of this investigation — it ruled things out, it didn't
+fix anything.
