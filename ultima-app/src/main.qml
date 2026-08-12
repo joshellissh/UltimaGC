@@ -493,11 +493,33 @@ Window {
         // Stacked below interactive elements (odometer/trip drag handles,
         // trip reset button) so it doesn't swallow their presses — it only
         // catches touches that land on non-interactive parts of the dash.
+        // Also doubles as the swipe-left gesture into the diagnostic screen
+        // (see DiagnosticScreen.qml) — same layer, same primitive, rather
+        // than adding a second overlay convention just for gestures.
         z: -1
+        property real dragStartX: 0
+        property bool swipeFired: false
         onPressed: {
+            dragStartX = mouse.x
+            swipeFired = false
             touchDot.x = mouse.x - touchDot.width / 2
             touchDot.y = mouse.y - touchDot.height / 2
             touchAnim.restart()
+        }
+        // Fires the swipe as soon as the threshold is crossed mid-drag,
+        // rather than waiting for onReleased — a plain MouseArea's release
+        // isn't reliably delivered here once qtquick treats a press-then-move
+        // as a drag, presumably related to its own mouse-to-touch gesture
+        // synthesis stealing the ungrab (confirmed via synthetic-drag testing
+        // on the macOS dev build; not confirmed against real touch hardware,
+        // worth rechecking on the board). Triggering on the move that
+        // crosses the threshold sidesteps depending on release firing at all.
+        onPositionChanged: {
+            if (startupActive || swipeFired) return
+            if (mouse.x - dragStartX < -120) {
+                swipeFired = true
+                diagnosticScreen.open()
+            }
         }
     }
 
@@ -505,5 +527,12 @@ Window {
     // everything else (including the touch feedback dot at z=100).
     SetTimeScreen {
         id: setTimeScreen
+    }
+
+    // Diagnostic screen — opened by swiping left anywhere on the dash (see
+    // the MouseArea above). Stacked above the touch dot/trip reset but below
+    // the time-set overlay.
+    DiagnosticScreen {
+        id: diagnosticScreen
     }
 }
