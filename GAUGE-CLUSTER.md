@@ -53,7 +53,7 @@ change as the app evolves and a stale copy is worse than no copy.
 
 The app consists of 4 QML files, all in `ultima-app/src/`:
 
-- **`main.qml`** — Root layout: 4 gauge needles over the Bavarian background layers, boost gauge (trapezoid black overlay with PSI readout), turn signal indicators, top indicator row (oil, check engine, beams, battery, coolant — warnings flash at 300ms), gear indicator (Bahnschrift SemiBold font, P/R/N/1-7), odometer + trip odometer with reset button, touch feedback dot. Includes a periodic save timer for odometer persistence via `sim.save()`. All gauge values bind to the `sim` context property, which is the `CanBus` C++ object, not this file's `SimEngine.qml`. Hosts `SetTimeScreen` for clock adjustment.
+- **`main.qml`** — Root layout: 4 gauge needles over the Bavarian background layers, boost gauge (trapezoid black overlay with PSI readout), turn signal indicators, top indicator row (oil, check engine, beams, battery, coolant — warn icons flash at 300ms), gear indicator (Bahnschrift SemiBold font, P/R/N/1-7), odometer + trip odometer with reset button, touch feedback dot. On startup, a ~2s self-test (`startupActive`/`startupFrac`/`startupFlash`) sweeps every needle to max and back and flashes every icon before handing off to live `sim.*` values — real gauge/warning bindings are `startupActive ? <test value> : sim.<prop>`. Includes a periodic (30s) save timer for odometer persistence via `sim.save()`. All gauge values bind to the `sim` context property, which is the `CanBus` C++ object, not this file's `SimEngine.qml`. Hosts `SetTimeScreen` for clock adjustment.
 - **`CircularGauge.qml`** — Reusable needle gauge component: rotates `needle.png` over a transparent item positioned at the gauge center. Configurable start/end angles, counter-clockwise mode, needle size/pivot, optional debug arc overlay
 - **`SetTimeScreen.qml`** — Time-set overlay that calls into `SystemClock` (the `systemClock` context property) to push a new wall-clock time
 - **`SimEngine.qml`** — **Not loaded at runtime.** Bundled only as a reference/potential `--demo` fallback; it predates `CanBus` and was the original simulated data source before real CAN integration. Speed wanders through city/suburban/highway/stop phases, RPM derived from gear ratios, automatic gear selection (P/R/N/1-7), fuel consumption, coolant temp, boost pressure (0-30 PSI). `CanBus::simulateTick()` reimplements this same phase logic directly in C++ so it can drive the live `sim` property — see [CAN Bus Integration](#can-bus-integration-syvecs-s7)
@@ -69,7 +69,7 @@ The app consists of 4 QML files, all in `ultima-app/src/`:
 | `boost_circle.png` | Backmost layer — boost gauge dial (opaque, own black backing) |
 | `background_overlay.png` | Gauge/dial face overlay (tick marks, TOTAL/TRIP text area, mini fuel/coolant arcs; alpha) |
 | `car_lights_off.png` | Centered car render (alpha) |
-| `car_lights_on.png` | Same, headlights lit — registered in `qml.qrc` and present in `main.qml` but `visible: false`; not wired to any signal yet |
+| `car_lights_on.png` | Same, headlights lit — `visible: sim.lowBeams \|\| sim.highBeams`, loaded `asynchronous: true` so the off-state boot path isn't blocked decoding it |
 | `needle.png` | Gauge needle image (rotated by CircularGauge) |
 | `left_indicator.png` | Turn signal arrow icon (mirrored for right) |
 | `range.regular.ttf` | Font for odometer and boost PSI display |
@@ -81,19 +81,12 @@ The old single-image `background.png` face has been removed from the tree and
 
 ### Gauge Needle Alignment
 
-**Stale as of the Bavarian background swap.** The table below was
-calibrated against the old `background.png` dial art. The new
-`background_overlay.png` has a visibly different tick-mark layout (no
-printed numbers, different arc extents), so these pivots/angles almost
-certainly need re-measuring against the new art before the needles line
-up correctly again.
-
-| Gauge | Pivot (px) | Start Angle | End Angle | Direction | Needle Size | Needle Pivot |
-|-------|-----------|-------------|-----------|-----------|-------------|-------------|
-| Speedometer | 351, 342 | 216.5 | 450.5 | CW | 98x350 | 48, 259 |
-| Tachometer | 1251, 343 | 270 | 503 | CW | 98x350 | 48, 259 |
-| Fuel level | 149, 602 | 217 | 307.5 | CW | 28x100 | 14, 74 |
-| Coolant temp | 1453, 602 | 142 | 53.5 | CCW | 28x100 | 14, 74 |
+The per-gauge pivot/angle constants live inline in each `CircularGauge {}` block in
+`main.qml` — read them there, not here. A prior version of this doc carried a
+snapshot table, but it was calibrated against the pre-Bavarian `background.png` dial
+art (different tick layout/arc extents) and had already been flagged stale; a copy
+here would just drift again. Pull the old numbers from git history if useful as a
+rough starting point when re-measuring.
 
 ### Local macOS Dev Build (with Simulated CAN Data)
 
