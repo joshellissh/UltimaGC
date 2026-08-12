@@ -188,15 +188,14 @@ void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
             m_coolantTempF = f;
             emit coolantTempChanged();
         }
-        bool warn = c > 110.0;                          // ~230 °F
+        bool warn = f > 220.0;
         if (warn != m_coolantWarn) { m_coolantWarn = warn; emit coolantWarnChanged(); }
         break;
     }
     case 0x608: {                                       // Frame 9: eop1 @ slot 1
         double eopKpa = be_s16(d, 0) * 0.1;
-        // Warn only when engine is actually running — at crank/idle pressure
-        // can momentarily dip without indicating a fault.
-        bool warn = (m_rpm > 1200.0) && (eopKpa < 100.0);
+        double eopPsi = eopKpa * 0.145038;
+        bool warn = (m_rpm >= 600.0) && (eopPsi <= 40.0);
         if (warn != m_oilPressureWarn) {
             m_oilPressureWarn = warn;
             emit oilPressureWarnChanged();
@@ -215,7 +214,7 @@ void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
         if (qmlGear != m_gear) { m_gear = qmlGear; emit gearChanged(); }
 
         double vbat = be_u16(d, 4) * 0.001;
-        bool warn = vbat > 0.5 && vbat < 12.0;          // ignore powered-off readings
+        bool warn = vbat < 12.5;
         if (warn != m_batteryWarn) { m_batteryWarn = warn; emit batteryWarnChanged(); }
         break;
     }
@@ -231,19 +230,13 @@ void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
         }
         break;
     }
-    case 0x614: {                                       // Frame 21: mapMax @ slot 1
-        // MAP is absolute pressure (kPa); convert to boost in psi relative to
-        // atmospheric. Clamp at 0 — under vacuum we just show "no boost".
-        double mapKpa = be_s16(d, 0) * 0.1;
-        double psi = qMax(0.0, (mapKpa - 101.325) * 0.145038);
-        if (!qFuzzyCompare(1.0 + psi, 1.0 + m_boostPsi)) {
-            m_boostPsi = psi;
-            emit boostChanged();
-        }
-        break;
-    }
     // Still not broadcast on this CAN2 config:
     //   flvlA — fuel gauge stays at 0 until added to SCal
+    //   mapMax (0x614/frame 21) — GAUGE-CLUSTER.md previously documented this
+    //   as verified, added to SCal after the CAN2.png screenshot was taken.
+    //   The xlsx built from that screenshot is the source of truth and shows
+    //   frame 21 as all SPARE, so the decode is pulled until it's confirmed
+    //   against a current SCal screenshot. Boost gauge reads 0 until then.
     default:
         break;
     }

@@ -139,16 +139,16 @@ Read from SCal Datastreams → Generic CAN Transmit → Transmit Content. Frame 
 |---|---|---|---|
 | `0x600` | 0-1 | rpm | signed, clamped ≥ 0 |
 | `0x604` | 6-7 | limpMode | unsigned enum; non-zero → `checkEngine` |
-| `0x605` | 2-3 | ect1 (coolant) | °C × 0.1 → °F; `coolantWarn` if > 110 °C |
-| `0x608` | 0-1 | eop1 (oil pressure) | kPa × 0.1; `oilPressureWarn` if rpm > 1200 && < 100 kPa |
+| `0x605` | 2-3 | ect1 (coolant) | raw × 0.18 + 32 → °F; `coolantWarn` if > 220 °F |
+| `0x608` | 0-1 | eop1 (oil pressure) | raw × 0.0145038 → psi; `oilPressureWarn` if rpm ≥ 600 && psi ≤ 40 |
 | `0x60E` | 2-3 | gear | Syvecs enum 0=Unknown 1=R 2=N 3..10=1st..8th → QML -1/0/1..8 |
-| `0x60E` | 4-5 | vbat | V × 0.001 (unsigned); `batteryWarn` if 0.5 < v < 12 |
-| `0x60F` | 0-1 | vehicleSpeed | km/h × 0.036 → mph (× 0.621371); drives odometer accumulation |
-| `0x614` | 0-1 | mapMax (boost) | kPa abs × 0.1 → psi `(kPa-101.325)×0.145038`, clamped ≥ 0 (frame 21 — added separately from the initial SCal config) |
+| `0x60E` | 4-5 | vbat | V × 0.001 (unsigned); `batteryWarn` if v < 12.5 |
+| `0x60F` | 0-1 | vehicleSpeed | raw × 0.0223694 → mph; drives odometer accumulation |
 
 **Not on CAN2 in the current SCal config:**
 - `flvlA` (fuel level) — the fuel gauge stays at 0 until this channel is added to SCal's Transmit Content.
 - `sensorWarningLevel` — `checkEngine` currently derives from `limpMode` alone.
+- `mapMax` (boost, `0x614`/frame 21) — previously documented here as verified and wired to the boost gauge, but the xlsx built from `CAN2.png` (the source of truth for this mapping) shows frame 21 as all SPARE. Decode removed from `CanBus::decodeFrame()` pending re-verification against a current SCal Datastreams screenshot; boost gauge reads 0 until then.
 
 **Not on CAN at all** (no Syvecs channels exist for these): `leftIndicator`, `rightIndicator`, `axleLift` are `CONSTANT`/`false` member properties on `CanBus`, present purely so `main.qml`'s bindings still compile. `lowBeams`, `highBeams`, `cruiseControl`, `transmissionAuto`, `driveMode` are real READ+NOTIFY properties, but on real hardware they're only ever set to their defaults (`false`/`false`/`false`/`true`/`"SPORT"`) — nothing decodes them from a CAN frame. The dev-build simulator (`simulateTick()`) is the only thing that ever changes them, for layout review.
 
