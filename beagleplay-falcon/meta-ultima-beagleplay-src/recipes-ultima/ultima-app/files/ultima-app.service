@@ -81,6 +81,21 @@ StartLimitIntervalSec=0
 
 [Service]
 ExecStartPre=/bin/mkdir -p /tmp/runtime
+# GPU boot-time investigation (2026-08-12, see NOTES.md "GPU boot-time
+# regression investigation"): Qt's own shader-binary disk cache
+# (QOpenGLProgramBinaryCache, built into Qt since 5.9, glProgramBinary-based
+# — unrelated to Mesa's disk cache, which this same investigation confirmed
+# this driver stack doesn't honor) only activates when
+# QStandardPaths::CacheLocation is writable. Neither HOME nor XDG_CACHE_HOME
+# was ever set here, so on this read-only rootfs it was almost certainly
+# resolving to a location it couldn't write and silently never caching
+# anything, on every boot, since GPU enablement. /data is the only partition
+# that survives a power cycle (see "Read-only rootfs" above), so that's
+# where the cache has to live for it to ever warm up. mkdir here rather than
+# relying on it being pre-created by ultima-app.bb: this directory is
+# runtime state on the persistent data partition, not part of the rootfs
+# image, same reasoning as /tmp/runtime above.
+ExecStartPre=/bin/mkdir -p /data/qt-shader-cache
 ExecStart=/usr/bin/ultima-app
 # GPU enablement spike (2026-08-12): eglfs/kms instead of linuxfb+software —
 # see NOTES.md "PowerVR GPU enablement". Revert is BOTH of these lines back
@@ -90,6 +105,13 @@ ExecStart=/usr/bin/ultima-app
 Environment=QT_QPA_PLATFORM=eglfs
 Environment=QT_QPA_EGLFS_INTEGRATION=eglfs_kms
 Environment=XDG_RUNTIME_DIR=/tmp/runtime
+# Hardware-verified (2026-08-12, two independent real reboots, not just
+# systemctl restart — see NOTES.md): recovers ~0.2s of the GPU-enablement
+# regression via Qt's shader/QML disk cache, see comment on the ExecStartPre
+# above. Modest, not the full ~1.1s the cache mechanism could theoretically
+# cover — most likely because not every built-in Qt Quick scenegraph
+# material routes through the cacheable shader path in this Qt version.
+Environment=XDG_CACHE_HOME=/data/qt-shader-cache
 Restart=on-failure
 RestartSec=1
 StandardOutput=journal

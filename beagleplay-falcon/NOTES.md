@@ -2567,6 +2567,54 @@ enumeration issue unrelated to anything in this section.
 
 Live test artifacts (all removed from the board, rootfs restored to `ro`):
 `/etc/systemd/system/ultima-app.service.d/override.conf`,
-`/etc/xdg/eglfs_kms.json`, `/data/mesa_shader_cache/`. Nothing in this repo
-changed as a result of this investigation — it ruled things out, it didn't
-fix anything.
+`/etc/xdg/eglfs_kms.json`, `/data/mesa_shader_cache/`. Both dead-end fixes
+tried in this section left the repo untouched — but a third mechanism,
+found afterward, did stick. See below.
+
+### Partial fix applied: Qt's own shader/QML disk cache (2026-08-12)
+
+The two dead-end fixes above were both about the *driver's* shader cache
+(Mesa's, and — implicitly — anything the vendor blob might have had). Qt
+itself has had a separate, unrelated disk cache since 5.9:
+`QOpenGLProgramBinaryCache`, built on the standard GLES3
+`glProgramBinary`/`glGetProgramBinary` API, nothing to do with Mesa. Qt
+Quick's scenegraph was upgraded to route its built-in materials (exactly
+what's driving the `QML loaded` delta this section isolated) through the
+cacheable path. It only activates when `QStandardPaths::CacheLocation` is
+writable — which resolves via `XDG_CACHE_HOME`, falling back to
+`$HOME/.cache`. `ultima-app.service` set neither, so on this read-only
+rootfs the cache was almost certainly silently resolving to a location it
+couldn't write and never activating, on every boot since GPU enablement.
+
+Live-tested first (`XDG_CACHE_HOME=/data/qt-shader-cache` via a systemd
+drop-in, same zero-rebuild method as above): confirmed real writes this
+time — both a `qtshadercache-arm64-.../` shader binary cache and, as an
+unplanned bonus, Qt's separate QML bytecode cache
+(`ultima-app/qmlcache/*.qmlc`). Verified across two independent real
+reboots before trusting it, same discipline as the two disproven fixes:
+`QML loaded` dropped from 1.85s to 1.65s and 1.66s. Real, but partial — my
+read is that not every built-in Qt Quick scenegraph material routes through
+the cacheable shader path in this Qt version (the custom-TTF glyph/text
+rendering is the likely holdout), plus there's probably real per-boot
+image-decode/texture-upload cost neither cache touches.
+
+**Applied to the repo and hardware-verified on the actual packaged image**
+(not just the live SSH test): `ultima-app.service` now has
+`ExecStartPre=/bin/mkdir -p /data/qt-shader-cache` and
+`Environment=XDG_CACHE_HOME=/data/qt-shader-cache`. Rebuilt
+(`build.sh` — only 31 of 8957 tasks needed to rerun, confirming nothing
+upstream of `ultima-app` was touched), pushed to eMMC via `emmc-push.sh`
+(first re-run of that script since the original GPU-enablement work),
+verified booting clean from `/dev/mmcblk0p2` with `NRestarts=0`. A follow-up
+real reboot confirmed the fix holds on the properly-packaged image: `QML
+loaded` at 1.71s, in the same 1.65–1.71s band as the two live-test reboots,
+consistently below the 1.85s baseline. (That reboot's *total* main()→first-
+frame number, 3.13s, looked slightly worse than the pre-fix 3.05s baseline
+— traced to an unusually long final paint/swap gap, 0.204s vs. the normal
+~0.09s, unrelated to this fix and not seen on the other two reboots —
+ordinary boot-to-boot jitter, not a regression.)
+
+**Net result: ~0.15–0.2s recovered from the ~2.26s GPU-enablement
+regression.** Modest, but real, reproducible across three separate reboots,
+zero downside, and now permanently in the image rather than a live-only
+test.
