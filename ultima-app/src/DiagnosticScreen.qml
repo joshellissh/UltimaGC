@@ -187,7 +187,7 @@ Item {
         y: 24
         font.family: bahnschriftFont.name
         font.pixelSize: 22
-        color: "#7a7f87"
+        color: "white"
         text: "DIAGNOSTICS"
     }
 
@@ -236,7 +236,7 @@ Item {
                 horizontalAlignment: Text.AlignHCenter
                 font.family: bahnschriftFont.name
                 font.pixelSize: 11
-                color: "#9aa0a8"
+                color: "white"
                 elide: Text.ElideRight
                 maximumLineCount: 1
                 text: (tile.cfg ? tile.cfg.label.toUpperCase() : "") + (tile.cfg && tile.cfg.unconfirmed ? " *" : "")
@@ -303,7 +303,7 @@ Item {
             anchors.baseline: valText.baseline
             font.family: bahnschriftFont.name
             font.pixelSize: 12
-            color: "#7a7f87"
+            color: "white"
             text: (tile.cfg && tile.cfg.unit) ? tile.cfg.unit : ""
             visible: tile.cfg && !tile.cfg.bool && !tile.cfg.bools && !tile.cfg.text
         }
