@@ -144,11 +144,61 @@ Read from SCal Datastreams → Generic CAN Transmit → Transmit Content. Frame 
 | `0x60F` | 0-1 | vehicleSpeed | raw × 0.0223694 → mph; drives odometer accumulation |
 
 **Not on CAN2 in the current SCal config:**
-- `flvlA` (fuel level) — the fuel gauge stays at 0 until this channel is added to SCal's Transmit Content.
+- `flvlA` (fuel level) — no Syvecs channel for this; now sourced from the MCE18 expander instead (see below), not SCal.
 - `sensorWarningLevel` — `checkEngine` currently derives from `limpMode` alone.
 - `mapMax` (boost, `0x614`/frame 21) — previously documented here as verified and wired to the boost gauge, but the xlsx built from `CAN2.png` (the source of truth for this mapping) shows frame 21 as all SPARE. Decode removed from `CanBus::decodeFrame()` pending re-verification against a current SCal Datastreams screenshot; boost gauge reads 0 until then.
 
-**Not on CAN at all** (no Syvecs channels exist for these): `leftIndicator`, `rightIndicator`, `axleLift` are `CONSTANT`/`false` member properties on `CanBus`, present purely so `main.qml`'s bindings still compile. `lowBeams`, `highBeams`, `cruiseControl`, `transmissionAuto`, `driveMode` are real READ+NOTIFY properties, but on real hardware they're only ever set to their defaults (`false`/`false`/`false`/`true`/`"SPORT"`) — nothing decodes them from a CAN frame. The dev-build simulator (`simulateTick()`) is the only thing that ever changes them, for layout review.
+**Not on CAN at all** (no Syvecs channel exists, and no physical selector is known to exist in the car): `driveMode` is a real READ+NOTIFY property, but on real hardware it's only ever set to its default (`"SPORT"`) — nothing decodes it from a CAN frame or an MCE18 input. It's a 3-state QString, which doesn't fit a single digital input the way the boolean signals below do; wiring it (e.g. to a real drive-mode selector switch) is unstarted. The dev-build simulator (`simulateTick()`) is the only thing that ever changes it, for layout review.
+
+### MCE18 CAN Bus Expander (Unverified — Datasheet Default, Not Wire-Confirmed)
+
+Fills the gap above: `flvlA` (fuel level) and the six booleans that have no Syvecs
+channel at all (`leftIndicator`, `rightIndicator`, `axleLift`, `lowBeams`, `highBeams`,
+`cruiseControl`) plus `transmissionAuto` (assumed to be a physical Auto/Manual switch
+in this car, not a TCM channel) are read from a CANchecked-protocol MCE18 CAN bus
+expander instead of the ECU. Source: "CAN2 MCE18 Mapping.pdf" (CANchecked MCE18
+manual, Rev 2.0).
+
+**Everything in this section is a datasheet default, not verified against this car**
+— no MCE18 unit has been on the bench or candump'd yet. Treat frame IDs, byte order,
+and the analog protocol mode as assumptions to confirm before trusting a real
+reading, the same way `mapMax` above was a documented case of trusting an unverified
+mapping.
+
+- **TX Base ID**: `0x700` — the unit's datasheet default. Doesn't collide with the
+  Syvecs frames (`0x600`-`0x614`), but this car's MCE18 unit hasn't been confirmed
+  to actually be configured at its default.
+- **Frame `0x700`** (Base ID): bytes 0-1 = AIN0, assigned to the fuel sender.
+  AIN1-3 (bytes 2-7) are unused. AIN0 was picked over AIN1/AIN2/AIN6 specifically
+  because those three double as Frequency 2/3/4 inputs per the datasheet — using
+  AIN0 keeps the frequency-capable analogs free for future use.
+- **Frame `0x702`** (Base ID+2): byte 2 = bit-masked DIN0-7. Bit *N* = DIN *N*
+  (the datasheet doesn't spell out bit order — assumed). DIN6 is deliberately left
+  unassigned: the datasheet reuses that same pin for its Frequency 1 input
+  (`**TX Base ID+3`, "Frequency 1 - DIN6"), so it's kept free rather than
+  double-booked.
+
+  | Bit | Signal |
+  |---|---|
+  | DIN0 | `leftIndicator` |
+  | DIN1 | `rightIndicator` |
+  | DIN2 | `axleLift` |
+  | DIN3 | `lowBeams` |
+  | DIN4 | `highBeams` |
+  | DIN5 | `cruiseControl` |
+  | DIN6 | *(unassigned — reserved for Frequency 1)* |
+  | DIN7 | `transmissionAuto` — inverted: asserted = Manual, so an unwired input still reads Automatic, matching the documented real-hardware default |
+
+- **Analog scaling**: AIN0 can be configured on the unit as either raw 0-1023 ADC
+  counts or pre-scaled 0-5000mV (the datasheet's own table shows both units without
+  saying which is the power-on default). `CanBus::decodeFrame()` assumes raw
+  0-1023 counts (`kMce18AinRawMax` in `canbus.cpp`) and does a straight linear
+  `raw / 1023` → 0..1 map — not calibrated against the actual sender's resistance
+  curve, and the empty/full direction is assumed (low counts = empty).
+
+Needs, before trusting this on the road: `candump can0` with the MCE18 powered to
+confirm its actual configured base ID and analog protocol mode, and a known fuel
+level (e.g. empty vs. full tank) to calibrate the AIN0 scaling.
 
 ### Debugging
 

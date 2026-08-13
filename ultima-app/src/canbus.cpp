@@ -36,6 +36,22 @@ static inline qint16 be_s16(const quint8 *d, int off) {
     return qint16(be_u16(d, off));
 }
 
+// MCE18 CAN bus expander (CANchecked-protocol) — supplies the analog/digital
+// inputs the Syvecs S7+ has no channel for at all (fuel sender, turn
+// signals, beams, cruise, axle lift, auto/manual). See "CAN2 MCE18 Mapping"
+// PDF and GAUGE-CLUSTER.md's MCE18 section for the full frame layout and the
+// assumptions below — none of this is wire-verified yet (no unit on the
+// bench), unlike the Syvecs frame map above.
+//
+// TX Base ID is user-configurable on the unit; 0x700 is its datasheet
+// default and doesn't collide with the Syvecs frames (0x600-0x614), but
+// isn't confirmed as this car's actual configured value.
+static constexpr quint32 kMce18Base = 0x700;
+// AIN0-8 can be configured on the unit as either raw 0-1023 ADC counts or
+// pre-scaled 0-5000mV — the datasheet doesn't say which is the power-on
+// default, and it isn't confirmed for this unit. Assuming raw counts.
+static constexpr double kMce18AinRawMax = 1023.0;
+
 CanBus::CanBus(OdoStore *odo, const QString &iface, QObject *parent)
     : QObject(parent), m_odo(odo), m_iface(iface)
 {
@@ -278,8 +294,46 @@ void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
         }
         break;
     }
-    // Still not broadcast on this CAN2 config:
-    //   flvlA — fuel gauge stays at 0 until added to SCal
+    // flvlA isn't broadcast on the ECU's CAN2 config — fuel level instead
+    // comes from the MCE18 expander below (AIN0), not the Syvecs frames.
+    case kMce18Base: {                                   // MCE18 frame 1: AIN0-3
+        // Only AIN0 (fuel sender) is wired up; AIN1-3 unused for now.
+        // Assumes empty tank = low raw counts — not calibrated against the
+        // actual sender's resistance curve.
+        double fuel = qBound(0.0, be_u16(d, 0) / kMce18AinRawMax, 1.0);
+        if (!qFuzzyCompare(1.0 + fuel, 1.0 + m_fuelLevel)) {
+            m_fuelLevel = fuel;
+            emit fuelLevelChanged();
+        }
+        break;
+    }
+    case kMce18Base + 2: {                               // MCE18 frame @ Base ID+2: AIN8, DIN0-7 mask @ byte 2
+        // Bit N = DIN N (assumed — datasheet doesn't spell out bit order).
+        // DIN6 is left unassigned: the datasheet's Frequency-1 input reuses
+        // that same pin (**TX Base ID+3, "Frequency 1 - DIN6"), so it's kept
+        // free rather than double-booked.
+        quint8 dinMask = d[2];
+        bool leftInd = dinMask & (1 << 0);
+        bool rightInd = dinMask & (1 << 1);
+        bool axleLiftIn = dinMask & (1 << 2);
+        bool lowBeamsIn = dinMask & (1 << 3);
+        bool highBeamsIn = dinMask & (1 << 4);
+        bool cruiseIn = dinMask & (1 << 5);
+        // DIN7 asserted = Manual (inverted), so an input that isn't wired up
+        // yet reads DIN7 low and still defaults to Automatic — matching the
+        // documented real-hardware default (canbus.h) instead of silently
+        // flipping every unwired dash to "M".
+        bool transAutoIn = !(dinMask & (1 << 7));
+
+        if (leftInd != m_leftIndicator) { m_leftIndicator = leftInd; emit leftIndicatorChanged(); }
+        if (rightInd != m_rightIndicator) { m_rightIndicator = rightInd; emit rightIndicatorChanged(); }
+        if (axleLiftIn != m_axleLift) { m_axleLift = axleLiftIn; emit axleLiftChanged(); }
+        if (lowBeamsIn != m_lowBeams) { m_lowBeams = lowBeamsIn; emit lowBeamsChanged(); }
+        if (highBeamsIn != m_highBeams) { m_highBeams = highBeamsIn; emit highBeamsChanged(); }
+        if (cruiseIn != m_cruiseControl) { m_cruiseControl = cruiseIn; emit cruiseControlChanged(); }
+        if (transAutoIn != m_transmissionAuto) { m_transmissionAuto = transAutoIn; emit transmissionAutoChanged(); }
+        break;
+    }
     default:
         break;
     }

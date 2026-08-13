@@ -31,18 +31,22 @@ class CanBus : public QObject
     Q_PROPERTY(bool coolantWarn READ coolantWarn NOTIFY coolantWarnChanged)
     Q_PROPERTY(bool checkEngine READ checkEngine NOTIFY checkEngineChanged)
     // Channels not present in the Syvecs fixed stream — exposed for QML
-    // compatibility. Real hardware never sets these true; the dev-build
-    // simulator (see simulateTick()) drives lowBeams/highBeams/cruiseControl
-    // for layout testing.
-    Q_PROPERTY(bool leftIndicator MEMBER m_leftIndicator CONSTANT)
-    Q_PROPERTY(bool rightIndicator MEMBER m_rightIndicator CONSTANT)
+    // compatibility. On real hardware these are now decoded from the MCE18
+    // CAN expander's DIN0-7 bitmask (see decodeFrame()'s 0x702 case), not
+    // the ECU; the dev-build simulator (see simulateTick()) still drives
+    // lowBeams/highBeams/cruiseControl for layout testing.
+    Q_PROPERTY(bool leftIndicator READ leftIndicator NOTIFY leftIndicatorChanged)
+    Q_PROPERTY(bool rightIndicator READ rightIndicator NOTIFY rightIndicatorChanged)
     Q_PROPERTY(bool lowBeams READ lowBeams NOTIFY lowBeamsChanged)
     Q_PROPERTY(bool highBeams READ highBeams NOTIFY highBeamsChanged)
-    Q_PROPERTY(bool axleLift MEMBER m_axleLift CONSTANT)
+    Q_PROPERTY(bool axleLift READ axleLift NOTIFY axleLiftChanged)
     Q_PROPERTY(bool cruiseControl READ cruiseControl NOTIFY cruiseControlChanged)
     // Automatic/manual shift mode — not on the Syvecs fixed stream. Defaults
-    // to Automatic on real hardware; the dev-build simulator (see
-    // simulateTick()) toggles it for layout review.
+    // to Automatic on real hardware; on real hardware now driven by the
+    // MCE18's DIN7 (see decodeFrame()'s 0x702 case — DIN7 asserted = Manual,
+    // so an unwired/unasserted input still reads Automatic, preserving this
+    // default); the dev-build simulator (see simulateTick()) toggles it for
+    // layout review.
     Q_PROPERTY(bool transmissionAuto READ transmissionAuto NOTIFY transmissionAutoChanged)
     // Drive mode selector — not on the Syvecs fixed stream. One of "SPORT",
     // "SPORT+", "RACE"; the dev-build simulator (see simulateTick()) cycles
@@ -89,8 +93,11 @@ public:
     bool batteryWarn() const { return m_batteryWarn; }
     bool coolantWarn() const { return m_coolantWarn; }
     bool checkEngine() const { return m_checkEngine; }
+    bool leftIndicator() const { return m_leftIndicator; }
+    bool rightIndicator() const { return m_rightIndicator; }
     bool lowBeams() const { return m_lowBeams; }
     bool highBeams() const { return m_highBeams; }
+    bool axleLift() const { return m_axleLift; }
     bool cruiseControl() const { return m_cruiseControl; }
     bool transmissionAuto() const { return m_transmissionAuto; }
     QString driveMode() const { return m_driveMode; }
@@ -117,8 +124,11 @@ signals:
     void batteryWarnChanged();
     void coolantWarnChanged();
     void checkEngineChanged();
+    void leftIndicatorChanged();
+    void rightIndicatorChanged();
     void lowBeamsChanged();
     void highBeamsChanged();
+    void axleLiftChanged();
     void cruiseControlChanged();
     void transmissionAutoChanged();
     void driveModeChanged();
