@@ -41,11 +41,11 @@ class CanBus : public QObject
     Q_PROPERTY(bool highBeams READ highBeams NOTIFY highBeamsChanged)
     Q_PROPERTY(bool axleLift READ axleLift NOTIFY axleLiftChanged)
     Q_PROPERTY(bool cruiseControl READ cruiseControl NOTIFY cruiseControlChanged)
-    // Automatic/manual shift mode — not on the Syvecs fixed stream. Defaults
-    // to Automatic on real hardware; on real hardware now driven by the
-    // MCE18's DIN7 (see decodeFrame()'s 0x702 case — DIN7 asserted = Manual,
-    // so an unwired/unasserted input still reads Automatic, preserving this
-    // default); the dev-build simulator (see simulateTick()) toggles it for
+    // Automatic/manual shift mode — not on the Syvecs fixed stream DBC, and
+    // its CAN2 message isn't known yet, so decodeFrame() doesn't touch this.
+    // Expected to come from the Syvecs stream once that message is
+    // identified — not the MCE18 expander. Defaults to Automatic on real
+    // hardware; the dev-build simulator (see simulateTick()) toggles it for
     // layout review.
     Q_PROPERTY(bool transmissionAuto READ transmissionAuto NOTIFY transmissionAutoChanged)
     // Drive mode selector — not on the Syvecs fixed stream. One of "SPORT",

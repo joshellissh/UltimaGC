@@ -319,7 +319,9 @@ void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
         // Bit N = DIN N (assumed — datasheet doesn't spell out bit order).
         // DIN6 is left unassigned: the datasheet's Frequency-1 input reuses
         // that same pin (**TX Base ID+3, "Frequency 1 - DIN6"), so it's kept
-        // free rather than double-booked.
+        // free rather than double-booked. DIN7 is also unassigned: Auto/Manual
+        // is expected to come from the Syvecs stream instead, once its CAN
+        // message is known — not from this expander.
         quint8 dinMask = d[2];
         bool leftInd = dinMask & (1 << 0);
         bool rightInd = dinMask & (1 << 1);
@@ -327,11 +329,6 @@ void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
         bool lowBeamsIn = dinMask & (1 << 3);
         bool highBeamsIn = dinMask & (1 << 4);
         bool cruiseIn = dinMask & (1 << 5);
-        // DIN7 asserted = Manual (inverted), so an input that isn't wired up
-        // yet reads DIN7 low and still defaults to Automatic — matching the
-        // documented real-hardware default (canbus.h) instead of silently
-        // flipping every unwired dash to "M".
-        bool transAutoIn = !(dinMask & (1 << 7));
 
         if (leftInd != m_leftIndicator) { m_leftIndicator = leftInd; emit leftIndicatorChanged(); }
         if (rightInd != m_rightIndicator) { m_rightIndicator = rightInd; emit rightIndicatorChanged(); }
@@ -339,7 +336,6 @@ void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
         if (lowBeamsIn != m_lowBeams) { m_lowBeams = lowBeamsIn; emit lowBeamsChanged(); }
         if (highBeamsIn != m_highBeams) { m_highBeams = highBeamsIn; emit highBeamsChanged(); }
         if (cruiseIn != m_cruiseControl) { m_cruiseControl = cruiseIn; emit cruiseControlChanged(); }
-        if (transAutoIn != m_transmissionAuto) { m_transmissionAuto = transAutoIn; emit transmissionAutoChanged(); }
         break;
     }
     default:

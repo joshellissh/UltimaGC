@@ -148,16 +148,15 @@ Read from SCal Datastreams → Generic CAN Transmit → Transmit Content. Frame 
 - `sensorWarningLevel` — `checkEngine` currently derives from `limpMode` alone.
 - `mapMax` (boost, `0x614`/frame 21) — previously documented here as verified and wired to the boost gauge, but the xlsx built from `CAN2.png` (the source of truth for this mapping) shows frame 21 as all SPARE. Decode removed from `CanBus::decodeFrame()` pending re-verification against a current SCal Datastreams screenshot; boost gauge reads 0 until then.
 
-**Not on CAN at all** (no Syvecs channel exists, and no physical selector is known to exist in the car): `driveMode` is a real READ+NOTIFY property, but on real hardware it's only ever set to its default (`"SPORT"`) — nothing decodes it from a CAN frame or an MCE18 input. It's a 3-state QString, which doesn't fit a single digital input the way the boolean signals below do; wiring it (e.g. to a real drive-mode selector switch) is unstarted. The dev-build simulator (`simulateTick()`) is the only thing that ever changes it, for layout review.
+**Not on CAN at all:** `driveMode` (no Syvecs channel exists, and no physical selector is known to exist in the car) is a real READ+NOTIFY property, but on real hardware it's only ever set to its default (`"SPORT"`) — nothing decodes it from a CAN frame or an MCE18 input. It's a 3-state QString, which doesn't fit a single digital input the way the MCE18-sourced booleans below do; wiring it (e.g. to a real drive-mode selector switch) is unstarted. `transmissionAuto` (Auto/Manual shift mode) *is* expected to exist as a Syvecs channel, but which CAN2 message carries it hasn't been identified yet — it's read from neither the ECU nor the MCE18 expander, and is intentionally not part of the MCE18 wiring below. Both default to their real-hardware resting value (`"SPORT"` / Automatic) on real hardware; the dev-build simulator (`simulateTick()`) is the only thing that ever changes either, for layout review.
 
 ### MCE18 CAN Bus Expander (Unverified — Datasheet Default, Not Wire-Confirmed)
 
-Fills the gap above: `flvlA` (fuel level) and the six booleans that have no Syvecs
-channel at all (`leftIndicator`, `rightIndicator`, `axleLift`, `lowBeams`, `highBeams`,
-`cruiseControl`) plus `transmissionAuto` (assumed to be a physical Auto/Manual switch
-in this car, not a TCM channel) are read from a CANchecked-protocol MCE18 CAN bus
+Fills part of the gap above: `flvlA` (fuel level) and the six booleans that have no
+Syvecs channel at all (`leftIndicator`, `rightIndicator`, `axleLift`, `lowBeams`,
+`highBeams`, `cruiseControl`) are read from a CANchecked-protocol MCE18 CAN bus
 expander instead of the ECU. Source: "CAN2 MCE18 Mapping.pdf" (CANchecked MCE18
-manual, Rev 2.0).
+manual, Rev 2.0). `transmissionAuto` is deliberately *not* part of this — see above.
 
 **Everything in this section is a datasheet default, not verified against this car**
 — no MCE18 unit has been on the bench or candump'd yet. Treat frame IDs, byte order,
@@ -176,7 +175,9 @@ mapping.
   (the datasheet doesn't spell out bit order — assumed). DIN6 is deliberately left
   unassigned: the datasheet reuses that same pin for its Frequency 1 input
   (`**TX Base ID+3`, "Frequency 1 - DIN6"), so it's kept free rather than
-  double-booked.
+  double-booked. DIN7 is also unassigned, reserved for a possible future use —
+  Auto/Manual (`transmissionAuto`) is expected to come from the Syvecs stream
+  instead (see "Not on CAN at all" above), not this expander.
 
   | Bit | Signal |
   |---|---|
@@ -187,7 +188,7 @@ mapping.
   | DIN4 | `highBeams` |
   | DIN5 | `cruiseControl` |
   | DIN6 | *(unassigned — reserved for Frequency 1)* |
-  | DIN7 | `transmissionAuto` — inverted: asserted = Manual, so an unwired input still reads Automatic, matching the documented real-hardware default |
+  | DIN7 | *(unassigned)* |
 
 - **Analog scaling**: AIN0 can be configured on the unit as either raw 0-1023 ADC
   counts or pre-scaled 0-5000mV (the datasheet's own table shows both units without
