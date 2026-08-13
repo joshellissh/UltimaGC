@@ -65,7 +65,6 @@ CanBus::CanBus(OdoStore *odo, const QString &iface, QObject *parent)
         m_totalOdo = m_odo->totalOdo();
         m_tripOdo = m_odo->tripOdo();
     }
-    initDiag();
     m_reconnectTimer.setInterval(1000);
     connect(&m_reconnectTimer, &QTimer::timeout, this, &CanBus::tryConnect);
     tryConnect();
@@ -74,42 +73,6 @@ CanBus::CanBus(OdoStore *odo, const QString &iface, QObject *parent)
 CanBus::~CanBus()
 {
     closeSocket();
-}
-
-// Seeds every diagnostics-screen key with a resting default so QML bindings
-// never see an undefined value — on real hardware this is the only thing
-// that ever populates m_diag, since decodeFrame() doesn't decode any of
-// these channels yet (see the Q_PROPERTY comment in canbus.h).
-void CanBus::initDiag()
-{
-    m_diag = {
-        // Air / fuel delivery
-        { QStringLiteral("pedalPct"), 0.0 }, { QStringLiteral("throttlePct"), 0.0 },
-        { QStringLiteral("dbwTargetPct"), 0.0 }, { QStringLiteral("chargeAirTempC"), 25.0 },
-        { QStringLiteral("wastegateTargetKpa"), 100.0 }, { QStringLiteral("loadPct"), 0.0 },
-        { QStringLiteral("throttleClosed"), true }, { QStringLiteral("runMode"), QStringLiteral("IDLE") },
-        // Ignition & knock
-        { QStringLiteral("ignTimingDeg"), 12.0 },
-        { QStringLiteral("knock1"), 0.0 }, { QStringLiteral("knock2"), 0.0 }, { QStringLiteral("knock3"), 0.0 },
-        { QStringLiteral("knock4"), 0.0 }, { QStringLiteral("knock5"), 0.0 }, { QStringLiteral("knock6"), 0.0 },
-        { QStringLiteral("fuelTrimCell"), 1.0 },
-        // Fuel system
-        { QStringLiteral("lambda1"), 1.0 }, { QStringLiteral("lambda2"), 1.0 },
-        { QStringLiteral("railPressureKpa"), 300.0 }, { QStringLiteral("injectorDutyPct"), 0.0 },
-        { QStringLiteral("fuelConsRateCcMin"), 0.0 }, { QStringLiteral("fuelCompPct"), 0.0 },
-        { QStringLiteral("pump1"), false }, { QStringLiteral("pump2"), false }, { QStringLiteral("pump3"), false },
-        { QStringLiteral("vbatCompMs"), 0.3 },
-        // Drivetrain & torque
-        { QStringLiteral("wheelSpinPct"), 0.0 }, { QStringLiteral("tcSpinErrPct"), 0.0 },
-        { QStringLiteral("tcTorqueCutPct"), 0.0 }, { QStringLiteral("launchRpm"), 4500.0 },
-        { QStringLiteral("torqueOutputNm"), 0.0 }, { QStringLiteral("torqueDemandNm"), 0.0 },
-        { QStringLiteral("calSelect"), 2 }, { QStringLiteral("pitLimiter"), false },
-        // Trans / unconfirmed (raw TCM channels, meaning not verified)
-        { QStringLiteral("manualAuto"), true }, { QStringLiteral("paddleDown"), false },
-        { QStringLiteral("sportPlus"), false }, { QStringLiteral("clutchAPressureKpa"), 300.0 },
-        { QStringLiteral("clutchBPressureKpa"), 300.0 }, { QStringLiteral("tcmLimp"), false },
-        { QStringLiteral("tcmLogging"), 1 }, { QStringLiteral("carDtc"), 0 },
-    };
 }
 
 void CanBus::closeSocket()
@@ -247,13 +210,17 @@ void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
         // cruiseState: SCal enum 0=OFF 1=ON 2=ACTIVE. Icon only
         // distinguishes OFF/ACTIVE — ON (armed but not actively
         // controlling) reads as not-lit, same as OFF.
-        int cruiseState = be_u16(d, 0);
-        bool cruiseActive = (cruiseState == 2);
+        int cruiseStateRaw = be_u16(d, 0);
+        static const QString kCruiseStateNames[] = { QStringLiteral("OFF"), QStringLiteral("ON"), QStringLiteral("ACTIVE") };
+        QString cruiseState = (cruiseStateRaw <= 2) ? kCruiseStateNames[cruiseStateRaw] : QStringLiteral("?");
+        if (cruiseState != m_cruiseState) { m_cruiseState = cruiseState; emit cruiseStateChanged(); }
+        bool cruiseActive = (cruiseStateRaw == 2);
         if (cruiseActive != m_cruiseControl) { m_cruiseControl = cruiseActive; emit cruiseControlChanged(); }
         break;
     }
     case 0x604: {                                       // Frame 5: limpMode @ slot 4
         int limp = be_u16(d, 6);
+        if (limp != m_limpMode) { m_limpMode = limp; emit limpModeChanged(); }
         // sensorWarningLevel is not on CAN2 in this config — derive
         // checkEngine from limpMode alone.
         bool ce = (limp != 0);
@@ -279,6 +246,10 @@ void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
     case 0x608: {                                       // Frame 9: eop1 @ slot 1
         double eopKpa = be_s16(d, 0) * 0.1;
         double eopPsi = eopKpa * 0.145038;
+        if (!qFuzzyCompare(1.0 + eopPsi, 1.0 + m_oilPressurePsi)) {
+            m_oilPressurePsi = eopPsi;
+            emit oilPressureChanged();
+        }
         bool warn = (m_rpm >= 600.0) && (eopPsi <= 40.0);
         if (warn != m_oilPressureWarn) {
             m_oilPressureWarn = warn;
@@ -298,6 +269,7 @@ void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
         if (qmlGear != m_gear) { m_gear = qmlGear; emit gearChanged(); }
 
         double vbat = be_u16(d, 4) * 0.001;
+        if (!qFuzzyCompare(1.0 + vbat, 1.0 + m_vbat)) { m_vbat = vbat; emit vbatChanged(); }
         bool warn = vbat < 12.5;
         if (warn != m_batteryWarn) { m_batteryWarn = warn; emit batteryWarnChanged(); }
         break;
@@ -402,6 +374,7 @@ void CanBus::simulateTick()
     // Cruise control: always engaged in the simulator so the icon can be
     // exercised without real CAN hardware.
     if (!m_cruiseControl) { m_cruiseControl = true; emit cruiseControlChanged(); }
+    if (m_cruiseState != QStringLiteral("ACTIVE")) { m_cruiseState = QStringLiteral("ACTIVE"); emit cruiseStateChanged(); }
 
     // Transmission mode: flip Automatic/Manual every few seconds so the
     // gear indicator's A/M badge can be exercised without real CAN hardware.
@@ -445,9 +418,14 @@ void CanBus::simulateTick()
         m_simTargetSpeed = phase.target;
         m_simPhaseTimer = phase.dur;
 
-        if (rnd() < 0.3) { m_oilPressureWarn = !m_oilPressureWarn; emit oilPressureWarnChanged(); }
-        if (rnd() < 0.4) { m_checkEngine = !m_checkEngine; emit checkEngineChanged(); }
-        if (rnd() < 0.3) { m_batteryWarn = !m_batteryWarn; emit batteryWarnChanged(); }
+        if (rnd() < 0.3) m_simOilFault = !m_simOilFault;
+        if (rnd() < 0.4) {
+            m_checkEngine = !m_checkEngine;
+            emit checkEngineChanged();
+            int limp = m_checkEngine ? 1 : 0;
+            if (limp != m_limpMode) { m_limpMode = limp; emit limpModeChanged(); }
+        }
+        if (rnd() < 0.3) m_simBattFault = !m_simBattFault;
     }
 
     accumulateOdometer(); // uses m_speed/timestamp from before this tick's update
@@ -495,102 +473,26 @@ void CanBus::simulateTick()
     double newBoost = m_boostPsi + (boostTarget - m_boostPsi) * 0.05;
     if (!qFuzzyCompare(1.0 + newBoost, 1.0 + m_boostPsi)) { m_boostPsi = newBoost; emit boostChanged(); }
 
-    // ---- Diagnostics-screen channels (see canbus.h Q_PROPERTY comment) ----
-    // Not physically modeled — just plausible-looking values correlated with
-    // the driving state already computed above, for diagnostic-screen layout
-    // review without real CAN hardware.
-    double pedalPct = qBound(0.0, m_simAccel * 70.0 + m_speed * 0.15 + (rnd() - 0.5) * 3.0, 100.0);
-    double throttlePct = qBound(0.0, pedalPct + (rnd() - 0.5) * 3.0, 100.0);
-    double dbwTargetPct = qBound(0.0, throttlePct + (rnd() - 0.5) * 2.0, 100.0);
-    double loadPct = qBound(0.0, (m_rpm / 7200.0) * 60.0 + throttlePct * 0.35, 100.0);
-    double chargeAirTempC = 25.0 + m_boostPsi * 0.6 + (rnd() - 0.5) * 1.0;
-    double wastegateTargetKpa = 100.0 + m_boostPsi * 3.0;
-    bool throttleClosed = throttlePct < 2.0;
-    QString runMode = (m_speed < 1.0 && m_rpm < 1000.0) ? QStringLiteral("IDLE") : QStringLiteral("RUN");
-
-    // Knock: silent almost all the time, with an occasional randomized
-    // per-cylinder blip that decays back to zero — this is the whole reason
-    // the diagnostic screen exists (spot the one cylinder misbehaving), so
-    // the simulator should actually produce that case sometimes.
-    m_simKnockEventTimer -= dt;
-    if (m_simKnockEventTimer <= 0.0) {
-        m_simKnock[int(rnd() * 6.0)] = 1.0 + rnd() * 2.0;
-        m_simKnockEventTimer = 6.0 + rnd() * 10.0;
+    // Oil pressure: rises with rpm, same threshold decodeFrame() uses to
+    // derive the warn boolean (rpm >= 600 && psi <= 40) — m_simOilFault
+    // (flipped in the phase-random block above) forces a dip so the warn
+    // icon can still be exercised without real CAN hardware.
+    double targetOilPressure = 40.0 + (m_rpm / 7200.0) * 50.0;
+    if (m_simOilFault) targetOilPressure *= 0.3;
+    if (!qFuzzyCompare(1.0 + targetOilPressure, 1.0 + m_oilPressurePsi)) {
+        m_oilPressurePsi = targetOilPressure;
+        emit oilPressureChanged();
     }
-    double knockSum = 0.0;
-    for (int i = 0; i < 6; ++i) { m_simKnock[i] *= 0.93; knockSum += m_simKnock[i]; }
-    double ignTimingDeg = 12.0 + (m_rpm / 7200.0) * 20.0 - knockSum * 0.5 + (rnd() - 0.5) * 0.5;
-    double fuelTrimCell = 1.0 + (rnd() - 0.5) * 0.06;
+    bool oilWarn = (m_rpm >= 600.0) && (m_oilPressurePsi <= 40.0);
+    if (oilWarn != m_oilPressureWarn) { m_oilPressureWarn = oilWarn; emit oilPressureWarnChanged(); }
 
-    double lambda1 = 1.0 + std::sin(kTwoPi * m_simElapsedS / 5.0) * 0.03 + (rnd() - 0.5) * 0.01;
-    double lambda2 = 1.0 + std::sin(kTwoPi * m_simElapsedS / 5.3 + 1.0) * 0.03 + (rnd() - 0.5) * 0.01;
-    double railPressureKpa = 300.0 + m_rpm * 0.02 + (rnd() - 0.5) * 5.0;
-    double injectorDutyPct = qBound(0.0, loadPct * 0.7 + (rnd() - 0.5) * 2.0, 100.0);
-    double fuelConsRateCcMin = qMax(0.0, 15.0 + m_rpm * 0.02 + throttlePct * 0.5);
-    double fuelCompPct = (rnd() - 0.5) * 4.0;
-    bool pump1 = m_rpm > 400.0;
-    bool pump2 = loadPct > 50.0;
-    bool pump3 = m_rpm > 5500.0;
-    double vbatCompMs = 0.3 + (rnd() - 0.5) * 0.1;
-
-    double wheelSpinPct = qMax(0.0, m_simAccel * 2.5 + (rnd() - 0.5) * 0.6);
-    double tcSpinErrPct = wheelSpinPct - 3.0 + (rnd() - 0.5) * 0.5;
-    double tcTorqueCutPct = qMax(0.0, (wheelSpinPct - 3.0) * 2.0);
-    double torqueOutputNm = 30.0 + (m_rpm / 7200.0) * 350.0 * (0.4 + throttlePct / 100.0 * 0.6);
-    double torqueDemandNm = torqueOutputNm + (pedalPct - throttlePct) * 2.0;
-    bool manualAuto = m_transmissionAuto;
-    bool paddleDown = m_simGearCycleTimer > 1.95; // brief pulse right after each simulated shift
-    bool sportPlus = (m_driveMode == QStringLiteral("SPORT+"));
-    double clutchAPressureKpa = 300.0 + torqueOutputNm * 0.3 + (rnd() - 0.5) * 5.0;
-    double clutchBPressureKpa = 300.0 + torqueOutputNm * 0.3 + (rnd() - 0.5) * 5.0;
-    // carDtc: left at initDiag()'s static default. It's tempting to derive
-    // this from m_checkEngine, but that flag toggles randomly for the top
-    // indicator row's own demo purposes and has nothing to do with the
-    // (unconfirmed, never-decoded) TCM DTC channel this would represent —
-    // coupling them would make the Trans page flicker a fault count that
-    // means nothing.
-
-    m_diag[QStringLiteral("pedalPct")] = pedalPct;
-    m_diag[QStringLiteral("throttlePct")] = throttlePct;
-    m_diag[QStringLiteral("dbwTargetPct")] = dbwTargetPct;
-    m_diag[QStringLiteral("chargeAirTempC")] = chargeAirTempC;
-    m_diag[QStringLiteral("wastegateTargetKpa")] = wastegateTargetKpa;
-    m_diag[QStringLiteral("loadPct")] = loadPct;
-    m_diag[QStringLiteral("throttleClosed")] = throttleClosed;
-    m_diag[QStringLiteral("runMode")] = runMode;
-    m_diag[QStringLiteral("ignTimingDeg")] = ignTimingDeg;
-    m_diag[QStringLiteral("knock1")] = m_simKnock[0];
-    m_diag[QStringLiteral("knock2")] = m_simKnock[1];
-    m_diag[QStringLiteral("knock3")] = m_simKnock[2];
-    m_diag[QStringLiteral("knock4")] = m_simKnock[3];
-    m_diag[QStringLiteral("knock5")] = m_simKnock[4];
-    m_diag[QStringLiteral("knock6")] = m_simKnock[5];
-    m_diag[QStringLiteral("fuelTrimCell")] = fuelTrimCell;
-    m_diag[QStringLiteral("lambda1")] = lambda1;
-    m_diag[QStringLiteral("lambda2")] = lambda2;
-    m_diag[QStringLiteral("railPressureKpa")] = railPressureKpa;
-    m_diag[QStringLiteral("injectorDutyPct")] = injectorDutyPct;
-    m_diag[QStringLiteral("fuelConsRateCcMin")] = fuelConsRateCcMin;
-    m_diag[QStringLiteral("fuelCompPct")] = fuelCompPct;
-    m_diag[QStringLiteral("pump1")] = pump1;
-    m_diag[QStringLiteral("pump2")] = pump2;
-    m_diag[QStringLiteral("pump3")] = pump3;
-    m_diag[QStringLiteral("vbatCompMs")] = vbatCompMs;
-    m_diag[QStringLiteral("wheelSpinPct")] = wheelSpinPct;
-    m_diag[QStringLiteral("tcSpinErrPct")] = tcSpinErrPct;
-    m_diag[QStringLiteral("tcTorqueCutPct")] = tcTorqueCutPct;
-    // launchRpm, calSelect, pitLimiter, tcmLimp, tcmLogging: static config-like
-    // values on real hardware — left at initDiag()'s defaults, nothing to simulate.
-    m_diag[QStringLiteral("torqueOutputNm")] = torqueOutputNm;
-    m_diag[QStringLiteral("torqueDemandNm")] = torqueDemandNm;
-    m_diag[QStringLiteral("manualAuto")] = manualAuto;
-    m_diag[QStringLiteral("paddleDown")] = paddleDown;
-    m_diag[QStringLiteral("sportPlus")] = sportPlus;
-    m_diag[QStringLiteral("clutchAPressureKpa")] = clutchAPressureKpa;
-    m_diag[QStringLiteral("clutchBPressureKpa")] = clutchBPressureKpa;
-    // carDtc intentionally not updated here — see comment above.
-    emit diagChanged();
-
-    if (!m_diagLive) { m_diagLive = true; emit diagLiveChanged(); }
+    // Battery voltage: steady alternator output, same 12.5V threshold
+    // decodeFrame() uses — m_simBattFault forces a dip to exercise the warn
+    // icon.
+    double targetVbat = m_simBattFault ? 11.8 : 13.8;
+    double newVbat = m_vbat + (targetVbat - m_vbat) * 0.1;
+    if (!qFuzzyCompare(1.0 + newVbat, 1.0 + m_vbat)) { m_vbat = newVbat; emit vbatChanged(); }
+    bool battWarn = m_vbat < 12.5;
+    if (battWarn != m_batteryWarn) { m_batteryWarn = battWarn; emit batteryWarnChanged(); }
 }
 #endif

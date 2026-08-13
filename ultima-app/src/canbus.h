@@ -5,7 +5,6 @@
 #include <QString>
 #include <QTimer>
 #include <QSocketNotifier>
-#include <QVariantMap>
 
 class OdoStore;
 
@@ -30,6 +29,13 @@ class CanBus : public QObject
     Q_PROPERTY(bool batteryWarn READ batteryWarn NOTIFY batteryWarnChanged)
     Q_PROPERTY(bool coolantWarn READ coolantWarn NOTIFY coolantWarnChanged)
     Q_PROPERTY(bool checkEngine READ checkEngine NOTIFY checkEngineChanged)
+    // Raw readings behind the four warn/status booleans above — the dash
+    // only needs the boolean, but the diagnostics screen shows the actual
+    // decoded value (see decodeFrame()'s 0x601/0x604/0x608/0x60E cases).
+    Q_PROPERTY(double oilPressure READ oilPressure NOTIFY oilPressureChanged)     // psi, backs oilPressureWarn
+    Q_PROPERTY(double vbat READ vbat NOTIFY vbatChanged)                         // V, backs batteryWarn
+    Q_PROPERTY(QString cruiseState READ cruiseState NOTIFY cruiseStateChanged)   // OFF/ON/ACTIVE, backs cruiseControl
+    Q_PROPERTY(int limpMode READ limpMode NOTIFY limpModeChanged)                // raw code, backs checkEngine
     // Channels not present in the Syvecs fixed stream — exposed for QML
     // compatibility. On real hardware these are decoded from the MCE18
     // CAN expander's DIN0-7 bitmask (see decodeFrame()'s 0x702 case), not
@@ -58,29 +64,6 @@ class CanBus : public QObject
     // "SPORT+", "RACE"; the dev-build simulator (see simulateTick()) cycles
     // through them for layout review.
     Q_PROPERTY(QString driveMode READ driveMode NOTIFY driveModeChanged)
-    // Diagnostics screen data — the ~40 CAN2 channels documented in the Auto
-    // Bionics mapping sheet that aren't decoded by decodeFrame() yet (lambda,
-    // per-cylinder knock retard, fuel/ignition trims, traction control,
-    // torque estimates, a set of unconfirmed transmission channels). Bundled
-    // as one map instead of ~40 individual Q_PROPERTYs on purpose: none of
-    // these frame/offset/scaling triples have been re-verified against a
-    // current SCal Datastreams screenshot the way the seven real properties
-    // above were (see the mapMax/boost lesson in decodeFrame()), so this
-    // project isn't ready to commit them as permanent typed API. Keys match
-    // the sheet's own channel names. initDiag() seeds every key with a
-    // resting default so QML bindings never see an undefined value — but
-    // real hardware never advances past that seed (decodeFrame() doesn't
-    // touch m_diag), so QML must gate display on diagLive below rather than
-    // trust diag's values directly. Otherwise a real dash would show
-    // plausible-looking resting numbers (1.00 λ, IDLE, ...) as if they were
-    // live — the same failure shape as the mapMax boost gauge reading 0 as
-    // if it meant something.
-    Q_PROPERTY(QVariantMap diag READ diag NOTIFY diagChanged)
-    // True only once the dev-build simulator has actually ticked at least
-    // once. Stays false forever on real hardware until real decoding is
-    // added for these channels — QML should show "--" rather than diag's
-    // seeded defaults when this is false.
-    Q_PROPERTY(bool diagLive READ diagLive NOTIFY diagLiveChanged)
 
 public:
     explicit CanBus(OdoStore *odo, const QString &iface = QStringLiteral("can0"),
@@ -107,8 +90,10 @@ public:
     bool cruiseControl() const { return m_cruiseControl; }
     bool transmissionAuto() const { return m_transmissionAuto; }
     QString driveMode() const { return m_driveMode; }
-    QVariantMap diag() const { return m_diag; }
-    bool diagLive() const { return m_diagLive; }
+    double oilPressure() const { return m_oilPressurePsi; }
+    double vbat() const { return m_vbat; }
+    QString cruiseState() const { return m_cruiseState; }
+    int limpMode() const { return m_limpMode; }
 
     void setTotalOdo(double v);
     void setTripOdo(double v);
@@ -138,8 +123,10 @@ signals:
     void cruiseControlChanged();
     void transmissionAutoChanged();
     void driveModeChanged();
-    void diagChanged();
-    void diagLiveChanged();
+    void oilPressureChanged();
+    void vbatChanged();
+    void cruiseStateChanged();
+    void limpModeChanged();
 
 private slots:
     void onReadable();
@@ -152,7 +139,6 @@ private:
     void decodeFrame(quint32 id, const quint8 *data, int dlc);
     void accumulateOdometer();
     void closeSocket();
-    void initDiag();
 
     OdoStore *m_odo;
     QString m_iface;
@@ -181,8 +167,10 @@ private:
     bool m_cruiseControl = false;
     bool m_transmissionAuto = true;
     QString m_driveMode = QStringLiteral("SPORT");
-    QVariantMap m_diag;   // diagnostics-screen channels — see Q_PROPERTY comment above
-    bool m_diagLive = false;
+    double m_oilPressurePsi = 0.0;             // raw reading behind m_oilPressureWarn
+    double m_vbat = 0.0;                       // raw reading (V) behind m_batteryWarn
+    QString m_cruiseState = QStringLiteral("OFF"); // raw OFF/ON/ACTIVE behind m_cruiseControl
+    int m_limpMode = 0;                        // raw code behind m_checkEngine
 
     // Odometer integration
     qint64 m_lastSpeedMs = 0;
@@ -198,8 +186,8 @@ private:
     double m_simElapsedS = 0.0;      // free-running clock for sweep/toggle phases
     double m_simGearCycleTimer = 0.0; // seconds remaining before advancing the gear cycle
     int m_simGearCycleIndex = 0;      // index into the R/N/P/1..7 cycle
-    double m_simKnock[6] = { 0, 0, 0, 0, 0, 0 }; // per-cylinder knock retard, deg — decays each tick
-    double m_simKnockEventTimer = 0.0; // seconds until the next randomized knock blip
+    bool m_simOilFault = false;       // forces a low-oil-pressure dip to exercise the warn icon
+    bool m_simBattFault = false;      // forces a low-voltage dip to exercise the warn icon
 #endif
 };
 
