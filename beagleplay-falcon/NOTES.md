@@ -2724,3 +2724,52 @@ per this project's own pattern of spiking on SD before touching the
 production boot source); `kmscube`/`mesa-demos` still need removing from
 the image per the still-open GPU-enablement note above, unrelated to this
 change.
+
+### Real artwork swapped in, and promoted to eMMC (2026-08-12)
+
+Replaced the procedural ring with the actual `ULTIMA RS` artwork
+(repo-root `splash screen.png`, 1600×720 — already an exact match for the
+panel, no scaling needed).
+
+**Ships as a headerless raw pixel blob, not the PNG.** Decoding PNG
+(DEFLATE + chunk parsing) on-target would mean adding libpng/zlib to a
+read-only rootfs this project has otherwise kept deliberately dependency-
+light (no libdrm either, see above) for a single static, known-at-build-time
+image. Converted once, host-side, with Python/Pillow:
+
+```
+python3 -c 'from PIL import Image; \
+  open("splash.rgbx","wb").write(
+    Image.open("splash screen.png").convert("RGB").tobytes("raw", "BGRX"))'
+```
+
+`"BGRX"` isn't arbitrary — it's the same XRGB8888 layout this file already
+confirmed against the panel's `fb_var_screeninfo` (red offset 16, green 8,
+blue 0): on this little-endian target, 4 bytes in memory order [B, G, R,
+pad] *is* a native `0x00RRGGBB` read. So `ultima-splash.c` needs zero
+pixel-format conversion at runtime, just a straight per-row `read()` into
+the mmap'd framebuffer (still stride-aware via `finfo.line_length`, same as
+before) — the only new logic is a byte-count sanity check (refuses to draw
+if the blob size doesn't match `xres*yres*4` for whatever panel is actually
+attached, rather than guessing how to scale/crop it, same "refuse to
+guess" stance as the existing bpp check). Ships to
+`/usr/share/ultima-splash/splash.rgbx` (4,608,000 bytes raw; ~0.7MB added
+to the compressed image — the large flat black background compresses
+well). The source PNG stays checked in at the repo root as the thing to
+re-run that conversion against; nothing regenerates it automatically.
+
+**Hardware-verified on SD first** (same USR-held boot procedure as above):
+real artwork rendered correctly — right colors, right orientation, no
+row-order or channel-swap bugs, confirmed by direct visual check on the
+board, not just log timestamps this time. Handoff still clean at this
+image size (4.6MB raw is a lot more data than the ring's few hundred
+touched pixels, but still well inside the ~5s window between splash-draw
+and Qt's mode-set — no new timing risk observed).
+
+**Promoted to eMMC** via `emmc-push.sh` (SD-booted board pushes over SSH,
+verifies `mmcdev=0` on the SPL before writing, refuses to run if already
+booted from eMMC) — first time this specific image has gone to the
+production boot source rather than staying on the SD spike card. Confirmed
+board was on `/dev/mmcblk1p2` (SD) before pushing.  `kmscube`/`mesa-demos`
+removal (open item above) still not done — this promotion didn't wait on
+it, same as the GPU-enablement eMMC promotion earlier didn't either.
