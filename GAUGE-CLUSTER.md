@@ -135,6 +135,7 @@ Read from SCal Datastreams → Generic CAN Transmit → Transmit Content. Frame 
 | Frame (CAN ID) | Bytes | Channel | Decoding |
 |---|---|---|---|
 | `0x600` | 0-1 | rpm | signed, clamped ≥ 0 |
+| `0x600` | 6-7 | map1A (boost) | signed, mbar 1:1 (SCal: y=(1\*x)+0, 0..3000, Pressure/Millibar/Signed); psi = (mbar − 1013.25) × 0.0145038, clamped ≥ 0. Confirmed against SCal Datastreams screenshot 2026-08-13; not yet candump-confirmed on the wire. |
 | `0x604` | 6-7 | limpMode | unsigned enum; non-zero → `checkEngine` |
 | `0x605` | 2-3 | ect1 (coolant) | raw × 0.18 + 32 → °F; `coolantWarn` if > 220 °F |
 | `0x608` | 0-1 | eop1 (oil pressure) | raw × 0.0145038 → psi; `oilPressureWarn` if rpm ≥ 600 && psi ≤ 40 |

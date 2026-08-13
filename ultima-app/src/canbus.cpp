@@ -205,9 +205,20 @@ void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
         return;
 
     switch (id) {
-    case 0x600: {                                       // Frame 1: rpm @ slot 1
+    case 0x600: {                                       // Frame 1: rpm @ slot 1, map1A @ slot 4
         double v = qMax(0, int(be_s16(d, 0)));
         if (v != m_rpm) { m_rpm = v; emit rpmChanged(); }
+
+        // map1A (SCal Slot 4/Frame 1): y=(1*x)+0, signed, absolute MAP in
+        // mbar. Signed matters — near vacuum a raw negative read through an
+        // unsigned decode would wrap to ~65500 and peg the gauge. Subtract
+        // standard atmosphere (1013.25 mbar) to get boost above ambient.
+        double mapMbar = be_s16(d, 6);
+        double boostPsi = qMax(0.0, (mapMbar - 1013.25) * 0.0145038);
+        if (!qFuzzyCompare(1.0 + boostPsi, 1.0 + m_boostPsi)) {
+            m_boostPsi = boostPsi;
+            emit boostChanged();
+        }
         break;
     }
     case 0x604: {                                       // Frame 5: limpMode @ slot 4
@@ -269,11 +280,6 @@ void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
     }
     // Still not broadcast on this CAN2 config:
     //   flvlA — fuel gauge stays at 0 until added to SCal
-    //   mapMax (0x614/frame 21) — GAUGE-CLUSTER.md previously documented this
-    //   as verified, added to SCal after the CAN2.png screenshot was taken.
-    //   The xlsx built from that screenshot is the source of truth and shows
-    //   frame 21 as all SPARE, so the decode is pulled until it's confirmed
-    //   against a current SCal screenshot. Boost gauge reads 0 until then.
     default:
         break;
     }
