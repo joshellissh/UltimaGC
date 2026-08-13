@@ -136,6 +136,7 @@ Read from SCal Datastreams → Generic CAN Transmit → Transmit Content. Frame 
 |---|---|---|---|
 | `0x600` | 0-1 | rpm | signed, clamped ≥ 0 |
 | `0x600` | 6-7 | map1A (boost) | signed, mbar 1:1 (SCal: y=(1\*x)+0, 0..3000, Pressure/Millibar/Signed); psi = (mbar − 1013.25) × 0.0145038, clamped ≥ 0. Confirmed against SCal Datastreams screenshot 2026-08-13; not yet candump-confirmed on the wire. |
+| `0x601` | 0-1 | cruiseState → `cruiseControl` | unsigned enum: 0=OFF 1=ON 2=ACTIVE; icon lit only when ACTIVE (ON reads as not-lit, same as OFF) |
 | `0x604` | 6-7 | limpMode | unsigned enum; non-zero → `checkEngine` |
 | `0x605` | 2-3 | ect1 (coolant) | raw × 0.18 + 32 → °F; `coolantWarn` if > 220 °F |
 | `0x605` | 4-5 | ManualAuto_U12 → `transmissionAuto` | unsigned enum; nonzero → Automatic. Frame/slot per the user, not a SCal screenshot; polarity (which value means Automatic) is assumed, not confirmed either way. |
@@ -153,13 +154,13 @@ Read from SCal Datastreams → Generic CAN Transmit → Transmit Content. Frame 
 
 ### MCE18 CAN Bus Expander (Unverified — Datasheet Default, Not Wire-Confirmed)
 
-Fills part of the gap above: `flvlA` (fuel level) and the six booleans that have no
+Fills part of the gap above: `flvlA` (fuel level) and five booleans that have no
 Syvecs channel at all (`leftIndicator`, `rightIndicator`, `axleLift`, `lowBeams`,
-`highBeams`, `cruiseControl`) are read from a CANchecked-protocol MCE18 CAN bus
-expander instead of the ECU. Source: "CAN2 MCE18 Mapping.pdf" (CANchecked MCE18
-manual, Rev 2.0). `transmissionAuto` is deliberately *not* part of this — it comes
-from the Syvecs stream instead (`0x605` slot 3, ManualAuto_U12 — see the frame map
-above).
+`highBeams`) are read from a CANchecked-protocol MCE18 CAN bus expander instead of
+the ECU. Source: "CAN2 MCE18 Mapping.pdf" (CANchecked MCE18 manual, Rev 2.0).
+`transmissionAuto` and `cruiseControl` are deliberately *not* part of this — both
+come from the Syvecs stream instead (`0x605` slot 3, ManualAuto_U12, and `0x601`
+slot 1, cruiseState — see the frame map above).
 
 **Everything in this section is a datasheet default, not verified against this car**
 — no MCE18 unit has been on the bench or candump'd yet. Treat frame IDs, byte order,
@@ -175,12 +176,14 @@ mapping.
   because those three double as Frequency 2/3/4 inputs per the datasheet — using
   AIN0 keeps the frequency-capable analogs free for future use.
 - **Frame `0x702`** (Base ID+2): byte 2 = bit-masked DIN0-7. Bit *N* = DIN *N*
-  (the datasheet doesn't spell out bit order — assumed). DIN6 is deliberately left
-  unassigned: the datasheet reuses that same pin for its Frequency 1 input
-  (`**TX Base ID+3`, "Frequency 1 - DIN6"), so it's kept free rather than
-  double-booked. DIN7 is also unassigned, reserved for a possible future use —
-  Auto/Manual (`transmissionAuto`) comes from the Syvecs stream instead
-  (`0x605` slot 3, ManualAuto_U12 — see the frame map above), not this
+  (the datasheet doesn't spell out bit order — assumed). DIN5 is unassigned:
+  Cruise (`cruiseControl`) comes from the Syvecs stream instead (`0x601` slot 1,
+  cruiseState — see the frame map above), not this expander. DIN6 is
+  deliberately left unassigned too: the datasheet reuses that same pin for its
+  Frequency 1 input (`**TX Base ID+3`, "Frequency 1 - DIN6"), so it's kept free
+  rather than double-booked. DIN7 is also unassigned, reserved for a possible
+  future use — Auto/Manual (`transmissionAuto`) comes from the Syvecs stream
+  instead (`0x605` slot 3, ManualAuto_U12 — see the frame map above), not this
   expander.
 
   | Bit | Signal |
@@ -190,7 +193,7 @@ mapping.
   | DIN2 | `axleLift` |
   | DIN3 | `lowBeams` |
   | DIN4 | `highBeams` |
-  | DIN5 | `cruiseControl` |
+  | DIN5 | *(unassigned — cruise sourced from Syvecs instead)* |
   | DIN6 | *(unassigned — reserved for Frequency 1)* |
   | DIN7 | *(unassigned)* |
 

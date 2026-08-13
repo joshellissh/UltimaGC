@@ -38,7 +38,7 @@ static inline qint16 be_s16(const quint8 *d, int off) {
 
 // MCE18 CAN bus expander (CANchecked-protocol) — supplies the analog/digital
 // inputs the Syvecs S7+ has no channel for at all (fuel sender, turn
-// signals, beams, cruise, axle lift, auto/manual). See "CAN2 MCE18 Mapping"
+// signals, beams, axle lift). See "CAN2 MCE18 Mapping"
 // PDF and GAUGE-CLUSTER.md's MCE18 section for the full frame layout and the
 // assumptions below — none of this is wire-verified yet (no unit on the
 // bench), unlike the Syvecs frame map above.
@@ -243,6 +243,15 @@ void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
         }
         break;
     }
+    case 0x601: {                                       // Frame 2: cruiseState @ slot 1
+        // cruiseState: SCal enum 0=OFF 1=ON 2=ACTIVE. Icon only
+        // distinguishes OFF/ACTIVE — ON (armed but not actively
+        // controlling) reads as not-lit, same as OFF.
+        int cruiseState = be_u16(d, 0);
+        bool cruiseActive = (cruiseState == 2);
+        if (cruiseActive != m_cruiseControl) { m_cruiseControl = cruiseActive; emit cruiseControlChanged(); }
+        break;
+    }
     case 0x604: {                                       // Frame 5: limpMode @ slot 4
         int limp = be_u16(d, 6);
         // sensorWarningLevel is not on CAN2 in this config — derive
@@ -322,9 +331,11 @@ void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
     }
     case kMce18Base + 2: {                               // MCE18 frame @ Base ID+2: AIN8, DIN0-7 mask @ byte 2
         // Bit N = DIN N (assumed — datasheet doesn't spell out bit order).
-        // DIN6 is left unassigned: the datasheet's Frequency-1 input reuses
-        // that same pin (**TX Base ID+3, "Frequency 1 - DIN6"), so it's kept
-        // free rather than double-booked. DIN7 is also unassigned: Auto/Manual
+        // DIN5 is left unassigned: cruise comes from the Syvecs stream
+        // instead (see the 0x601 case above), not this expander. DIN6 is
+        // also unassigned: the datasheet's Frequency-1 input reuses that
+        // same pin (**TX Base ID+3, "Frequency 1 - DIN6"), so it's kept free
+        // rather than double-booked. DIN7 is also unassigned: Auto/Manual
         // comes from the Syvecs stream instead (see the 0x605 case above),
         // not this expander.
         quint8 dinMask = d[2];
@@ -333,14 +344,12 @@ void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
         bool axleLiftIn = dinMask & (1 << 2);
         bool lowBeamsIn = dinMask & (1 << 3);
         bool highBeamsIn = dinMask & (1 << 4);
-        bool cruiseIn = dinMask & (1 << 5);
 
         if (leftInd != m_leftIndicator) { m_leftIndicator = leftInd; emit leftIndicatorChanged(); }
         if (rightInd != m_rightIndicator) { m_rightIndicator = rightInd; emit rightIndicatorChanged(); }
         if (axleLiftIn != m_axleLift) { m_axleLift = axleLiftIn; emit axleLiftChanged(); }
         if (lowBeamsIn != m_lowBeams) { m_lowBeams = lowBeamsIn; emit lowBeamsChanged(); }
         if (highBeamsIn != m_highBeams) { m_highBeams = highBeamsIn; emit highBeamsChanged(); }
-        if (cruiseIn != m_cruiseControl) { m_cruiseControl = cruiseIn; emit cruiseControlChanged(); }
         break;
     }
     default:

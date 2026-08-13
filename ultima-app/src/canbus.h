@@ -31,15 +31,21 @@ class CanBus : public QObject
     Q_PROPERTY(bool coolantWarn READ coolantWarn NOTIFY coolantWarnChanged)
     Q_PROPERTY(bool checkEngine READ checkEngine NOTIFY checkEngineChanged)
     // Channels not present in the Syvecs fixed stream — exposed for QML
-    // compatibility. On real hardware these are now decoded from the MCE18
+    // compatibility. On real hardware these are decoded from the MCE18
     // CAN expander's DIN0-7 bitmask (see decodeFrame()'s 0x702 case), not
     // the ECU; the dev-build simulator (see simulateTick()) still drives
-    // lowBeams/highBeams/cruiseControl for layout testing.
+    // lowBeams for layout testing.
     Q_PROPERTY(bool leftIndicator READ leftIndicator NOTIFY leftIndicatorChanged)
     Q_PROPERTY(bool rightIndicator READ rightIndicator NOTIFY rightIndicatorChanged)
     Q_PROPERTY(bool lowBeams READ lowBeams NOTIFY lowBeamsChanged)
     Q_PROPERTY(bool highBeams READ highBeams NOTIFY highBeamsChanged)
     Q_PROPERTY(bool axleLift READ axleLift NOTIFY axleLiftChanged)
+    // Cruise control — unlike the MCE18-sourced booleans above, this comes
+    // from the Syvecs stream: cruiseState (Frame 2/0x601, slot 1), SCal enum
+    // 0=OFF 1=ON 2=ACTIVE. The icon only distinguishes OFF/ACTIVE; ON (armed
+    // but not actively controlling) reads as not-lit, same as OFF. The
+    // dev-build simulator (see simulateTick()) still drives it (always true)
+    // for layout testing.
     Q_PROPERTY(bool cruiseControl READ cruiseControl NOTIFY cruiseControlChanged)
     // Automatic/manual shift mode — not on the Syvecs fixed stream DBC, but
     // decoded from this car's CAN2 config as ManualAuto_U12 (Frame 6/0x605,
