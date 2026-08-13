@@ -5,6 +5,7 @@
         <file>SimEngine.qml</file>
         <file>SetTimeScreen.qml</file>
         <file>DiagnosticScreen.qml</file>
+        <file>Camera360Screen.qml</file>
         <file>boost_circle.png</file>
         <file>background_overlay.png</file>
         <file>car_lights_off.png</file>
@@ -21,5 +22,8 @@
         <file>icon_high_beam.png</file>
         <file>icon_axle_lift.png</file>
         <file>icon_cruise.png</file>
+        <file>icon_360.png</file>
+        <file>simulated_cameras.png</file>
+        <file>car_360.png</file>
     </qresource>
 </RCC>

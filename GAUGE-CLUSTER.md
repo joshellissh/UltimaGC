@@ -51,11 +51,13 @@ change as the app evolves and a stale copy is worse than no copy.
 
 ### QML Files
 
-The app consists of 4 QML files, all in `ultima-app/src/`:
+The app consists of 6 QML files, all in `ultima-app/src/`:
 
-- **`main.qml`** — Root layout: 4 gauge needles over the Bavarian background layers, boost gauge (trapezoid black overlay with PSI readout), turn signal indicators, top indicator row (oil, check engine, beams, battery, coolant — warn icons flash at 300ms), gear indicator (Bahnschrift SemiBold font, P/R/N/1-7), odometer + trip odometer with reset button, touch feedback dot. On startup, a ~2s self-test (`startupActive`/`startupFrac`/`startupFlash`) sweeps every needle to max and back and flashes every icon before handing off to live `sim.*` values — real gauge/warning bindings are `startupActive ? <test value> : sim.<prop>`. Includes a periodic (30s) save timer for odometer persistence via `sim.save()`. All gauge values bind to the `sim` context property, which is the `CanBus` C++ object, not this file's `SimEngine.qml`. Hosts `SetTimeScreen` for clock adjustment.
+- **`main.qml`** — Root layout: 4 gauge needles over the Bavarian background layers, boost gauge (trapezoid black overlay with PSI readout), turn signal indicators, top indicator row (oil, check engine, beams, battery, coolant — warn icons flash at 300ms), gear indicator (Bahnschrift SemiBold font, P/R/N/1-7), odometer + trip odometer with reset button, touch feedback dot, 360-view tap icon. On startup, a ~2s self-test (`startupActive`/`startupFrac`/`startupFlash`) sweeps every needle to max and back and flashes every icon before handing off to live `sim.*` values — real gauge/warning bindings are `startupActive ? <test value> : sim.<prop>`. Includes a periodic (30s) save timer for odometer persistence via `sim.save()`. All gauge values bind to the `sim` context property, which is the `CanBus` C++ object, not this file's `SimEngine.qml`. Hosts `SetTimeScreen`, `DiagnosticScreen`, and `Camera360Screen` as overlays.
 - **`CircularGauge.qml`** — Reusable needle gauge component: rotates `needle.png` over a transparent item positioned at the gauge center. Configurable start/end angles, counter-clockwise mode, needle size/pivot, optional debug arc overlay
 - **`SetTimeScreen.qml`** — Time-set overlay that calls into `SystemClock` (the `systemClock` context property) to push a new wall-clock time
+- **`DiagnosticScreen.qml`** — Full-screen grid of every CAN2 channel the Auto Bionics mapping sheet documents, opened by swiping left anywhere on the main dash, closed by swiping right
+- **`Camera360Screen.qml`** — Full-screen 360-degree camera view overlay, toggled open/closed (250ms cross-fade via a `Behavior on opacity`) by tapping the 360 icon (`icon360`) on the main dash. Static placeholder art (`simulated_cameras.png` + `car_360.png` over an 82%-opacity black backdrop) — not a real camera feed, no camera hardware wired into this project yet
 - **`SimEngine.qml`** — **Not loaded at runtime.** Bundled only as a reference/potential `--demo` fallback; it predates `CanBus` and was the original simulated data source before real CAN integration. Speed wanders through city/suburban/highway/stop phases, RPM derived from gear ratios, automatic gear selection (P/R/N/1-7), fuel consumption, coolant temp, boost pressure (0-30 PSI). `CanBus::simulateTick()` reimplements this same phase logic directly in C++ so it can drive the live `sim` property — see [CAN Bus Integration](#can-bus-integration-syvecs-s7)
 
 ### Asset Files
@@ -75,6 +77,8 @@ The app consists of 4 QML files, all in `ultima-app/src/`:
 | `range.regular.ttf` | Font for odometer and boost PSI display |
 | `bahnschrift._semibold.ttf` | Bahnschrift SemiBold font for gear indicator |
 | `icon_oil_pressure.png`, `icon_check_engine.png`, `icon_battery.png`, `icon_coolant_warn.png`, `icon_low_beam.png`, `icon_high_beam.png`, `icon_axle_lift.png`, `icon_cruise.png` | ISO 7000-style dashboard warning icons (white on transparent) |
+| `icon_360.png` | 360-view tap target, centered at (280, 666); toggles `Camera360Screen` open/closed |
+| `simulated_cameras.png`, `car_360.png` | `Camera360Screen` overlay art — full-canvas (1600x720), alpha margins let the 82%-opacity black backdrop show through |
 
 The old single-image `background.png` face has been removed from the tree and
 `qml.qrc` — the Bavarian swap described above is complete, not in progress.
