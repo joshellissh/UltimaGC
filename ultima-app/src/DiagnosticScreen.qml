@@ -38,6 +38,13 @@ Item {
     property real _dragStartX: 0
     property bool _dragging: false
 
+    // Tracks open/closing state for things outside this screen (e.g. the
+    // 360 icon in main.qml) that need to hide while this is in front —
+    // true for the whole open()->close() cycle, not just the resting-open
+    // state, so it hides as soon as the swipe starts rather than only once
+    // it lands.
+    readonly property bool isOpen: x !== parent.width
+
     function open() {
         x = 0
     }

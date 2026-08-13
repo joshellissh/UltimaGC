@@ -271,10 +271,14 @@ Window {
     // 360 view icon — centered at (280, 666). Toggles the Camera360Screen
     // overlay; z is above that overlay (600) so the icon stays the tap
     // target that closes it, rather than getting covered once it's open.
+    // Hidden while the diagnostic screen is open/opening — it lives at the
+    // same on-screen spot as diagnostic content, and it's the wrong action
+    // to expose over that screen anyway.
     Image {
         id: icon360
         x: 280 - width / 2; y: 666 - height / 2
         z: 700
+        visible: !diagnosticScreen.isOpen
         source: "qrc:/icon_360.png"
         opacity: icon360Area.pressed ? 0.6 : 1.0
 
