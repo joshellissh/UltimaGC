@@ -138,6 +138,7 @@ Read from SCal Datastreams → Generic CAN Transmit → Transmit Content. Frame 
 | `0x600` | 6-7 | map1A (boost) | signed, mbar 1:1 (SCal: y=(1\*x)+0, 0..3000, Pressure/Millibar/Signed); psi = (mbar − 1013.25) × 0.0145038, clamped ≥ 0. Confirmed against SCal Datastreams screenshot 2026-08-13; not yet candump-confirmed on the wire. |
 | `0x604` | 6-7 | limpMode | unsigned enum; non-zero → `checkEngine` |
 | `0x605` | 2-3 | ect1 (coolant) | raw × 0.18 + 32 → °F; `coolantWarn` if > 220 °F |
+| `0x605` | 4-5 | ManualAuto_U12 → `transmissionAuto` | unsigned enum; nonzero → Automatic. Frame/slot per the user, not a SCal screenshot; polarity (which value means Automatic) is assumed, not confirmed either way. |
 | `0x608` | 0-1 | eop1 (oil pressure) | raw × 0.0145038 → psi; `oilPressureWarn` if rpm ≥ 600 && psi ≤ 40 |
 | `0x60E` | 2-3 | gear | Syvecs enum 0=Unknown 1=R 2=N 3..10=1st..8th → QML -1/0/1..8 |
 | `0x60E` | 4-5 | vbat | V × 0.001 (unsigned); `batteryWarn` if v < 12.5 |
@@ -148,7 +149,7 @@ Read from SCal Datastreams → Generic CAN Transmit → Transmit Content. Frame 
 - `sensorWarningLevel` — `checkEngine` currently derives from `limpMode` alone.
 - `mapMax` (boost, `0x614`/frame 21) — previously documented here as verified and wired to the boost gauge, but the xlsx built from `CAN2.png` (the source of truth for this mapping) shows frame 21 as all SPARE. Decode removed from `CanBus::decodeFrame()` pending re-verification against a current SCal Datastreams screenshot; boost gauge reads 0 until then.
 
-**Not on CAN at all:** `driveMode` (no Syvecs channel exists, and no physical selector is known to exist in the car) is a real READ+NOTIFY property, but on real hardware it's only ever set to its default (`"SPORT"`) — nothing decodes it from a CAN frame or an MCE18 input. It's a 3-state QString, which doesn't fit a single digital input the way the MCE18-sourced booleans below do; wiring it (e.g. to a real drive-mode selector switch) is unstarted. `transmissionAuto` (Auto/Manual shift mode) *is* expected to exist as a Syvecs channel, but which CAN2 message carries it hasn't been identified yet — it's read from neither the ECU nor the MCE18 expander, and is intentionally not part of the MCE18 wiring below. Both default to their real-hardware resting value (`"SPORT"` / Automatic) on real hardware; the dev-build simulator (`simulateTick()`) is the only thing that ever changes either, for layout review.
+**Not on CAN at all:** `driveMode` (no Syvecs channel exists, and no physical selector is known to exist in the car) is a real READ+NOTIFY property, but on real hardware it's only ever set to its default (`"SPORT"`) — nothing decodes it from a CAN frame or an MCE18 input. It's a 3-state QString, which doesn't fit a single digital input the way the MCE18-sourced booleans below do; wiring it (e.g. to a real drive-mode selector switch) is unstarted. The dev-build simulator (`simulateTick()`) is the only thing that ever changes it, for layout review.
 
 ### MCE18 CAN Bus Expander (Unverified — Datasheet Default, Not Wire-Confirmed)
 
@@ -156,7 +157,9 @@ Fills part of the gap above: `flvlA` (fuel level) and the six booleans that have
 Syvecs channel at all (`leftIndicator`, `rightIndicator`, `axleLift`, `lowBeams`,
 `highBeams`, `cruiseControl`) are read from a CANchecked-protocol MCE18 CAN bus
 expander instead of the ECU. Source: "CAN2 MCE18 Mapping.pdf" (CANchecked MCE18
-manual, Rev 2.0). `transmissionAuto` is deliberately *not* part of this — see above.
+manual, Rev 2.0). `transmissionAuto` is deliberately *not* part of this — it comes
+from the Syvecs stream instead (`0x605` slot 3, ManualAuto_U12 — see the frame map
+above).
 
 **Everything in this section is a datasheet default, not verified against this car**
 — no MCE18 unit has been on the bench or candump'd yet. Treat frame IDs, byte order,
@@ -176,8 +179,9 @@ mapping.
   unassigned: the datasheet reuses that same pin for its Frequency 1 input
   (`**TX Base ID+3`, "Frequency 1 - DIN6"), so it's kept free rather than
   double-booked. DIN7 is also unassigned, reserved for a possible future use —
-  Auto/Manual (`transmissionAuto`) is expected to come from the Syvecs stream
-  instead (see "Not on CAN at all" above), not this expander.
+  Auto/Manual (`transmissionAuto`) comes from the Syvecs stream instead
+  (`0x605` slot 3, ManualAuto_U12 — see the frame map above), not this
+  expander.
 
   | Bit | Signal |
   |---|---|

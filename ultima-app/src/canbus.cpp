@@ -251,7 +251,7 @@ void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
         if (ce != m_checkEngine) { m_checkEngine = ce; emit checkEngineChanged(); }
         break;
     }
-    case 0x605: {                                       // Frame 6: ect1 @ slot 2
+    case 0x605: {                                       // Frame 6: ect1 @ slot 2, ManualAuto_U12 @ slot 3
         double c = be_s16(d, 2) * 0.1;
         double f = c * 1.8 + 32.0;
         if (!qFuzzyCompare(1.0 + f, 1.0 + m_coolantTempF)) {
@@ -260,6 +260,11 @@ void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
         }
         bool warn = f > 220.0;
         if (warn != m_coolantWarn) { m_coolantWarn = warn; emit coolantWarnChanged(); }
+
+        // ManualAuto_U12: raw TCM enum: polarity assumed (nonzero =
+        // Automatic) — not confirmed against a SCal screenshot or candump.
+        bool transAuto = be_u16(d, 4) != 0;
+        if (transAuto != m_transmissionAuto) { m_transmissionAuto = transAuto; emit transmissionAutoChanged(); }
         break;
     }
     case 0x608: {                                       // Frame 9: eop1 @ slot 1
@@ -320,8 +325,8 @@ void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
         // DIN6 is left unassigned: the datasheet's Frequency-1 input reuses
         // that same pin (**TX Base ID+3, "Frequency 1 - DIN6"), so it's kept
         // free rather than double-booked. DIN7 is also unassigned: Auto/Manual
-        // is expected to come from the Syvecs stream instead, once its CAN
-        // message is known — not from this expander.
+        // comes from the Syvecs stream instead (see the 0x605 case above),
+        // not this expander.
         quint8 dinMask = d[2];
         bool leftInd = dinMask & (1 << 0);
         bool rightInd = dinMask & (1 << 1);
