@@ -16,18 +16,33 @@ import QtQuick 2.15
 // this build.
 Item {
     id: root
-    anchors.fill: parent
-    visible: false
+    y: 0
+    width: parent.width
+    height: parent.height
     z: 400  // above touchDot (100) and tripReset (200), below SetTimeScreen (500)
+
+    // Slides in from offscreen right on open(), back out on close() — matches
+    // the swipe gesture that drives it (swipe left reveals this screen
+    // sliding in from the right; swipe right sends it back out that way).
+    // Starts at parent.width (fully offscreen) with no animation, since
+    // Behavior doesn't apply to a property's initial value during
+    // construction — only open()/close()'s later imperative assignments
+    // animate. Offscreen x also means the MouseArea below never overlaps the
+    // window while closed, so it doesn't need a separate visible flag to
+    // stop swallowing touches to the dash underneath.
+    x: parent.width
+    Behavior on x {
+        NumberAnimation { duration: 250; easing.type: Easing.OutCubic }
+    }
 
     property real _dragStartX: 0
     property bool _dragging: false
 
     function open() {
-        visible = true
+        x = 0
     }
     function close() {
-        visible = false
+        x = parent.width
     }
 
     FontLoader { id: bahnschriftFont; source: "qrc:/bahnschrift._semibold.ttf" }
