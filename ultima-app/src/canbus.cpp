@@ -49,8 +49,14 @@ static inline qint16 be_s16(const quint8 *d, int off) {
 static constexpr quint32 kMce18Base = 0x700;
 // AIN0-8 can be configured on the unit as either raw 0-1023 ADC counts or
 // pre-scaled 0-5000mV — the datasheet doesn't say which is the power-on
-// default, and it isn't confirmed for this unit. Assuming raw counts.
+// default, and it isn't confirmed for this unit. Assuming raw counts, with
+// the ADC's full-scale (1023 counts) representing 5000mV.
 static constexpr double kMce18AinRawMax = 1023.0;
+static constexpr double kMce18AinFullScaleMv = 5000.0;
+// Fuel sender: 0V empty, 4V full (per sender spec) — narrower than the AIN's
+// own 0-5V full scale, so this is a second, independent conversion on top
+// of the raw-counts-to-mV one above.
+static constexpr double kFuelSenderFullScaleMv = 4000.0;
 
 CanBus::CanBus(OdoStore *odo, const QString &iface, QObject *parent)
     : QObject(parent), m_odo(odo), m_iface(iface)
@@ -298,9 +304,11 @@ void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
     // comes from the MCE18 expander below (AIN0), not the Syvecs frames.
     case kMce18Base: {                                   // MCE18 frame 1: AIN0-3
         // Only AIN0 (fuel sender) is wired up; AIN1-3 unused for now.
-        // Assumes empty tank = low raw counts — not calibrated against the
-        // actual sender's resistance curve.
-        double fuel = qBound(0.0, be_u16(d, 0) / kMce18AinRawMax, 1.0);
+        // Fuel sender is 0V empty / 4V full (linear, per sender spec) —
+        // convert raw counts to mV against the AIN's own 0-5V full scale
+        // first, then scale that against the sender's narrower 0-4V range.
+        double mv = be_u16(d, 0) * (kMce18AinFullScaleMv / kMce18AinRawMax);
+        double fuel = qBound(0.0, mv / kFuelSenderFullScaleMv, 1.0);
         if (!qFuzzyCompare(1.0 + fuel, 1.0 + m_fuelLevel)) {
             m_fuelLevel = fuel;
             emit fuelLevelChanged();

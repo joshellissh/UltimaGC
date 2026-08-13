@@ -192,9 +192,11 @@ mapping.
 - **Analog scaling**: AIN0 can be configured on the unit as either raw 0-1023 ADC
   counts or pre-scaled 0-5000mV (the datasheet's own table shows both units without
   saying which is the power-on default). `CanBus::decodeFrame()` assumes raw
-  0-1023 counts (`kMce18AinRawMax` in `canbus.cpp`) and does a straight linear
-  `raw / 1023` → 0..1 map — not calibrated against the actual sender's resistance
-  curve, and the empty/full direction is assumed (low counts = empty).
+  0-1023 counts spanning the AIN's own 0-5000mV full scale (`kMce18AinRawMax` /
+  `kMce18AinFullScaleMv` in `canbus.cpp`). The fuel sender itself is 0V empty / 4V
+  full (linear, per sender spec) — narrower than the AIN's 0-5V range — so the
+  converted mV is then scaled again against `kFuelSenderFullScaleMv` (4000mV) to
+  get 0..1. Empty/full direction (low counts = empty) is assumed.
 
 Needs, before trusting this on the road: `candump can0` with the MCE18 powered to
 confirm its actual configured base ID and analog protocol mode, and a known fuel
