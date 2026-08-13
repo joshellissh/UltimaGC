@@ -1,4 +1,4 @@
-IMAGE_INSTALL:append:beagleplay-ti = " ultima-app can-utils mmc-utils ultima-hwclock-load ultima-data-mount volatile-binds"
+IMAGE_INSTALL:append:beagleplay-ti = " ultima-app ultima-splash can-utils mmc-utils ultima-hwclock-load ultima-data-mount volatile-binds"
 
 # GPU enablement spike (2026-08-12): explicit rather than relying on the
 # RRECOMMENDS chain (mesa-megadriver -> ti-img-rogue-driver ->
@@ -70,7 +70,7 @@ IMAGE_FEATURES += "read-only-rootfs"
 # exactly one service regardless of which package owns it — this runs after
 # all package postinsts (including systemd's own "enable" pass), so it wins
 # regardless of ordering.
-ROOTFS_POSTPROCESS_COMMAND += "ultima_mask_timesyncd; ultima_journald_volatile; ultima_coredump_disable; ultima_mask_resize_rootfs; "
+ROOTFS_POSTPROCESS_COMMAND += "ultima_mask_timesyncd; ultima_journald_volatile; ultima_coredump_disable; ultima_mask_resize_rootfs; ultima_mask_getty_tty1; "
 
 ultima_mask_timesyncd () {
     rm -f ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/multi-user.target.wants/systemd-timesyncd.service
@@ -111,4 +111,21 @@ ultima_journald_volatile () {
 ultima_coredump_disable () {
     install -d ${IMAGE_ROOTFS}${sysconfdir}/systemd/coredump.conf.d
     printf '[Coredump]\nStorage=none\n' > ${IMAGE_ROOTFS}${sysconfdir}/systemd/coredump.conf.d/ultima-disable.conf
+}
+
+# The 2026-08-11 boot-splash investigation (see NOTES.md) found
+# getty@tty1.service alive on tty1 -- the same VT fbcon and any fbdev
+# splash draw into -- writing a login prompt over whatever's on screen
+# shortly after boot. That was only masked live/temporarily during that
+# investigation and reverted afterward. ultima-splash.bb makes that
+# permanent: a login prompt agetty never intended to be seen (this board's
+# only interactive access is serial -- see serial-getty@, a separate
+# template unit this doesn't touch -- or SSH) would otherwise overwrite the
+# splash pixels within the first couple seconds of boot. Same
+# symlink-to-/dev/null mask pattern as ultima_mask_timesyncd above --
+# `systemctl mask` wins regardless of how the unit would otherwise be
+# pulled in (getty.target's static Alias=, in this case), so no
+# wants-symlink removal is needed alongside it.
+ultima_mask_getty_tty1 () {
+    ln -sf /dev/null ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/getty@tty1.service
 }

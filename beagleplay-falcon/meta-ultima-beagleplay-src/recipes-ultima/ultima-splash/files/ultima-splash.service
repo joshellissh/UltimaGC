@@ -1,0 +1,29 @@
+[Unit]
+Description=Ultima boot splash (draws once to /dev/fb0, then exits)
+# Doesn't touch DRM master itself -- writes to /dev/fb0 (the DRM
+# fbdev-emulation node) and never opens /dev/dri/card0. See
+# ultima-splash.c's top comment for why that matters.
+#
+# No real prerequisites: tidss is kernel-built-in, so /dev/fb0 exists via
+# devtmpfs as soon as the driver probes (kernel_ts ~0.77s per NOTES.md),
+# well before systemd finishes early boot. DefaultDependencies=no mirrors
+# ultima-app.service/ultima-data-mount.service's own pattern for the same
+# reason -- the default ordering (multi-user.target, systemd-udevd, D-Bus,
+# ...) has nothing to do with what this unit needs and would push it later
+# than the frame it's trying to fill.
+DefaultDependencies=no
+# Ordering only, not a hard dependency (same reasoning as ultima-app.service's
+# own Before=shutdown.target) -- both units reach systemd independently via
+# their own WantedBy=, this just keeps them from racing if a transaction
+# ever pulls both in together.
+Before=ultima-app.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/ultima-splash
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=sysinit.target

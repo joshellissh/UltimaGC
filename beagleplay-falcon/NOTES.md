@@ -2618,3 +2618,109 @@ ordinary boot-to-boot jitter, not a regression.)
 regression.** Modest, but real, reproducible across three separate reboots,
 zero downside, and now permanently in the image rather than a live-only
 test.
+
+## Boot splash implemented and hardware-verified (2026-08-12)
+
+Follow-up to "Boot splash investigation" above, which ruled out the kernel's
+fbcon logo (`fb_show_logo()` proven dead on this DRM-fbdev-emulation stack)
+and concluded the remaining path was a small userspace program writing
+directly to `/dev/fb0`. That conclusion predates GPU/`eglfs_kms` enablement,
+which changed who owns the display — this pass designs around that and
+verifies the result on real hardware, twice.
+
+**Design: plain `/dev/fb0` writer, not libdrm/psplash-drm/Plymouth.**
+Researched prior art first (STM32MP community threads use a `psplash-drm`
+fork; upstream `psplash` has an RFC DRM backend; Plymouth is DRM-native but
+heavier, with documented DRM-master-handoff bugs against vendor GPU blobs
+elsewhere — relevant here since TI's `pvrsrvkm` is exactly that kind of
+blob). Went with neither: a ~90-line C program
+(`recipes-ultima/ultima-splash/files/ultima-splash.c`) that `mmap`s
+`/dev/fb0` directly and blits a procedural test pattern (a ring — no real
+logo art yet, that's a follow-up), using the exact pixel path the
+2026-08-11 investigation already proved works (the `echo hello > /dev/tty1`
+test). It never opens `/dev/dri/card0` and never touches DRM master at
+all — which turned out to matter more than expected, see "Why the handoff
+was clean" below.
+
+**`getty@tty1.service` permanently masked.** The 08-11 investigation found
+it writing a login prompt over the framebuffer and only masked it
+live/temporarily. That's now permanent via `ultima_mask_getty_tty1()` in
+`tisdk-base-image.bbappend`, same `ln -sf /dev/null` pattern already used
+for `systemd-timesyncd`/`resize_rootfs`. Doesn't touch `serial-getty@` (a
+separate template unit) — serial console access is untouched.
+
+**New unit, ordered as early as this project's units get:**
+`ultima-splash.service` — `Type=oneshot`, `DefaultDependencies=no`,
+`WantedBy=sysinit.target`, `Before=ultima-app.service` (ordering only, not
+a real dependency — both units reach systemd via their own `WantedBy=`).
+No real prerequisites: it doesn't need `/data`, CAN, or anything
+`ultima-app.service` waits on, so unlike that unit it isn't ordered against
+`ultima-data-mount.service`. Being a `oneshot` matters here — it draws once
+and exits; the image stays on screen because the display hardware holds
+whatever was last committed, not because a process is holding it there. No
+DRM master to hand off, no long-running process to synchronize a stop
+against.
+
+**Hardware-verified, two real power cycles (both USR-held SD boots, `build.sh` →
+`flash.sh`, both `systemctl --failed` empty and `NRestarts=0` on `ultima-app`):**
+
+Boot 1 (initial flash-boot): `ultima-splash` ran kernel_ts 2.024s–2.154s.
+Notably *not* right after `tidss` binds (0.787s) — confirms this project's
+own recurring finding elsewhere in this file that early boot is gated by
+systemd's own startup overhead (parsing units, mounting basics), not by
+which target a zero-dependency unit is `WantedBy=`. ~2.0s is apparently
+about as early as *anything* can run here, splash included.
+
+Boot 2 (supervised, with a live-only `QT_LOGGING_RULES=qt.qpa.*=true`
+systemd drop-in on `ultima-app.service` for detailed KMS logging — removed
+afterward, never in the shipped image):
+
+| Event | kernel_ts |
+|---|---|
+| `tidss` fb0 ready | 0.787s (from boot 1's dmesg, unchanged) |
+| `ultima-splash` starts / finishes | 2.130s / 2.226s |
+| `ultima-app` `main()` entered | 3.145s |
+| `qt.qpa.eglfs.kms`: "Atomic reported as supported" / "Atomic disabled" | 4.839s / 4.845s |
+| `QGuiApplication created` | 5.366s (gated on GPU firmware load finishing ~4.2s — RGX firmware/shader binary load, unrelated to display) |
+| **`qt.qpa.eglfs.kms`: "Setting mode for screen HDMI1"** | **7.252s** |
+| `QML loaded` | 7.284s |
+| first frame rendered / swapped | 7.446s / 7.464s |
+
+**Why the handoff was clean (watched live, USR held): "saw the blue circle
+and then straight into the gauge cluster" — no reported flicker or gap.**
+Two things line up to explain it, neither of which was the original plan:
+
+1. `ultima-splash` never opens `/dev/dri/card0` — it only writes through the
+   DRM fbdev-emulation compat node. So it never contends for DRM master.
+   The kernel-fbdev-emulation → `eglfs_kms` handoff this investigation was
+   worried about *already happens on every boot regardless of the splash* —
+   the splash only changes what pixels are sitting in the buffer when that
+   handoff occurs, it doesn't add a new handoff.
+2. This driver stack uses **legacy** KMS, not atomic (`eglfs_kms` probed
+   atomic support and explicitly disabled it, kernel_ts 4.845s) — legacy
+   `drmModeSetCrtc` does force a real modeset even when reusing the same
+   mode, so a blank frame is expected. But Qt doesn't call it until
+   **7.252s**, ~30ms before `QML loaded` and ~200ms before first frame —
+   i.e. `eglfs_kms` doesn't set the mode early in its own startup, it waits
+   until it's essentially ready to render. The ring is on screen
+   continuously from 2.13s to 7.25s (~5.1s), and whatever single blank
+   frame the modeset causes lands inside a ~200ms window immediately
+   followed by real content, not as its own visible event.
+
+**Net effect on the black-screen budget this was meant to fill:** was ~7.4s
+of black-to-nothing on SD (this session's storage medium); now ~2.1s black
++ ~5.1s ring + a clean cut to the gauge cluster. Not a boot-time win (never
+the goal here) — replaces dead black time with something intentional.
+
+**Files:** `recipes-ultima/ultima-splash/{ultima-splash.bb, files/ultima-splash.c,
+files/ultima-splash.service}`, `tisdk-base-image.bbappend` (added to
+`IMAGE_INSTALL`, `ultima_mask_getty_tty1` added to
+`ROOTFS_POSTPROCESS_COMMAND`).
+
+**Not done:** real logo art (currently a procedural ring, chosen to prove
+the mechanism first — same "prove it works before polishing" order as the
+GPU spike above); not yet pushed to eMMC (SD-only so far, deliberately,
+per this project's own pattern of spiking on SD before touching the
+production boot source); `kmscube`/`mesa-demos` still need removing from
+the image per the still-open GPU-enablement note above, unrelated to this
+change.
