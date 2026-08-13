@@ -18,8 +18,33 @@ Window {
     property real startupFrac: 0
     property bool startupFlash: false
 
+    // Boot splash simulation — dev-build only, opt-in via ULTIMA_SPLASH_IMAGE
+    // (set by `scripts/dev-build.sh --boot`), empty/unset otherwise. Mimics
+    // the on-target timeline from beagleplay-falcon/NOTES.md's "Boot splash
+    // implemented" section: ~2.1s black, then the splash art for ~5.1s,
+    // then a hard cut — real hardware's handoff is a single abrupt modeset,
+    // not a fade — straight into the self-test sweep below. Gating that
+    // sweep on splashDone (instead of starting it immediately) matters: on
+    // hardware the sweep's SequentialAnimation only exists once this QML is
+    // constructed, which is exactly when the splash-to-cluster handoff
+    // happens, so on real boot the sweep always starts right as the splash
+    // disappears. Without this gate the dev-build sweep would run its own
+    // 2.2s and finish while still hidden behind the overlay.
+    property bool splashDone: splashImagePath === ""
+
+    Timer {
+        running: !splashDone
+        interval: 2100
+        onTriggered: bootSplashImage.visible = true
+    }
+    Timer {
+        running: !splashDone
+        interval: 2100 + 5150
+        onTriggered: { bootOverlay.visible = false; splashDone = true }
+    }
+
     SequentialAnimation {
-        running: true
+        running: splashDone
         PropertyAction { target: root; property: "startupFlash"; value: true }
         NumberAnimation { target: root; property: "startupFrac"; to: 1; duration: 1000; easing.type: Easing.OutQuad }
         PauseAnimation { duration: 200 }
@@ -534,5 +559,25 @@ Window {
     // the time-set overlay.
     DiagnosticScreen {
         id: diagnosticScreen
+    }
+
+    // Boot splash overlay — see splashDone above. Declared last / z above
+    // everything so it fully hides the dash (already mid-self-test
+    // underneath) until the two Timers above dismiss it. No-op, not even
+    // created visibly, when splashImagePath is empty.
+    Rectangle {
+        id: bootOverlay
+        anchors.fill: parent
+        color: "black"
+        z: 9999
+        visible: splashImagePath !== ""
+
+        Image {
+            id: bootSplashImage
+            anchors.fill: parent
+            source: splashImagePath
+            visible: false
+            fillMode: Image.PreserveAspectFit
+        }
     }
 }
