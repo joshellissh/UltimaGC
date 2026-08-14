@@ -6,7 +6,16 @@ DEPENDS = "qtbase qtdeclarative"
 # IMAGE_INSTALL) so the GPU module can't silently drop out of the image if
 # that list changes later — same reasoning this project already used once
 # for kernel-module-tidss before tidss went built-in. See pvrsrvkm.conf below.
-RDEPENDS:${PN} = "qtbase-plugins qtdeclarative-qmlplugins iproute2 ti-img-rogue-driver"
+#
+# kernel-module-uvcvideo (2026-08-14, "Live camera feed"): CONFIG_USB_VIDEO_CLASS=m
+# was already =m in arago's own base defconfig — confirmed against the built
+# .config, nothing in this layer's own .cfg fragments requested it — and udev
+# already autoloads it with no modules-load.d entry needed (unlike pvrsrvkm,
+# which is out-of-tree; uvcvideo is in-tree and coldplugs fine, verified on
+# hardware with the grabber plugged in). Pinned here for the same
+# can't-silently-drop-out-of-the-image reason as ti-img-rogue-driver above,
+# not because it's currently missing.
+RDEPENDS:${PN} = "qtbase-plugins qtdeclarative-qmlplugins iproute2 ti-img-rogue-driver kernel-module-uvcvideo"
 
 inherit qmake5 systemd
 

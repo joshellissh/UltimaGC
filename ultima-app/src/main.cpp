@@ -1,6 +1,7 @@
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include <QQmlEngine>
 #include <QQuickWindow>
 #include <QFile>
 #include <QJsonDocument>
@@ -13,6 +14,8 @@
 #include "odostore.h"
 #include "canbus.h"
 #include "systemclock.h"
+#include "camerafeed.h"
+#include "cameraview.h"
 
 static double readUptime() {
     double t = 0;
@@ -52,6 +55,12 @@ int main(int argc, char *argv[])
 
     SystemClock systemClock;
 
+    // Device is not opened here — CameraFeed stays lazy (see camerafeed.h)
+    // until Camera360Screen actually opens, so a screen most drives never
+    // visit costs nothing at boot.
+    CameraFeed cameraFeed;
+    qmlRegisterType<CameraView>("Ultima", 1, 0, "CameraView");
+
     signal(SIGTERM, sigHandler);
     signal(SIGINT, sigHandler);
 
@@ -70,6 +79,7 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty("odoStore", &odoStore);
     engine.rootContext()->setContextProperty("sim", &canBus);
     engine.rootContext()->setContextProperty("systemClock", &systemClock);
+    engine.rootContext()->setContextProperty("cameraFeed", &cameraFeed);
     engine.rootContext()->setContextProperty("splashImagePath", splashImageUrl);
     engine.load(QUrl(QStringLiteral("qrc:/main.qml")));
     double t2 = readUptime();

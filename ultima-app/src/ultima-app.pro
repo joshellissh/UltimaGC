@@ -18,8 +18,8 @@ CONFIG += c++17
 # qmlcachegen actually gets produced in recipe-sysroot-native before
 # re-enabling this — don't just flip the CONFIG line again.
 TARGET = ultima-app
-HEADERS += odostore.h canbus.h systemclock.h
-SOURCES += main.cpp odostore.cpp canbus.cpp systemclock.cpp
+HEADERS += odostore.h canbus.h systemclock.h camerafeed.h cameraview.h
+SOURCES += main.cpp odostore.cpp canbus.cpp systemclock.cpp camerafeed.cpp cameraview.cpp
 RESOURCES += qml.qrc
 
 # Off by default so the Buildroot/Pi build always uses real SocketCAN.

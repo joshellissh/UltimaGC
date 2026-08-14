@@ -583,11 +583,19 @@ Window {
         id: diagnosticScreen
     }
 
-    // 360-degree camera view — opened/closed by tapping icon360 above.
+    // 360-degree camera view — opened/closed by tapping icon360 above, or
+    // automatically on reverse gear, like a real backup camera.
     // Stacked above the time-set overlay; icon360 itself sits above this.
     Camera360Screen {
         id: camera360Screen
     }
+
+    // Reverse-gear auto-open/close for camera360Screen above. The
+    // !startupActive guard is load-bearing: the ~2s startup self-test sweeps
+    // gear through every value (see gearIndicator's binding above), which
+    // would otherwise pop the camera overlay open on every single boot.
+    property bool reverseGear: !startupActive && sim.gear === -1
+    onReverseGearChanged: reverseGear ? camera360Screen.open() : camera360Screen.close()
 
     // Boot splash overlay — see splashDone above. Declared last / z above
     // everything so it fully hides the dash (already mid-self-test
