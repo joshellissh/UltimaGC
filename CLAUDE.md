@@ -22,15 +22,14 @@ Yocto build, including hardware gotchas (boot-mode switch timing, a
 kernel-module-autoload bug that looked like an app crash, an SD-card write-error
 scare from a crash-loop) worth knowing before touching the board again. **Read
 `GAUGE-CLUSTER.md`** for the Qt app's structure (source/QML/asset layout) and the
-CAN bus integration (ECU, DBC, frame map, debugging) — that content is board-agnostic
+CAN bus integration (ECU, frame map, debugging) — that content is board-agnostic
 and doesn't belong in the Yocto-specific notes.
 
 ## Repo layout
 
 - `ultima-app/` — the Qt app source. Board-agnostic; the Yocto build bind-mounts
   `src/` in read-only and builds it via its own recipe
-  (`beagleplay-falcon/meta-ultima-beagleplay-src/`). `can/` holds the reference
-  `.dbc` file (see `GAUGE-CLUSTER.md`).
+  (`beagleplay-falcon/meta-ultima-beagleplay-src/`).
 - `scripts/` — `dev-build.sh` and `dev-build-wsl.sh` are local native dev builds of
   the Qt app (macOS/WSL2), don't depend on target hardware.
 - `beagleplay-falcon/` — the whole BeaglePlay side: Yocto/TI-SDK (`tisdk`,
@@ -61,8 +60,6 @@ and doesn't belong in the Yocto-specific notes.
 
 - **CAN1 is the powertrain bus on the ECU — never touch it.** Only CAN2 carries dash
   data; that's the only bus this project reads or writes.
-- The bundled `.dbc` file describes CAN1's fixed stream, not this car's CAN2 layout.
-  Use it only for per-channel scaling/signedness lookups, never for frame IDs.
 - Syvecs `.SC` config files are proprietary/encrypted — don't try to parse one to
   recover CAN Tx config. Ask the user for a SCal screenshot instead.
 

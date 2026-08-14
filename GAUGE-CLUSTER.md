@@ -124,10 +124,6 @@ The ECU is a Syvecs S7+ on a Cayman LS7 engine swap (firmware string `S7Plus 1.7
 - CAN2's outbound frames are configured via SCal **Datastreams → Generic CAN Transmit**. This build does *not* have the "Custom CAN" / "Datastream Select" hierarchy that some gaugeART documentation references — don't assume that structure applies here.
 - **Syvecs `.SC` config files are proprietary binary** (encrypted/packed after a small header) — there's no way to extract the CAN Tx config by inspecting an `.SC` file directly. If you need to verify or change the CAN2 layout, ask for a screenshot of the SCal Datastreams → Generic CAN Transmit screen rather than trying to parse a config file.
 
-### DBC Reference (Scalings Only — Not Frame IDs)
-
-`ultima-app/can/syvecs_s7_fixed_stream_v3.dbc` is bundled as a reference, but it describes the **CAN1 fixed stream**, not this car's CAN2 layout. Its per-channel scaling and signedness definitions are tied to channel name (e.g. `vehicleSpeed`'s `0.036` km/h scaling), which holds true regardless of which frame/slot a channel is transmitted on — so it's useful for looking up scaling factors, but **do not use it to look up frame IDs** for CAN2.
-
 ### Verified CAN2 Frame Map
 
 Read from SCal Datastreams → Generic CAN Transmit → Transmit Content. Frame *N* broadcasts on CAN ID `0x600 + (N-1)`; each frame carries four 16-bit big-endian slots, slot *S* at byte offset `2(S-1)..2S-1`. What `CanBus::decodeFrame()` consumes today:
