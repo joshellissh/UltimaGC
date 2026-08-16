@@ -6,6 +6,7 @@
 
 #if !defined(__linux__) || defined(ULTIMA_SIMULATE)
 #include <QPainter>
+#include <QFont>
 #include <QRandomGenerator>
 #include <cmath>
 #endif
@@ -19,15 +20,17 @@
 #include <linux/videodev2.h>
 #endif
 
-// Requested capture format — see beagleplay-falcon/NOTES.md "Live camera
-// feed" for how this was chosen from the grabber's USB descriptors: YUYV
-// 720x480@30 (20.7 MB/s) sits comfortably under the ~24.5 MB/s isochronous
-// endpoint ceiling and needs no JPEG decode. VIDIOC_S_FMT is a negotiation,
-// not a command — the code below reads back whatever the driver actually
-// grants (m_frameWidth/m_frameHeight), so a PAL grabber (720x576) or a
-// driver that can't do exactly 720x480 still works.
-static constexpr int kRequestedWidth = 720;
-static constexpr int kRequestedHeight = 480;
+// Requested capture format — mycam004m's contract (both fake and real
+// backends, see ~/code/mycam004m/docs/ultima-app-integration.md) is fixed
+// YUYV 1920x1080@30, answered by coercion rather than negotiation: S_FMT
+// hands back this exact format regardless of what's requested. The code
+// below still reads back whatever the driver actually granted
+// (m_frameWidth/m_frameHeight/m_bytesPerLine) rather than assuming these
+// requested values landed — same reasoning as when this was a 720x480 UVC
+// grabber, just now defending against a driver bug rather than a real
+// negotiation.
+static constexpr int kRequestedWidth = 1920;
+static constexpr int kRequestedHeight = 1080;
 
 CameraFeed::CameraFeed(const QString &device, QObject *parent)
     : QObject(parent), m_device(device)
@@ -141,7 +144,11 @@ void CameraFeed::tryOpen()
     // device_caps, not the device-wide capabilities field: a UVC grabber's
     // second node (metadata) reports VIDEO_CAPTURE in the union
     // "capabilities" field too, so only the per-node device_caps actually
-    // discriminates the real capture node from it. See NOTES.md.
+    // discriminates the real capture node from it. See NOTES.md. mycam004m
+    // has no second/metadata node on either backend (device_caps is plain
+    // VIDEO_CAPTURE|STREAMING|READWRITE — see the integration doc), so this
+    // check is dormant against these devices, but harmless to leave in
+    // place rather than special-case away.
     quint32 caps = (cap.capabilities & V4L2_CAP_DEVICE_CAPS)
                        ? cap.device_caps : cap.capabilities;
     if (!(caps & V4L2_CAP_VIDEO_CAPTURE) || !(caps & V4L2_CAP_STREAMING)) {
@@ -166,19 +173,22 @@ void CameraFeed::tryOpen()
         return;
     }
     if (fmt.fmt.pix.pixelformat != V4L2_PIX_FMT_YUYV) {
-        fprintf(stderr, "[camerafeed] grabber refused YUYV (got fourcc 0x%x) — unsupported\n",
-                fmt.fmt.pix.pixelformat);
+        fprintf(stderr, "[camerafeed] %s refused YUYV (got fourcc 0x%x) — unsupported\n",
+                qPrintable(m_device), fmt.fmt.pix.pixelformat);
         ::close(fd);
         setFailed(true);
         return;
     }
-    // Read back what was actually granted — S_FMT is a negotiation. Notably
-    // bytesperline: assuming it always equals width*2 (tightly packed, no
-    // stride padding) was flagged as a real risk during hardware bring-up
-    // (see beagleplay-falcon/NOTES.md "Live camera feed") — reading past a
-    // stride the driver actually padded would walk off the end of the
-    // mmap'd /dev/video0 region, a plausible SIGBUS source. Logged here so
-    // it's visible on real hardware, not assumed.
+    // Read back what was actually granted — S_FMT is a negotiation in
+    // general, though mycam004m answers it by coercion (always hands back
+    // 1920x1080 YUYV regardless of what's requested — see the integration
+    // doc). Notably bytesperline: assuming it always equals width*2
+    // (tightly packed, no stride padding) was flagged as a real risk during
+    // the original UVC-grabber hardware bring-up (see beagleplay-falcon/
+    // NOTES.md "Live camera feed") — reading past a stride the driver
+    // actually padded would walk off the end of the mmap'd capture buffer,
+    // a plausible SIGBUS source. Logged here so it's visible on real
+    // hardware, not assumed.
     m_frameWidth = int(fmt.fmt.pix.width);
     m_frameHeight = int(fmt.fmt.pix.height);
     m_bytesPerLine = int(fmt.fmt.pix.bytesperline);
@@ -247,15 +257,17 @@ void CameraFeed::tryOpen()
 }
 
 // YUYV (YUY2) -> RGB32, standard BT.601 integer coefficients. Runs on the
-// GUI thread (see camerafeed.h's currentFrame() comment) — this is the cost
-// that verification step 4 in NOTES.md's "Live camera feed" plan checks
-// against the tach/boost Canvas elements.
+// GUI thread (see camerafeed.h's currentFrame() comment) — with 4 instances
+// now converting 1920x1080 each (vs. one 720x480 grabber before), this is
+// the cost flagged as a real risk, not yet measured, in the integration
+// doc's "one real risk worth flagging" section — check that before assuming
+// this scales to 4 concurrent feeds.
 static inline quint8 clamp255(int v) { return quint8(v < 0 ? 0 : (v > 255 ? 255 : v)); }
 
 // bytesPerLine is the driver-granted V4L2 stride (fmt.fmt.pix.bytesperline),
 // NOT assumed to be width*2 — see the VIDIOC_S_FMT comment in tryOpen(). A
 // wrong assumption here would walk source rows past the actual stride,
-// eventually reading off the end of the mmap'd /dev/video0 region.
+// eventually reading off the end of the mmap'd capture buffer.
 static void convertYUYVToRGB32(const uchar *src, QImage &dst, int width, int height, int bytesPerLine)
 {
     for (int y = 0; y < height; ++y) {
@@ -279,11 +291,11 @@ static void convertYUYVToRGB32(const uchar *src, QImage &dst, int width, int hei
 void CameraFeed::onReadable()
 {
     // Drain every buffer the driver has ready, but convert and emit only
-    // the newest one. Isoc capture can arrive faster than the GUI thread
-    // (where this conversion runs — see camerafeed.h's threading note) can
-    // keep up with rendering; converting each of up to kNumBuffers queued
-    // frames per wake, only to have each overwrite m_frame before the next
-    // frame is even displayed, would multiply that cost for nothing.
+    // the newest one. Capture can arrive faster than the GUI thread (where
+    // this conversion runs — see camerafeed.h's threading note) can keep up
+    // with rendering; converting each of up to kNumBuffers queued frames
+    // per wake, only to have each overwrite m_frame before the next frame
+    // is even displayed, would multiply that cost for nothing.
     bool havePending = false;
     struct v4l2_buffer pending;
     memset(&pending, 0, sizeof(pending));
@@ -312,12 +324,12 @@ void CameraFeed::onReadable()
     if (!havePending)
         return; // spurious wake, nothing actually ready
 
-    // bytesused guard: isoc bandwidth is this design's tightest margin (see
-    // NOTES.md's "Live camera feed" risk list) — a short buffer is a
-    // plausible drop, and without this check it would render partly-stale
-    // rows from a previous frame's leftover buffer contents instead of
-    // being skipped. Checked against the driver's own stride
-    // (m_bytesPerLine), not an assumed width*2 — see convertYUYVToRGB32.
+    // bytesused guard: a short buffer (driver bug, or a mid-stream format
+    // change this code doesn't handle) is a plausible failure mode, and
+    // without this check it would render partly-stale rows from a previous
+    // frame's leftover buffer contents instead of being skipped. Checked
+    // against the driver's own stride (m_bytesPerLine), not an assumed
+    // width*2 — see convertYUYVToRGB32.
     if (pending.index < quint32(m_numBuffersMapped) && m_frameWidth > 0 && m_frameHeight > 0
         && m_bytesPerLine > 0
         && pending.bytesused >= quint32(m_bytesPerLine) * quint32(m_frameHeight)) {
@@ -337,8 +349,16 @@ void CameraFeed::onReadable() {}
 
 // Dev-build stand-in: a moving test pattern (diagonal bars sliding
 // sideways) so Camera360Screen's pillarbox/fallback/aspect logic can be
-// exercised on scripts/dev-build.sh without a capture card. Uses the same
+// exercised on scripts/dev-build.sh without capture hardware. Uses the same
 // negotiated-size shape (frameWidth/frameHeight) real hardware would.
+//
+// The bar color is derived from m_device rather than fixed, and the device
+// path is drawn as the label — 4 concurrent instances (one per
+// /dev/mycam/camN) need to look visibly different from each other, the same
+// way the real fake driver's reference images each use a distinct
+// background + marker count (see ~/code/mycam004m/tools/gen_fake_frames.py)
+// specifically so a cross-wired quadrant (cam2 showing in cam3's slot) is
+// obvious by eye rather than needing pixel inspection.
 void CameraFeed::simulateTick()
 {
     if (m_frameWidth != kRequestedWidth || m_frameHeight != kRequestedHeight) {
@@ -352,14 +372,19 @@ void CameraFeed::simulateTick()
     QPainter p(&frame);
     p.fillRect(frame.rect(), QColor(20, 20, 24));
     p.setPen(Qt::NoPen);
-    p.setBrush(QColor(90, 200, 250));
+    const uint h = qHash(m_device);
+    p.setBrush(QColor(80 + h % 150, 80 + (h / 150) % 150, 80 + (h / 22500) % 150));
     const int barWidth = 40;
     for (int x = -barWidth; x < frame.width() + barWidth; x += barWidth * 2) {
         int shifted = int(std::fmod(x + m_simPhase, frame.width() + 2.0 * barWidth)) - barWidth;
         p.drawRect(shifted, 0, barWidth, frame.height());
     }
     p.setPen(Qt::white);
-    p.drawText(frame.rect(), Qt::AlignCenter, QStringLiteral("CAMERA FEED\n(simulated)"));
+    QFont font = p.font();
+    font.setPointSize(48);
+    p.setFont(font);
+    p.drawText(frame.rect(), Qt::AlignCenter,
+               QStringLiteral("%1\n(simulated)").arg(m_device));
     p.end();
 
     m_frame = frame;

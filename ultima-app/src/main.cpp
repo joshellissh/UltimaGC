@@ -55,10 +55,17 @@ int main(int argc, char *argv[])
 
     SystemClock systemClock;
 
-    // Device is not opened here — CameraFeed stays lazy (see camerafeed.h)
-    // until Camera360Screen actually opens, so a screen most drives never
-    // visit costs nothing at boot.
-    CameraFeed cameraFeed;
+    // 4 independent feeds, one per /dev/mycam/camN — the mycam004m driver's
+    // stable symlinks over whichever backend (fake or real) is currently
+    // selected via its own select-camera-backend.sh, run outside this app
+    // (see ~/code/mycam004m/docs/ultima-app-integration.md). Devices are
+    // not opened here — CameraFeed stays lazy (see camerafeed.h) until
+    // Camera360Screen actually opens, so a screen most drives never visit
+    // costs nothing at boot.
+    CameraFeed cameraFeed1("/dev/mycam/cam1");
+    CameraFeed cameraFeed2("/dev/mycam/cam2");
+    CameraFeed cameraFeed3("/dev/mycam/cam3");
+    CameraFeed cameraFeed4("/dev/mycam/cam4");
     qmlRegisterType<CameraView>("Ultima", 1, 0, "CameraView");
 
     signal(SIGTERM, sigHandler);
@@ -79,7 +86,10 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty("odoStore", &odoStore);
     engine.rootContext()->setContextProperty("sim", &canBus);
     engine.rootContext()->setContextProperty("systemClock", &systemClock);
-    engine.rootContext()->setContextProperty("cameraFeed", &cameraFeed);
+    engine.rootContext()->setContextProperty("cameraFeed1", &cameraFeed1);
+    engine.rootContext()->setContextProperty("cameraFeed2", &cameraFeed2);
+    engine.rootContext()->setContextProperty("cameraFeed3", &cameraFeed3);
+    engine.rootContext()->setContextProperty("cameraFeed4", &cameraFeed4);
     engine.rootContext()->setContextProperty("splashImagePath", splashImageUrl);
     engine.load(QUrl(QStringLiteral("qrc:/main.qml")));
     double t2 = readUptime();

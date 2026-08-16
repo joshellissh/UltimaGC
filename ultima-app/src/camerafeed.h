@@ -7,18 +7,22 @@
 #include <QTimer>
 #include <QSocketNotifier>
 
-// Captures live video from a USB UVC capture card (a MacroSilicon MS210x
-// AV-to-USB grabber on the bench unit, confirmed via its USB descriptors —
-// see beagleplay-falcon/NOTES.md) and exposes decoded frames as QImages for
-// CameraView to render. Deliberately mirrors CanBus's shape (raw fd +
-// QSocketNotifier + retry timer, see canbus.cpp) rather than inventing a
-// new one.
+// Captures live video from a V4L2 capture node and exposes decoded frames as
+// QImages for CameraView to render. Originally a USB UVC capture card (a
+// MacroSilicon MS210x AV-to-USB grabber, confirmed via its USB descriptors —
+// see beagleplay-falcon/NOTES.md); now one of 4 instances pointed at
+// /dev/mycam/cam1..4, the mycam004m driver's stable symlinks (fake or real
+// backend — see ~/code/mycam004m/docs/ultima-app-integration.md). The class
+// itself didn't need to change for that move: it was already just "open a
+// device path, negotiate a format, mmap N buffers" with no UVC-specific
+// logic. Deliberately mirrors CanBus's shape (raw fd + QSocketNotifier +
+// retry timer, see canbus.cpp) rather than inventing a new one.
 //
 // Lazily opened: the device is only opened while active is true, driven by
 // Camera360Screen's open()/close(). This project measures first-Qt-frame to
-// the millisecond (see NOTES.md's measure-boot.sh); opening a USB device and
-// negotiating a streaming format at construction would regress that for a
-// screen most drives never open.
+// the millisecond (see NOTES.md's measure-boot.sh); opening a capture device
+// and negotiating a streaming format at construction would regress that for
+// a screen most drives never open.
 class CameraFeed : public QObject
 {
     Q_OBJECT
@@ -39,7 +43,7 @@ class CameraFeed : public QObject
     Q_PROPERTY(int frameHeight READ frameHeight NOTIFY formatChanged)
 
 public:
-    explicit CameraFeed(const QString &device = QStringLiteral("/dev/video0"),
+    explicit CameraFeed(const QString &device = QStringLiteral("/dev/mycam/cam1"),
                          QObject *parent = nullptr);
     ~CameraFeed();
 

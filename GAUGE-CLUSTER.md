@@ -57,7 +57,7 @@ The app consists of 6 QML files, all in `ultima-app/src/`:
 - **`CircularGauge.qml`** — Reusable needle gauge component: rotates `needle.png` over a transparent item positioned at the gauge center. Configurable start/end angles, counter-clockwise mode, needle size/pivot, optional debug arc overlay
 - **`SetTimeScreen.qml`** — Time-set overlay that calls into `SystemClock` (the `systemClock` context property) to push a new wall-clock time
 - **`DiagnosticScreen.qml`** — Full-screen grid of every CAN2 signal this build actually decodes today (ECU + MCE18 — see below), showing the raw decoded value/enum behind each dash gauge or icon rather than just its needle position or lit/unlit state. Opened by swiping left anywhere on the main dash, closed by swiping right
-- **`Camera360Screen.qml`** — Full-screen 360-degree camera view overlay, toggled open/closed (250ms cross-fade via a `Behavior on opacity`) by tapping the 360 icon (`icon360`) on the main dash. Static placeholder art (`simulated_cameras.png` + `car_360.png` over an 82%-opacity black backdrop) — not a real camera feed, no camera hardware wired into this project yet
+- **`Camera360Screen.qml`** — Full-screen camera overlay, toggled open/closed (250ms cross-fade via a `Behavior on opacity`) by tapping the 360 icon (`icon360`) on the main dash, or automatically on reverse gear (`main.qml`'s `reverseGear`). Currently a plain 2x2 grid of the 4 raw feeds from the mycam004m driver (`cameraFeed1`..`cameraFeed4` context properties set up in `main.cpp`, each a `CameraFeed` opening one of the driver's stable `/dev/mycam/cam1`..`cam4` symlinks and rendered by a `CameraView`; see `~/code/mycam004m/docs/ultima-app-integration.md`) — no stitching into a single birds-eye/360 view yet, that's future work. `simulated_cameras.png` is a whole-screen fallback shown only if every feed has failed or none produce a frame within 2s of opening.
 - **`SimEngine.qml`** — **Not loaded at runtime.** Bundled only as a reference/potential `--demo` fallback; it predates `CanBus` and was the original simulated data source before real CAN integration. Speed wanders through city/suburban/highway/stop phases, RPM derived from gear ratios, automatic gear selection (P/R/N/1-7), fuel consumption, coolant temp, boost pressure (0-30 PSI). `CanBus::simulateTick()` reimplements this same phase logic directly in C++ so it can drive the live `sim` property — see [CAN Bus Integration](#can-bus-integration-syvecs-s7)
 
 ### Asset Files
@@ -78,7 +78,7 @@ The app consists of 6 QML files, all in `ultima-app/src/`:
 | `bahnschrift._semibold.ttf` | Bahnschrift SemiBold font for gear indicator |
 | `icon_oil_pressure.png`, `icon_check_engine.png`, `icon_battery.png`, `icon_coolant_warn.png`, `icon_low_beam.png`, `icon_high_beam.png`, `icon_axle_lift.png`, `icon_cruise.png` | ISO 7000-style dashboard warning icons (white on transparent) |
 | `icon_360.png` | 360-view tap target, centered at (280, 666); toggles `Camera360Screen` open/closed |
-| `simulated_cameras.png`, `car_360.png` | `Camera360Screen` overlay art — full-canvas (1600x720), alpha margins let the 82%-opacity black backdrop show through |
+| `simulated_cameras.png` | `Camera360Screen`'s whole-screen fallback art, shown when no camera feed is up (`car_360.png` is unused, kept in `qml.qrc` from an earlier version of this overlay) |
 
 The old single-image `background.png` face has been removed from the tree and
 `qml.qrc` — the Bavarian swap described above is complete, not in progress.
