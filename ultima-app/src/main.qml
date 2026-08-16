@@ -271,14 +271,14 @@ Window {
     // 360 view icon — centered at (280, 666). Toggles the Camera360Screen
     // overlay; z is above that overlay (600) so the icon stays the tap
     // target that closes it, rather than getting covered once it's open.
-    // Hidden while the diagnostic screen is open/opening — it lives at the
-    // same on-screen spot as diagnostic content, and it's the wrong action
-    // to expose over that screen anyway.
+    // Hidden while the diagnostic screen or camera grid screen is
+    // open/opening — it lives at the same on-screen spot as diagnostic
+    // content, and it's the wrong action to expose over either screen anyway.
     Image {
         id: icon360
         x: 280 - width / 2; y: 666 - height / 2
         z: 700
-        visible: !diagnosticScreen.isOpen
+        visible: !diagnosticScreen.isOpen && !cameraGridScreen.isOpen
         source: "qrc:/icon_360.png"
         opacity: icon360Area.pressed ? 0.6 : 1.0
 
@@ -540,9 +540,11 @@ Window {
         // Stacked below interactive elements (odometer/trip drag handles,
         // trip reset button) so it doesn't swallow their presses — it only
         // catches touches that land on non-interactive parts of the dash.
-        // Also doubles as the swipe-left gesture into the diagnostic screen
-        // (see DiagnosticScreen.qml) — same layer, same primitive, rather
-        // than adding a second overlay convention just for gestures.
+        // Also doubles as the swipe gesture into the diagnostic screen
+        // (swipe left, see DiagnosticScreen.qml) and the camera grid screen
+        // (swipe right, see CameraGridScreen.qml) — same layer, same
+        // primitive, rather than adding a second overlay convention just for
+        // gestures.
         z: -1
         property real dragStartX: 0
         property bool swipeFired: false
@@ -566,6 +568,9 @@ Window {
             if (mouse.x - dragStartX < -120) {
                 swipeFired = true
                 diagnosticScreen.open()
+            } else if (mouse.x - dragStartX > 120) {
+                swipeFired = true
+                cameraGridScreen.open()
             }
         }
     }
@@ -581,6 +586,13 @@ Window {
     // the time-set overlay.
     DiagnosticScreen {
         id: diagnosticScreen
+    }
+
+    // Camera grid screen — opened by swiping right anywhere on the dash (see
+    // the MouseArea above). Same z-tier as diagnosticScreen since the two
+    // are mutually exclusive swipe targets off the main cluster.
+    CameraGridScreen {
+        id: cameraGridScreen
     }
 
     // 360-degree camera view — opened/closed by tapping icon360 above, or
