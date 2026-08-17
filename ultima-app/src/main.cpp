@@ -4,18 +4,26 @@
 #include <QQmlEngine>
 #include <QQuickWindow>
 #include <QFile>
+#include <QImage>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QTimer>
 #include <QUrl>
+#include <QSurfaceFormat>
 #include <atomic>
 #include <signal.h>
 #include <unistd.h>
+
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+#include <QSGRendererInterface>
+#endif
 
 #include "odostore.h"
 #include "canbus.h"
 #include "systemclock.h"
 #include "camerafeed.h"
 #include "cameraview.h"
+#include "surroundview.h"
 
 static double readUptime() {
     double t = 0;
@@ -43,6 +51,38 @@ int main(int argc, char *argv[])
     double t0 = readUptime();
     fprintf(stderr, "[%6.2f] app main() entered\n", t0);
 
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    // Qt6 defaults to Metal on macOS (and other non-OpenGL RHI backends
+    // elsewhere); SurroundView (a QQuickFramebufferObject, see
+    // surroundview.h) only renders anything when the scene graph runs on
+    // the OpenGL RHI backend — under Metal its Renderer::render() is never
+    // invoked, silently leaving the item blank with no warning. Must be set
+    // before the first QQuickWindow is created. The BeaglePlay target's Qt5
+    // build has no RHI concept at all (always real GL/GLES via eglfs), so
+    // this is a macOS/Qt6-dev-build-only concern — ported from the same fix
+    // in test/avm-benchmark/src/main.cpp, which hit this identical failure
+    // mode with its own QQuickFramebufferObject-based dashboard item.
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
+#endif
+    // QQuickWindow creates its GL context from QSurfaceFormat::defaultFormat(),
+    // which defaults to a legacy/unspecified-version compatibility profile
+    // on macOS (grants OpenGL 2.1) — incompatible with shadermanager.cpp's
+    // "#version 330 core" header for desktop GL. Must be set before the
+    // first window. On Linux/eglfs this states explicitly what's already
+    // implicitly granted (GLES 3.1, confirmed via the PowerVR/mesa-pvr
+    // hardware bring-up — see beagleplay-falcon/NOTES.md), so it changes
+    // nothing there; it's load-bearing only for the macOS dev build.
+    QSurfaceFormat surroundFormat;
+#if defined(__linux__)
+    surroundFormat.setRenderableType(QSurfaceFormat::OpenGLES);
+    surroundFormat.setVersion(3, 1);
+#else
+    surroundFormat.setRenderableType(QSurfaceFormat::OpenGL);
+    surroundFormat.setProfile(QSurfaceFormat::CoreProfile);
+    surroundFormat.setVersion(3, 3);
+#endif
+    QSurfaceFormat::setDefaultFormat(surroundFormat);
+
     QGuiApplication app(argc, argv);
     double t1 = readUptime();
     fprintf(stderr, "[%6.2f] QGuiApplication created (+%.2fs)\n", t1, t1-t0);
@@ -67,6 +107,7 @@ int main(int argc, char *argv[])
     CameraFeed cameraFeed3("/dev/mycam/cam3");
     CameraFeed cameraFeed4("/dev/mycam/cam4");
     qmlRegisterType<CameraView>("Ultima", 1, 0, "CameraView");
+    qmlRegisterType<SurroundView>("Ultima", 1, 0, "SurroundView");
 
     signal(SIGTERM, sigHandler);
     signal(SIGINT, sigHandler);
@@ -128,6 +169,36 @@ int main(int argc, char *argv[])
         QObject::connect(rootWindow, &QQuickWindow::frameSwapped, rootWindow, [&]() {
             logFirstFrame(swappedOnce, "first frame swapped (frameSwapped)");
         }, Qt::DirectConnection);
+
+        // Debug-only on-device screenshot capture. eglfs_kms has no
+        // screenshot tooling on this image (no modetest/ffmpeg/fbgrab), and
+        // /dev/fb0 doesn't reflect live GPU output once Qt takes over (see
+        // beagleplay-falcon/NOTES.md's boot-splash investigation) — so this
+        // is the only way to pull a frame off real hardware short of
+        // photographing the panel. Triggered by touching
+        // /tmp/ultima-screenshot.request (optionally containing an output
+        // path) over ssh; polled on a QTimer rather than a signal handler
+        // since QQuickWindow::grabWindow() must run on the GUI thread.
+        auto *screenshotTimer = new QTimer(&app);
+        QObject::connect(screenshotTimer, &QTimer::timeout, rootWindow, [rootWindow]() {
+            QFile trigger(QStringLiteral("/tmp/ultima-screenshot.request"));
+            if (!trigger.exists())
+                return;
+            QString outPath = QStringLiteral("/tmp/ultima-screenshot.png");
+            if (trigger.open(QIODevice::ReadOnly)) {
+                QString requested = QString::fromUtf8(trigger.readAll()).trimmed();
+                if (!requested.isEmpty())
+                    outPath = requested;
+                trigger.close();
+            }
+            QFile::remove(QStringLiteral("/tmp/ultima-screenshot.request"));
+            QImage img = rootWindow->grabWindow();
+            if (img.save(outPath))
+                fprintf(stderr, "[screenshot] saved %s (%dx%d)\n", qPrintable(outPath), img.width(), img.height());
+            else
+                fprintf(stderr, "[screenshot] failed to save %s\n", qPrintable(outPath));
+        });
+        screenshotTimer->start(250);
     }
 
     return app.exec();

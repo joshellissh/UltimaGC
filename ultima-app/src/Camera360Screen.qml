@@ -3,14 +3,17 @@ import Ultima 1.0
 
 // Full-screen camera overlay, opened/closed by tapping the 360 icon on the
 // main dash (see main.qml's icon360) or automatically on reverse gear (see
-// main.qml's reverseGear). Shows the 4 raw feeds from the mycam004m driver
-// (cameraFeed1..cameraFeed4 context properties, see main.cpp) as a plain
-// 2x2 grid — one quadrant per physical camera, no stitching. Birds-eye/360
-// compositing of these 4 feeds into one view is deferred to later work;
-// this is the interim step of proving the 4-stream device-driver path
-// (fake backend today, see ~/code/mycam004m/docs/ultima-app-integration.md)
-// actually delivers frames to the screen. simulated_cameras.png is kept as
-// a whole-screen fallback for when no feed is up at all.
+// main.qml's reverseGear). Shows the 4 feeds from the mycam004m driver
+// (cameraFeed1..cameraFeed4 context properties, see main.cpp) stitched into
+// one top-down birds-eye view via SurroundView (surroundview.h) — a
+// precomputed per-camera fisheye/ground-plane warp mesh + feather blend,
+// the architecture test/avm-benchmark validated on real BeaglePlay hardware
+// (see that project's docs/measurement-notes.md). Calibration is currently
+// a placeholder rig (cameracalibration.cpp's defaultCalibration()) — seams
+// and ground-plane scale will only be exactly right once real measured
+// camera-mount data replaces it. simulated_cameras.png is kept as a
+// whole-screen fallback for when no feed is up at all. CameraGridScreen.qml
+// keeps the separate raw-quadrant debug layout this screen used to have.
 Item {
     id: root
     anchors.fill: parent
@@ -26,11 +29,8 @@ Item {
         NumberAnimation { duration: 250; easing.type: Easing.OutCubic }
     }
 
-    // Raster order (top-left, top-right, bottom-left, bottom-right) matches
-    // cam1..cam4 — see gen_fake_frames.py's per-camera reference images and
-    // the integration doc's verification step 3: a swapped cam2/cam3 should
-    // be immediately visible by which quadrant shows which color/label,
-    // not something that needs pixel inspection to catch.
+    // Order matters: SurroundView treats this array as
+    // [front, rear, left, right] — see surroundview.h's class comment.
     readonly property var feeds: [cameraFeed1, cameraFeed2, cameraFeed3, cameraFeed4]
 
     readonly property bool anyStreaming: cameraFeed1.streaming || cameraFeed2.streaming
@@ -89,52 +89,14 @@ Item {
         color: "black"
     }
 
-    // 2x2 grid, one quadrant per camera. Each quadrant pillarboxes its feed
-    // to whatever aspect ratio CameraFeed actually negotiated (mycam004m is
-    // a fixed 1920x1080, but this stays robust rather than hardcoding
-    // 16:9 — same reasoning the single-feed version used for a PAL source).
-    Grid {
+    // The stitched birds-eye composite — see this file's top comment and
+    // surroundview.h for the architecture. feeds order (cam1..cam4) maps to
+    // front/rear/left/right — see surroundview.h's class comment for why
+    // that mapping is currently a placeholder assumption.
+    SurroundView {
         anchors.fill: parent
-        columns: 2
-        rows: 2
+        feeds: root.feeds
         visible: !showPlaceholder
-
-        Repeater {
-            model: 4
-
-            Item {
-                id: quadrant
-                width: root.width / 2
-                height: root.height / 2
-                property var feed: root.feeds[index]
-
-                CameraView {
-                    feed: quadrant.feed
-                    anchors.centerIn: parent
-                    height: parent.height
-                    width: quadrant.feed.frameHeight > 0
-                           ? Math.round(parent.height * (quadrant.feed.frameWidth / quadrant.feed.frameHeight))
-                           : Math.round(parent.height * 16 / 9)
-                    visible: !quadrant.feed.failed
-                }
-
-                // Per-quadrant label — which physical camera this is, and
-                // whether it's actually delivering frames yet. Cheap and
-                // exactly what's needed to confirm on real hardware that
-                // cam1..cam4 land in the right quadrants and are streaming,
-                // without needing pixel inspection.
-                Text {
-                    anchors.left: parent.left
-                    anchors.top: parent.top
-                    anchors.margins: 8
-                    color: "white"
-                    style: Text.Outline
-                    styleColor: "black"
-                    font.pixelSize: 18
-                    text: "CAM " + (index + 1) + (quadrant.feed.streaming ? "" : quadrant.feed.failed ? "  FAILED" : "  NO SIGNAL")
-                }
-            }
-        }
     }
 
     // Fallback art — shown only once every feed has genuinely failed, or

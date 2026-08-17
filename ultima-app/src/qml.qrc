@@ -26,5 +26,7 @@
         <file>icon_360.png</file>
         <file>simulated_cameras.png</file>
         <file>car_360.png</file>
+        <file>shaders/surround.vert</file>
+        <file>shaders/surround.frag</file>
     </qresource>
 </RCC>
