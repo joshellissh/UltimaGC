@@ -153,9 +153,4 @@ Item {
         }
     }
 
-    Image {
-        anchors.fill: parent
-        source: "qrc:/simulated_cameras.png"
-        visible: root.showPlaceholder
-    }
 }

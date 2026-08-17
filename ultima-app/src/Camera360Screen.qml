@@ -11,9 +11,8 @@ import Ultima 1.0
 // (see that project's docs/measurement-notes.md). Calibration is currently
 // a placeholder rig (cameracalibration.cpp's defaultCalibration()) — seams
 // and ground-plane scale will only be exactly right once real measured
-// camera-mount data replaces it. simulated_cameras.png is kept as a
-// whole-screen fallback for when no feed is up at all. CameraGridScreen.qml
-// keeps the separate raw-quadrant debug layout this screen used to have.
+// camera-mount data replaces it. CameraGridScreen.qml keeps the separate
+// raw-quadrant debug layout this screen used to have.
 Item {
     id: root
     anchors.fill: parent
@@ -99,16 +98,6 @@ Item {
         feeds: root.feeds
         calibrationSource: calibrationStore
         visible: !showPlaceholder
-    }
-
-    // Fallback art — shown only once every feed has genuinely failed, or
-    // fallbackTimer has timed out waiting for a first frame from any of
-    // them (e.g. the mycam004m driver isn't loaded / symlinks not set up).
-    // Kept in qml.qrc for exactly this reason.
-    Image {
-        anchors.fill: parent
-        source: "qrc:/simulated_cameras.png"
-        visible: showPlaceholder
     }
 
     // Calibration settings entry point — subtle by design (this is a tuning
