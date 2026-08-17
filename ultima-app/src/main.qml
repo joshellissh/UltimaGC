@@ -53,6 +53,16 @@ Window {
         PropertyAction { target: root; property: "startupActive"; value: false }
     }
 
+    // FPS counter state — driven by real render-thread frame swaps
+    // (QQuickWindow::frameSwapped), not a fixed-interval guess, so it
+    // reflects actual redraw rate under this build's software rendering
+    // backend (see ultima-app.pro / NOTES.md). frameSwapped fires on the
+    // scene graph render thread; QML auto-marshals the connection back to
+    // this (GUI-thread) property write the same way any cross-thread Qt
+    // signal/slot does, so no explicit locking is needed here.
+    property int _fpsFrameCount: 0
+    onFrameSwapped: _fpsFrameCount++
+
     // Background layers, back to front: boost circle, gauge overlay, car
     //
     // The boost ring wraps the tachometer (same center/sweep as rpmGauge:
@@ -608,6 +618,31 @@ Window {
     // would otherwise pop the camera overlay open on every single boot.
     property bool reverseGear: !startupActive && sim.gear === -1
     onReverseGearChanged: reverseGear ? camera360Screen.open() : camera360Screen.close()
+
+    // FPS overlay — top-left corner, above every screen this cluster shows
+    // (diagnostic, camera grid, 360 view + its calibration panel, time-set)
+    // so a rendering slowdown is visible no matter what's on screen. Below
+    // only the boot splash (9999), which shouldn't show performance chrome.
+    Text {
+        id: fpsText
+        x: 8
+        y: 4
+        z: 9000
+        font.family: bahnschriftFont.name
+        font.pixelSize: 16
+        color: "#00ff00"
+        text: "-- FPS"
+
+        Timer {
+            interval: 1000
+            running: true
+            repeat: true
+            onTriggered: {
+                fpsText.text = root._fpsFrameCount + " FPS"
+                root._fpsFrameCount = 0
+            }
+        }
+    }
 
     // Boot splash overlay — see splashDone above. Declared last / z above
     // everything so it fully hides the dash (already mid-self-test
