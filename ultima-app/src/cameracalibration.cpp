@@ -17,9 +17,9 @@ double CameraCalibration::focalLengthPixels() const {
 QJsonObject CameraCalibration::toJson() const {
     QJsonObject o;
     o["identity"] = identity;
-    o["pos_x_m"] = posXMeters;
-    o["pos_y_m"] = posYMeters;
-    o["pos_z_m"] = posZMeters;
+    o["pos_x_in"] = posXInches;
+    o["pos_y_in"] = posYInches;
+    o["pos_z_in"] = posZInches;
     o["yaw_deg"] = yawDegrees;
     o["pitch_deg"] = pitchDegrees;
     o["image_width"] = imageWidth;
@@ -37,9 +37,9 @@ QJsonObject CameraCalibration::toJson() const {
 CameraCalibration CameraCalibration::fromJson(const QJsonObject &o) {
     CameraCalibration c;
     c.identity = o["identity"].toString(c.identity);
-    c.posXMeters = o["pos_x_m"].toDouble(c.posXMeters);
-    c.posYMeters = o["pos_y_m"].toDouble(c.posYMeters);
-    c.posZMeters = o["pos_z_m"].toDouble(c.posZMeters);
+    c.posXInches = o["pos_x_in"].toDouble(c.posXInches);
+    c.posYInches = o["pos_y_in"].toDouble(c.posYInches);
+    c.posZInches = o["pos_z_in"].toDouble(c.posZInches);
     c.yawDegrees = o["yaw_deg"].toDouble(c.yawDegrees);
     c.pitchDegrees = o["pitch_deg"].toDouble(c.pitchDegrees);
     c.imageWidth = o["image_width"].toInt(c.imageWidth);
@@ -56,23 +56,25 @@ CameraCalibration CameraCalibration::fromJson(const QJsonObject &o) {
 
 QJsonObject SurroundGeometryConfig::toJson() const {
     QJsonObject o;
-    o["vehicle_length_m"] = vehicleLengthMeters;
-    o["vehicle_width_m"] = vehicleWidthMeters;
-    o["ground_half_extent_x_m"] = groundHalfExtentXMeters;
-    o["ground_half_extent_y_m"] = groundHalfExtentYMeters;
+    o["vehicle_length_in"] = vehicleLengthInches;
+    o["vehicle_width_in"] = vehicleWidthInches;
+    o["ground_half_extent_x_in"] = groundHalfExtentXInches;
+    o["ground_half_extent_y_in"] = groundHalfExtentYInches;
     o["wedge_overlap_deg"] = wedgeOverlapDegrees;
     o["mesh_grid_resolution"] = meshGridResolution;
+    o["car_icon_scale"] = carIconScale;
     return o;
 }
 
 SurroundGeometryConfig SurroundGeometryConfig::fromJson(const QJsonObject &o) {
     SurroundGeometryConfig g;
-    g.vehicleLengthMeters = o["vehicle_length_m"].toDouble(g.vehicleLengthMeters);
-    g.vehicleWidthMeters = o["vehicle_width_m"].toDouble(g.vehicleWidthMeters);
-    g.groundHalfExtentXMeters = o["ground_half_extent_x_m"].toDouble(g.groundHalfExtentXMeters);
-    g.groundHalfExtentYMeters = o["ground_half_extent_y_m"].toDouble(g.groundHalfExtentYMeters);
+    g.vehicleLengthInches = o["vehicle_length_in"].toDouble(g.vehicleLengthInches);
+    g.vehicleWidthInches = o["vehicle_width_in"].toDouble(g.vehicleWidthInches);
+    g.groundHalfExtentXInches = o["ground_half_extent_x_in"].toDouble(g.groundHalfExtentXInches);
+    g.groundHalfExtentYInches = o["ground_half_extent_y_in"].toDouble(g.groundHalfExtentYInches);
     g.wedgeOverlapDegrees = o["wedge_overlap_deg"].toDouble(g.wedgeOverlapDegrees);
     g.meshGridResolution = o["mesh_grid_resolution"].toInt(g.meshGridResolution);
+    g.carIconScale = o["car_icon_scale"].toDouble(g.carIconScale);
     return g;
 }
 
@@ -102,9 +104,9 @@ CameraCalibration makeCamera(const QString &identity, double x, double y, double
                               double yawDeg, double pitchDeg, int width, int height, double fovDeg) {
     CameraCalibration c;
     c.identity = identity;
-    c.posXMeters = x;
-    c.posYMeters = y;
-    c.posZMeters = z;
+    c.posXInches = x;
+    c.posYInches = y;
+    c.posZInches = z;
     c.yawDegrees = yawDeg;
     c.pitchDegrees = pitchDeg;
     c.imageWidth = width;
@@ -120,13 +122,14 @@ CalibrationSet defaultCalibration() {
     const int width = 1920, height = 1080;
     const double fovDeg = 185.0;
 
-    // Typical compact-sedan-ish dimensions; only used to place cameras and
-    // mask the vehicle footprint, not rendered as a real model. See this
-    // file's header comment — replace with real measured values.
-    const double halfLength = 2.25;  // bumper-to-bumper / 2
-    const double halfWidth = 0.95;   // mirror-to-mirror-ish / 2
-    const double mountHeightFront = 0.75;
-    const double mountHeightSide = 0.95; // side mirrors sit higher than bumpers
+    // Real measured car: 164in nose-to-tail, 75in mirror-to-mirror — also
+    // used to place the front/rear/left/right cameras at the vehicle's
+    // extremities. Mount height/pitch are still placeholders (not measured
+    // yet) — see this file's header comment.
+    const double halfLength = 82.0;  // 164in / 2, bumper-to-bumper
+    const double halfWidth = 37.5;   // 75in / 2, mirror-to-mirror
+    const double mountHeightFront = 29.5;
+    const double mountHeightSide = 37.4; // side mirrors sit higher than bumpers
     const double pitchDeg = 52.0;        // downward tilt, all four cameras
 
     set.front = makeCamera("front", halfLength, 0.0, mountHeightFront, 0.0, pitchDeg, width, height, fovDeg);
@@ -134,10 +137,10 @@ CalibrationSet defaultCalibration() {
     set.left = makeCamera("left", 0.0, halfWidth, mountHeightSide, 90.0, pitchDeg, width, height, fovDeg);
     set.right = makeCamera("right", 0.0, -halfWidth, mountHeightSide, -90.0, pitchDeg, width, height, fovDeg);
 
-    set.geometry.vehicleLengthMeters = halfLength * 2.0;
-    set.geometry.vehicleWidthMeters = halfWidth * 2.0;
-    set.geometry.groundHalfExtentXMeters = 5.5;
-    set.geometry.groundHalfExtentYMeters = 5.5;
+    set.geometry.vehicleLengthInches = halfLength * 2.0;
+    set.geometry.vehicleWidthInches = halfWidth * 2.0;
+    set.geometry.groundHalfExtentXInches = 216.5;
+    set.geometry.groundHalfExtentYInches = 216.5;
     set.geometry.wedgeOverlapDegrees = 20.0;
     set.geometry.meshGridResolution = 64;
 

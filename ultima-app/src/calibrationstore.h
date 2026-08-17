@@ -14,9 +14,9 @@ class CalibrationCameraModel : public QObject
 {
     Q_OBJECT
     Q_PROPERTY(QString identity READ identity CONSTANT)
-    Q_PROPERTY(double posXMeters READ posXMeters WRITE setPosXMeters NOTIFY changed)
-    Q_PROPERTY(double posYMeters READ posYMeters WRITE setPosYMeters NOTIFY changed)
-    Q_PROPERTY(double posZMeters READ posZMeters WRITE setPosZMeters NOTIFY changed)
+    Q_PROPERTY(double posXInches READ posXInches WRITE setPosXInches NOTIFY changed)
+    Q_PROPERTY(double posYInches READ posYInches WRITE setPosYInches NOTIFY changed)
+    Q_PROPERTY(double posZInches READ posZInches WRITE setPosZInches NOTIFY changed)
     Q_PROPERTY(double yawDegrees READ yawDegrees WRITE setYawDegrees NOTIFY changed)
     Q_PROPERTY(double pitchDegrees READ pitchDegrees WRITE setPitchDegrees NOTIFY changed)
     Q_PROPERTY(double fovDegrees READ fovDegrees WRITE setFovDegrees NOTIFY changed)
@@ -25,16 +25,16 @@ public:
     explicit CalibrationCameraModel(QObject *parent = nullptr) : QObject(parent) {}
 
     QString identity() const { return m_c.identity; }
-    double posXMeters() const { return m_c.posXMeters; }
-    double posYMeters() const { return m_c.posYMeters; }
-    double posZMeters() const { return m_c.posZMeters; }
+    double posXInches() const { return m_c.posXInches; }
+    double posYInches() const { return m_c.posYInches; }
+    double posZInches() const { return m_c.posZInches; }
     double yawDegrees() const { return m_c.yawDegrees; }
     double pitchDegrees() const { return m_c.pitchDegrees; }
     double fovDegrees() const { return m_c.fovDegrees; }
 
-    void setPosXMeters(double v) { if (v != m_c.posXMeters) { m_c.posXMeters = v; emit changed(); } }
-    void setPosYMeters(double v) { if (v != m_c.posYMeters) { m_c.posYMeters = v; emit changed(); } }
-    void setPosZMeters(double v) { if (v != m_c.posZMeters) { m_c.posZMeters = v; emit changed(); } }
+    void setPosXInches(double v) { if (v != m_c.posXInches) { m_c.posXInches = v; emit changed(); } }
+    void setPosYInches(double v) { if (v != m_c.posYInches) { m_c.posYInches = v; emit changed(); } }
+    void setPosZInches(double v) { if (v != m_c.posZInches) { m_c.posZInches = v; emit changed(); } }
     void setYawDegrees(double v) { if (v != m_c.yawDegrees) { m_c.yawDegrees = v; emit changed(); } }
     void setPitchDegrees(double v) { if (v != m_c.pitchDegrees) { m_c.pitchDegrees = v; emit changed(); } }
     void setFovDegrees(double v) { if (v != m_c.fovDegrees) { m_c.fovDegrees = v; emit changed(); } }
@@ -61,26 +61,29 @@ private:
 class CalibrationGeometryModel : public QObject
 {
     Q_OBJECT
-    Q_PROPERTY(double vehicleLengthMeters READ vehicleLengthMeters WRITE setVehicleLengthMeters NOTIFY changed)
-    Q_PROPERTY(double vehicleWidthMeters READ vehicleWidthMeters WRITE setVehicleWidthMeters NOTIFY changed)
-    Q_PROPERTY(double groundHalfExtentXMeters READ groundHalfExtentXMeters WRITE setGroundHalfExtentXMeters NOTIFY changed)
-    Q_PROPERTY(double groundHalfExtentYMeters READ groundHalfExtentYMeters WRITE setGroundHalfExtentYMeters NOTIFY changed)
+    Q_PROPERTY(double vehicleLengthInches READ vehicleLengthInches WRITE setVehicleLengthInches NOTIFY changed)
+    Q_PROPERTY(double vehicleWidthInches READ vehicleWidthInches WRITE setVehicleWidthInches NOTIFY changed)
+    Q_PROPERTY(double groundHalfExtentXInches READ groundHalfExtentXInches WRITE setGroundHalfExtentXInches NOTIFY changed)
+    Q_PROPERTY(double groundHalfExtentYInches READ groundHalfExtentYInches WRITE setGroundHalfExtentYInches NOTIFY changed)
     Q_PROPERTY(double wedgeOverlapDegrees READ wedgeOverlapDegrees WRITE setWedgeOverlapDegrees NOTIFY changed)
+    Q_PROPERTY(double carIconScale READ carIconScale WRITE setCarIconScale NOTIFY changed)
 
 public:
     explicit CalibrationGeometryModel(QObject *parent = nullptr) : QObject(parent) {}
 
-    double vehicleLengthMeters() const { return m_g.vehicleLengthMeters; }
-    double vehicleWidthMeters() const { return m_g.vehicleWidthMeters; }
-    double groundHalfExtentXMeters() const { return m_g.groundHalfExtentXMeters; }
-    double groundHalfExtentYMeters() const { return m_g.groundHalfExtentYMeters; }
+    double vehicleLengthInches() const { return m_g.vehicleLengthInches; }
+    double vehicleWidthInches() const { return m_g.vehicleWidthInches; }
+    double groundHalfExtentXInches() const { return m_g.groundHalfExtentXInches; }
+    double groundHalfExtentYInches() const { return m_g.groundHalfExtentYInches; }
     double wedgeOverlapDegrees() const { return m_g.wedgeOverlapDegrees; }
+    double carIconScale() const { return m_g.carIconScale; }
 
-    void setVehicleLengthMeters(double v) { if (v != m_g.vehicleLengthMeters) { m_g.vehicleLengthMeters = v; emit changed(); } }
-    void setVehicleWidthMeters(double v) { if (v != m_g.vehicleWidthMeters) { m_g.vehicleWidthMeters = v; emit changed(); } }
-    void setGroundHalfExtentXMeters(double v) { if (v != m_g.groundHalfExtentXMeters) { m_g.groundHalfExtentXMeters = v; emit changed(); } }
-    void setGroundHalfExtentYMeters(double v) { if (v != m_g.groundHalfExtentYMeters) { m_g.groundHalfExtentYMeters = v; emit changed(); } }
+    void setVehicleLengthInches(double v) { if (v != m_g.vehicleLengthInches) { m_g.vehicleLengthInches = v; emit changed(); } }
+    void setVehicleWidthInches(double v) { if (v != m_g.vehicleWidthInches) { m_g.vehicleWidthInches = v; emit changed(); } }
+    void setGroundHalfExtentXInches(double v) { if (v != m_g.groundHalfExtentXInches) { m_g.groundHalfExtentXInches = v; emit changed(); } }
+    void setGroundHalfExtentYInches(double v) { if (v != m_g.groundHalfExtentYInches) { m_g.groundHalfExtentYInches = v; emit changed(); } }
     void setWedgeOverlapDegrees(double v) { if (v != m_g.wedgeOverlapDegrees) { m_g.wedgeOverlapDegrees = v; emit changed(); } }
+    void setCarIconScale(double v) { if (v != m_g.carIconScale) { m_g.carIconScale = v; emit changed(); } }
 
     void fromStruct(const SurroundGeometryConfig &g) { m_g = g; emit changed(); }
     SurroundGeometryConfig toStruct() const { return m_g; }

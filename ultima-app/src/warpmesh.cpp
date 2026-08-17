@@ -7,14 +7,22 @@
 // ---------------------------------------------------------------------------
 // Geometry model — ported from test/avm-benchmark/src/graphics/WarpMesh.cpp.
 //
-// World/ground frame (vehicle-relative, meters): X = forward (nose), Y =
+// World/ground frame (vehicle-relative, inches): X = forward (nose), Y =
 // left, Z = up. Each grid vertex starts life as a ground-plane point
 // (X, Y, 0) inside the capture rectangle defined by
 // SurroundGeometryConfig's ground_half_extent fields.
 //
 // Output NDC position: a straight top-down orthographic projection of that
-// ground rectangle onto the [-1,1]x[-1,1] render target, nose-up (screen
-// "up" = vehicle +X, screen "right" = vehicle -Y since Y is left-positive).
+// ground rectangle onto the render target, nose-up (screen "up" = vehicle
+// +X, screen "right" = vehicle -Y since Y is left-positive), at a single
+// uniform inches-per-pixel scale shared by both screen axes — so the
+// capture rectangle's true shape is preserved instead of being stretched
+// to fill the viewport. The capture rectangle need not be square and the
+// viewport need not match its aspect ratio: whichever axis is more
+// constrained (produces fewer pixels per inch) sets the shared scale, and
+// the other axis then falls short of the viewport's edge — a letterboxed
+// black bar — rather than being distorted to reach it. See the
+// pixelsPerInch computation below.
 //
 // Camera projection (per vertex, per camera):
 //   1. Build the camera's orthonormal (right, up, forward) basis in world
@@ -28,9 +36,16 @@
 //      dynamic topology, and blending naturally hides them).
 //   4. Convert to pixel coordinates, then normalize to a [0,1] UV.
 //
-// Blend weight: each camera "owns" a 90 degree azimuthal wedge of the
-// ground (front/right/rear/left), extended by wedge_overlap_deg on each
-// side and feathered to 0 across that overlap.
+// Blend weight: each camera "owns" an azimuthal wedge of the ground
+// (front/right/rear/left), extended by wedge_overlap_deg on each side and
+// feathered to 0 across that overlap. The wedge boundaries are NOT a fixed
+// 90 degrees apart — they're set so the seam between adjacent cameras runs
+// straight out through the vehicle rectangle's actual corner, same as a
+// real AVM system's stitch lines. For a non-square vehicle (this car is
+// 164x75in) a fixed 45 degree half-wedge would put the front/rear seams
+// well past the corner and the left/right seams well short of it, which is
+// exactly what produced the black wedge-mismatch notches at the car icon's
+// corners on real hardware — see cornerAngleDeg below.
 // ---------------------------------------------------------------------------
 
 namespace {
@@ -69,10 +84,25 @@ double angularDistanceDeg(double a, double b) {
     return std::abs(d);
 }
 
-double wedgeWeight(double azimuthDeg, const QString &identity, double overlapDeg, BlendQuality quality) {
+// Half-width (degrees) of this camera's full-weight wedge, given the
+// vehicle rectangle's corner azimuth (measured from the front/rear axis —
+// see cornerAngleDeg in build()). Front/rear own the slice from -corner to
+// +corner around their axis (the ray from vehicle center through any point
+// in that range crosses the vehicle's front/rear face); left/right own the
+// remaining 90-corner on each side (crossing a side face instead). At
+// corner=45deg (a square footprint) this reduces to the original fixed
+// 45deg split.
+double wedgeHalfWidthDeg(const QString &identity, double cornerAngleDeg) {
+    if (identity == "front" || identity == "rear") return cornerAngleDeg;
+    return 90.0 - cornerAngleDeg;
+}
+
+double wedgeWeight(double azimuthDeg, const QString &identity, double overlapDeg, double cornerAngleDeg,
+                    BlendQuality quality) {
     double d = angularDistanceDeg(azimuthDeg, wedgeCenterDeg(identity));
-    double fullHalf = 45.0 - overlapDeg / 2.0;
-    double totalHalf = 45.0 + overlapDeg / 2.0;
+    double half = wedgeHalfWidthDeg(identity, cornerAngleDeg);
+    double fullHalf = half - overlapDeg / 2.0;
+    double totalHalf = half + overlapDeg / 2.0;
     if (d <= fullHalf) return 1.0;
     if (d >= totalHalf) return 0.0;
     double t = (d - fullHalf) / (totalHalf - fullHalf);
@@ -87,7 +117,8 @@ double wedgeWeight(double azimuthDeg, const QString &identity, double overlapDeg
 
 } // namespace
 
-bool WarpMesh::build(const CameraCalibration &cam, const SurroundGeometryConfig &geom, BlendQuality quality) {
+bool WarpMesh::build(const CameraCalibration &cam, const SurroundGeometryConfig &geom, BlendQuality quality,
+                      QSize viewportSize) {
     int res = std::max(2, geom.meshGridResolution);
     m_vertices.clear();
     m_indices.clear();
@@ -96,27 +127,46 @@ bool WarpMesh::build(const CameraCalibration &cam, const SurroundGeometryConfig 
     hasProjection.reserve(size_t(res) * res);
 
     CameraBasis basis = cameraBasis(cam.yawDegrees, cam.pitchDegrees);
-    QVector3D camPos(float(cam.posXMeters), float(cam.posYMeters), float(cam.posZMeters));
+    QVector3D camPos(float(cam.posXInches), float(cam.posYInches), float(cam.posZInches));
     double thetaMax = (cam.fovDegrees / 2.0) * M_PI / 180.0;
     double f = cam.focalLengthPixels();
     double cx = cam.effectivePrincipalX();
     double cy = cam.effectivePrincipalY();
-    double halfLen = geom.vehicleLengthMeters / 2.0;
-    double halfWid = geom.vehicleWidthMeters / 2.0;
+    double halfLen = geom.vehicleLengthInches / 2.0;
+    double halfWid = geom.vehicleWidthInches / 2.0;
+
+    // Azimuth (from the front axis) of the vehicle rectangle's corner —
+    // see wedgeHalfWidthDeg()'s comment for why this, not a fixed 45deg,
+    // sets the front/rear vs. left/right wedge split.
+    double cornerAngleDeg = std::atan2(halfWid, halfLen) * 180.0 / M_PI;
+
+    // Uniform inches-per-pixel scale shared by both screen axes — see this
+    // file's header comment. viewportW/H fall back to 1 to avoid a
+    // divide-by-zero if this ever runs before the FBO has a real size.
+    double viewportW = std::max(1, viewportSize.width());
+    double viewportH = std::max(1, viewportSize.height());
+    double scaleFromDepth = (viewportH / 2.0) / geom.groundHalfExtentXInches;  // fwd/back maps to viewport height
+    double scaleFromWidth = (viewportW / 2.0) / geom.groundHalfExtentYInches; // left/right maps to viewport width
+    double pixelsPerInch = std::min(scaleFromDepth, scaleFromWidth);
 
     for (int gy = 0; gy < res; ++gy) {
         double ty = double(gy) / double(res - 1); // 0..1
-        double gx0 = -geom.groundHalfExtentXMeters + ty * 2.0 * geom.groundHalfExtentXMeters;
+        double gx0 = -geom.groundHalfExtentXInches + ty * 2.0 * geom.groundHalfExtentXInches;
         for (int gx = 0; gx < res; ++gx) {
             double tx = double(gx) / double(res - 1);
             double worldX = gx0; // ground X (forward) — varies with row (gy)
-            double worldY = -geom.groundHalfExtentYMeters + tx * 2.0 * geom.groundHalfExtentYMeters;
+            double worldY = -geom.groundHalfExtentYInches + tx * 2.0 * geom.groundHalfExtentYInches;
 
             WarpVertex v{};
             // Nose-up birds-eye: screen Y follows vehicle +X, screen X
             // follows vehicle -Y (right is negative-Y since Y is left+).
-            v.x = float(-worldY / geom.groundHalfExtentYMeters);
-            v.y = float(worldX / geom.groundHalfExtentXMeters);
+            // Both use the same pixelsPerInch (see above) rather than each
+            // independently normalizing to its own half-extent — the
+            // latter always fills the full [-1,1] NDC range on both axes
+            // regardless of the capture rectangle's real shape, which is
+            // what silently produced the stretch this scale fixes.
+            v.x = float(-worldY * pixelsPerInch / (viewportW / 2.0));
+            v.y = float(worldX * pixelsPerInch / (viewportH / 2.0));
 
             bool insideVehicle = std::abs(worldX) < halfLen && std::abs(worldY) < halfWid;
             if (insideVehicle) {
@@ -155,7 +205,7 @@ bool WarpMesh::build(const CameraCalibration &cam, const SurroundGeometryConfig 
             v.v = float(std::clamp(py / cam.imageHeight, 0.0, 1.0));
 
             double azimuthDeg = std::atan2(worldY, worldX) * 180.0 / M_PI;
-            v.weight = float(wedgeWeight(azimuthDeg, cam.identity, geom.wedgeOverlapDegrees, quality));
+            v.weight = float(wedgeWeight(azimuthDeg, cam.identity, geom.wedgeOverlapDegrees, cornerAngleDeg, quality));
 
             m_vertices.push_back(v);
             hasProjection.push_back(true);

@@ -5,6 +5,7 @@
 #include <QOpenGLBuffer>
 #include <QOpenGLVertexArrayObject>
 #include <QOpenGLFunctions>
+#include <QSize>
 #include <vector>
 #include <cstdint>
 #include <memory>
@@ -35,8 +36,14 @@ enum class BlendQuality {
 class WarpMesh {
 public:
     // Builds the CPU-side grid for one camera. Returns false only on
-    // degenerate input (e.g. zero grid resolution).
-    bool build(const CameraCalibration &cam, const SurroundGeometryConfig &geom, BlendQuality quality);
+    // degenerate input (e.g. zero grid resolution). viewportSize is the
+    // render target's pixel dimensions — needed so the ground capture
+    // rectangle (which need not be square) maps to NDC at a single uniform
+    // inches-per-pixel scale on both axes instead of being stretched to
+    // fill a non-square viewport; see the mapping comment in build()'s
+    // definition.
+    bool build(const CameraCalibration &cam, const SurroundGeometryConfig &geom, BlendQuality quality,
+               QSize viewportSize);
 
     // Uploads to GPU buffers and builds a VAO. `f` must be the current
     // context's functions.

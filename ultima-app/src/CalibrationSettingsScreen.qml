@@ -95,19 +95,19 @@ Item {
 
         SectionHeader { text: title }
         CalibrationParamRow {
-            label: "Position X (fwd)"; unit: " m"; step: 0.01; decimals: 2
-            value: model.posXMeters
-            onValueEdited: model.posXMeters = newValue
+            label: "Position X (fwd)"; unit: " in"; step: 0.25; decimals: 2
+            value: model.posXInches
+            onValueEdited: model.posXInches = newValue
         }
         CalibrationParamRow {
-            label: "Position Y (left)"; unit: " m"; step: 0.01; decimals: 2
-            value: model.posYMeters
-            onValueEdited: model.posYMeters = newValue
+            label: "Position Y (left)"; unit: " in"; step: 0.25; decimals: 2
+            value: model.posYInches
+            onValueEdited: model.posYInches = newValue
         }
         CalibrationParamRow {
-            label: "Position Z (up)"; unit: " m"; step: 0.01; decimals: 2
-            value: model.posZMeters
-            onValueEdited: model.posZMeters = newValue
+            label: "Position Z (up)"; unit: " in"; step: 0.25; decimals: 2
+            value: model.posZInches
+            onValueEdited: model.posZInches = newValue
         }
         CalibrationParamRow {
             label: "Yaw"; unit: " deg"; step: 0.5; decimals: 1
@@ -152,29 +152,36 @@ Item {
 
             SectionHeader { text: "VEHICLE" }
             CalibrationParamRow {
-                label: "Length"; unit: " m"; step: 0.01; decimals: 2
-                value: calibrationStore.geometry.vehicleLengthMeters
-                onValueEdited: calibrationStore.geometry.vehicleLengthMeters = newValue
+                label: "Length"; unit: " in"; step: 0.25; decimals: 2
+                value: calibrationStore.geometry.vehicleLengthInches
+                onValueEdited: calibrationStore.geometry.vehicleLengthInches = newValue
             }
             CalibrationParamRow {
-                label: "Width"; unit: " m"; step: 0.01; decimals: 2
-                value: calibrationStore.geometry.vehicleWidthMeters
-                onValueEdited: calibrationStore.geometry.vehicleWidthMeters = newValue
+                label: "Width"; unit: " in"; step: 0.25; decimals: 2
+                value: calibrationStore.geometry.vehicleWidthInches
+                onValueEdited: calibrationStore.geometry.vehicleWidthInches = newValue
             }
             CalibrationParamRow {
-                label: "Ground extent X"; unit: " m"; step: 0.1; decimals: 1
-                value: calibrationStore.geometry.groundHalfExtentXMeters
-                onValueEdited: calibrationStore.geometry.groundHalfExtentXMeters = newValue
+                label: "Ground extent X"; unit: " in"; step: 1; decimals: 1
+                value: calibrationStore.geometry.groundHalfExtentXInches
+                onValueEdited: calibrationStore.geometry.groundHalfExtentXInches = newValue
             }
             CalibrationParamRow {
-                label: "Ground extent Y"; unit: " m"; step: 0.1; decimals: 1
-                value: calibrationStore.geometry.groundHalfExtentYMeters
-                onValueEdited: calibrationStore.geometry.groundHalfExtentYMeters = newValue
+                label: "Ground extent Y"; unit: " in"; step: 1; decimals: 1
+                value: calibrationStore.geometry.groundHalfExtentYInches
+                onValueEdited: calibrationStore.geometry.groundHalfExtentYInches = newValue
             }
             CalibrationParamRow {
                 label: "Wedge overlap"; unit: " deg"; step: 1; decimals: 0
                 value: calibrationStore.geometry.wedgeOverlapDegrees
                 onValueEdited: calibrationStore.geometry.wedgeOverlapDegrees = newValue
+            }
+
+            SectionHeader { text: "CAR ICON" }
+            CalibrationParamRow {
+                label: "Icon scale"; unit: "x"; step: 0.05; decimals: 2
+                value: calibrationStore.geometry.carIconScale
+                onValueEdited: calibrationStore.geometry.carIconScale = newValue
             }
         }
     }

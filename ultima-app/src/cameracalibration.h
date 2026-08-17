@@ -16,11 +16,11 @@
 struct CameraCalibration {
     QString identity; // "front" | "rear" | "left" | "right"
 
-    // Pose, vehicle-relative world coordinates in meters: X = forward
+    // Pose, vehicle-relative world coordinates in inches: X = forward
     // (nose), Y = left, Z = up. Matches WarpMesh's ground-plane convention.
-    double posXMeters = 0;
-    double posYMeters = 0;
-    double posZMeters = 0;
+    double posXInches = 0;
+    double posYInches = 0;
+    double posZInches = 0;
     double yawDegrees = 0;   // 0 = facing +X (forward), +90 = facing +Y (left)
     double pitchDegrees = 0; // 0 = horizontal, positive = tilted down
 
@@ -46,12 +46,19 @@ struct CameraCalibration {
 // Vehicle footprint, ground-capture extent, and blend-wedge parameters
 // shared across all four cameras.
 struct SurroundGeometryConfig {
-    double vehicleLengthMeters = 4.5;
-    double vehicleWidthMeters = 1.85;
-    double groundHalfExtentXMeters = 5.5; // ground capture region: X in [-ext, ext]
-    double groundHalfExtentYMeters = 5.5; // ground capture region: Y in [-ext, ext]
+    double vehicleLengthInches = 164.0; // real measured car: nose to tail
+    double vehicleWidthInches = 75.0;   // real measured car: mirror to mirror
+    double groundHalfExtentXInches = 216.5; // ground capture region: X in [-ext, ext]
+    double groundHalfExtentYInches = 216.5; // ground capture region: Y in [-ext, ext]
     double wedgeOverlapDegrees = 20.0;    // angular feather width between adjacent cameras
     int meshGridResolution = 64;          // vertices per side of each camera's warp mesh
+
+    // Screen-space scale for car_360.png's overlay in Camera360Screen.qml
+    // (QML Image.scale, applied around the image's own center — which sits
+    // at screen center same as the vehicle-mask hole it covers). Cosmetic
+    // only: WarpMesh/SurroundView never read this, it doesn't touch any
+    // real-world geometry above.
+    double carIconScale = 1.0;
 
     QJsonObject toJson() const;
     static SurroundGeometryConfig fromJson(const QJsonObject &o);

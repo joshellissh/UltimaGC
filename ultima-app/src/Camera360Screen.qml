@@ -100,6 +100,24 @@ Item {
         visible: !showPlaceholder
     }
 
+    // Car icon over the vehicle-mask hole in SurroundView's mesh (the
+    // ground directly under the car isn't visible to any camera, so
+    // WarpMesh leaves it unpainted — see warpmesh.cpp's insideVehicle
+    // check). car_360.png is authored at the full 1600x720 panel size
+    // with the car pre-centered on transparent background, matching where
+    // that hole sits on screen, so it drops in at anchors.fill with no
+    // extra positioning/scaling math. `scale` uses Item's default
+    // Center transformOrigin, which — since this item fills the full
+    // (screen-sized) parent — is screen center, so calibrationStore's
+    // carIconScale knob shrinks/grows the icon around screen center
+    // exactly as CalibrationSettingsScreen.qml's control describes.
+    Image {
+        anchors.fill: parent
+        source: "qrc:/car_360.png"
+        scale: calibrationStore.geometry.carIconScale
+        visible: !showPlaceholder
+    }
+
     // Calibration settings entry point — subtle by design (this is a tuning
     // tool, not primary UI). Drawn on a Canvas rather than a text glyph:
     // neither bundled font (bahnschrift, range) has a gear/settings glyph,

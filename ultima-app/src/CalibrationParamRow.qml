@@ -2,7 +2,7 @@ import QtQuick 2.15
 
 // One calibration parameter: label, live value readout, and -/+ steppers
 // with press-and-hold repeat. Touch-friendly for the small numeric steps
-// calibration tuning needs (fractions of a meter, half-degrees) — a raw
+// calibration tuning needs (fractions of an inch, half-degrees) — a raw
 // drag-slider can't hit those precisely on a car dash touchscreen.
 // `value` is a plain display binding (bind it straight to the
 // CalibrationStore field); this item never writes that field itself —

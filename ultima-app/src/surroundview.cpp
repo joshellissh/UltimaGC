@@ -58,9 +58,10 @@ public:
     // safe to call on a not-yet-uploaded WarpMesh (empty VAO/buffers).
     bool rebuildMeshes(QOpenGLFunctions *f) {
         const CameraCalibration *cams[4] = {&m_calib.front, &m_calib.rear, &m_calib.left, &m_calib.right};
+        QSize viewportSize = framebufferObject()->size();
         for (int i = 0; i < 4; ++i) {
             m_meshes[i].destroy(f);
-            if (!m_meshes[i].build(*cams[i], m_calib.geometry, BlendQuality::Feather) ||
+            if (!m_meshes[i].build(*cams[i], m_calib.geometry, BlendQuality::Feather, viewportSize) ||
                 !m_meshes[i].upload(f)) {
                 qWarning() << "SurroundView: failed to build warp mesh for" << cams[i]->identity;
                 return false;
