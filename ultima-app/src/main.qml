@@ -141,13 +141,22 @@ Window {
         anchors.fill: parent
         source: "qrc:/background_overlay.png"
     }
+    // Was anchors.fill: parent (full 1600x720) — the car artwork itself only
+    // occupies a small box in the middle of that canvas (the rest is fully
+    // transparent margin), so the GPU was compositing a full-screen quad to
+    // show a couple hundred pixels of real content every frame. Cropped to
+    // the asset's actual alpha bounding box and positioned at the matching
+    // (x, y) offset instead — pixel-identical result, much smaller quad.
+    // Same fix already applied to boostRing above for the same reason.
     Image {
-        anchors.fill: parent
+        x: 627; y: 409
+        width: 346; height: 128
         source: "qrc:/car_lights_off.png"
         visible: !sim.lowBeams && !sim.highBeams
     }
     Image {
-        anchors.fill: parent
+        x: 569; y: 409
+        width: 404; height: 165
         source: "qrc:/car_lights_on.png"
         visible: sim.lowBeams || sim.highBeams
         // CanBus's lowBeams/highBeams both default false (canbus.h), so
