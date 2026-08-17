@@ -30,5 +30,7 @@
         <file>car_360.png</file>
         <file>shaders/surround.vert</file>
         <file>shaders/surround.frag</file>
+        <file>shaders/blit.vert</file>
+        <file>shaders/blit.frag</file>
     </qresource>
 </RCC>

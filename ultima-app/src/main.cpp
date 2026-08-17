@@ -9,6 +9,8 @@
 #include <QJsonObject>
 #include <QTimer>
 #include <QUrl>
+#include <QMetaObject>
+#include <QVariant>
 #include <QSurfaceFormat>
 #include <atomic>
 #include <signal.h>
@@ -203,6 +205,33 @@ int main(int argc, char *argv[])
                 fprintf(stderr, "[screenshot] failed to save %s\n", qPrintable(outPath));
         });
         screenshotTimer->start(250);
+
+        // Debug-only: drives CameraGridScreen/Camera360Screen open/closed
+        // from /tmp/ultima-camtest.request ("open"/"close"/"360open"/
+        // "360close") — same polled-file pattern as the screenshot trigger
+        // above, needed because this board has no touchscreen-input-
+        // injection tool over SSH (see main.qml's debugSetCameraGrid()/
+        // debugSetCamera360()).
+        auto *camTestTimer = new QTimer(&app);
+        QObject::connect(camTestTimer, &QTimer::timeout, rootWindow, [rootWindow]() {
+            QFile trigger(QStringLiteral("/tmp/ultima-camtest.request"));
+            if (!trigger.exists())
+                return;
+            QString cmd;
+            if (trigger.open(QIODevice::ReadOnly)) {
+                cmd = QString::fromUtf8(trigger.readAll()).trimmed();
+                trigger.close();
+            }
+            QFile::remove(QStringLiteral("/tmp/ultima-camtest.request"));
+            if (cmd == QStringLiteral("360open") || cmd == QStringLiteral("360close")) {
+                QMetaObject::invokeMethod(rootWindow, "debugSetCamera360",
+                                           Q_ARG(QVariant, cmd == QStringLiteral("360open")));
+            } else {
+                QMetaObject::invokeMethod(rootWindow, "debugSetCameraGrid",
+                                           Q_ARG(QVariant, cmd == QStringLiteral("open")));
+            }
+        });
+        camTestTimer->start(250);
     }
 
     return app.exec();

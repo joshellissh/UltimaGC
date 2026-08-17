@@ -84,20 +84,31 @@ public:
                 m_initFailed = true;
                 return;
             }
-            const CameraCalibration *cams[4] = {&m_calib.front, &m_calib.rear, &m_calib.left, &m_calib.right};
-            for (int i = 0; i < 4; ++i) {
-                if (!m_textures[i].create(f, cams[i]->imageWidth, cams[i]->imageHeight)) {
-                    qWarning() << "SurroundView: failed to allocate texture for" << cams[i]->identity;
-                    m_initFailed = true;
-                    return;
-                }
-            }
             m_initialized = true;
             fprintf(stderr, "[surroundview] initialized 4 cameras (front/rear/left/right)\n");
         }
         if (!m_initialized) return;
 
+        // Texture allocation is deferred per-camera to that camera's first
+        // real frame, sized from the frame itself rather than
+        // cams[i]->imageWidth/imageHeight: CameraFeed may decode at less
+        // than that calibration reference resolution (see camerafeed.cpp's
+        // kDecimation — CameraGridScreen's 2026-08-17 perf fix, which this
+        // screen shares CameraFeed with). Safe to do independently of the
+        // calibration value: WarpMesh's texcoords are px/imageWidth,
+        // py/imageHeight ratios (see warpmesh.cpp), i.e. normalized to
+        // [0,1] and resolution-independent as long as the actual frame's
+        // aspect ratio matches what calibration assumed — true for a
+        // uniform decimation, which is all kDecimation does.
         auto *f = QOpenGLContext::currentContext()->functions();
+        for (int i = 0; i < 4; ++i) {
+            if (m_textureCreated[i] || !m_pendingValid[i]) continue;
+            if (!m_textures[i].create(f, m_pendingImage[i].width(), m_pendingImage[i].height())) {
+                qWarning() << "SurroundView: failed to allocate texture" << i;
+                continue;
+            }
+            m_textureCreated[i] = true;
+        }
 
         if (m_pendingCalibDirty) {
             m_calib = m_pendingCalib;
@@ -115,6 +126,7 @@ public:
         m_prog->setUniformValue("uBlendMode", 1); // use mesh weight as-is (feather)
         m_prog->setUniformValue("uTexture", 0);
         for (int i = 0; i < 4; ++i) {
+            if (!m_textureCreated[i]) continue; // no frame yet to size this camera's texture from
             if (m_pendingValid[i]) {
                 m_textures[i].upload(f, m_pendingImage[i]);
                 m_pendingValid[i] = false;
@@ -132,6 +144,7 @@ public:
     SurroundTexture m_textures[4];
     QImage m_pendingImage[4];
     bool m_pendingValid[4] = {false, false, false, false};
+    bool m_textureCreated[4] = {false, false, false, false};
     bool m_initialized = false;
     bool m_initFailed = false;
     CalibrationSet m_pendingCalib = defaultCalibration();

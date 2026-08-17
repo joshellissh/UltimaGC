@@ -32,6 +32,20 @@ Window {
     // 2.2s and finish while still hidden behind the overlay.
     property bool splashDone: splashImagePath === ""
 
+    // Debug-only: opens/closes CameraGridScreen/Camera360Screen without
+    // touch input, for on-device testing over SSH where no touchscreen/
+    // input-injection tool is available — see main.cpp's matching
+    // file-trigger QTimer, same pattern as that file's screenshot-request
+    // trigger.
+    function debugSetCameraGrid(open) {
+        if (open) cameraGridScreen.open()
+        else cameraGridScreen.close()
+    }
+    function debugSetCamera360(open) {
+        if (open) camera360Screen.open()
+        else camera360Screen.close()
+    }
+
     Timer {
         running: !splashDone
         interval: 2100

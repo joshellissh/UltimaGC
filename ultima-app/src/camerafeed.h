@@ -86,8 +86,19 @@ private:
     bool m_active = false;
     bool m_streaming = false;
     bool m_failed = false;
+    // Decoded/exposed size — what frameWidth()/frameHeight() report and what
+    // m_frame is actually allocated at. NOT the same as what the driver
+    // negotiated: see kDecimation in camerafeed.cpp for why these are
+    // smaller than the raw capture size on the real V4L2 path.
     int m_frameWidth = 0;
     int m_frameHeight = 0;
+    // Raw driver-granted capture size/stride (VIDIOC_S_FMT's actual grant) —
+    // internal only, used for the bytesused guard and row addressing in
+    // onReadable()/convertYUYVToRGB32. Real V4L2 path only; the simulated
+    // path (simulateTick()) has no separate capture size, it writes m_frame
+    // directly at m_frameWidth/m_frameHeight.
+    int m_captureWidth = 0;
+    int m_captureHeight = 0;
     int m_bytesPerLine = 0;  // driver-granted V4L2 stride — see camerafeed.cpp's tryOpen()
     QImage m_frame;
 

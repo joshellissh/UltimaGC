@@ -121,6 +121,10 @@ void CameraFeed::closeDevice() {}
 #endif
 
 #if defined(__linux__) && !defined(ULTIMA_SIMULATE)
+// See tryOpen()'s m_frameWidth/m_frameHeight assignment for why this exists
+// — decode/expose frames at 1/kDecimation the driver-granted capture size.
+static constexpr int kDecimation = 2;
+
 void CameraFeed::tryOpen()
 {
     if (!m_active || m_fd >= 0)
@@ -189,11 +193,32 @@ void CameraFeed::tryOpen()
     // actually padded would walk off the end of the mmap'd capture buffer,
     // a plausible SIGBUS source. Logged here so it's visible on real
     // hardware, not assumed.
-    m_frameWidth = int(fmt.fmt.pix.width);
-    m_frameHeight = int(fmt.fmt.pix.height);
+    m_captureWidth = int(fmt.fmt.pix.width);
+    m_captureHeight = int(fmt.fmt.pix.height);
     m_bytesPerLine = int(fmt.fmt.pix.bytesperline);
-    fprintf(stderr, "[camerafeed] negotiated %dx%d bytesperline=%d sizeimage=%u\n",
-            m_frameWidth, m_frameHeight, m_bytesPerLine, fmt.fmt.pix.sizeimage);
+    // Decode at 1/kDecimation the granted capture size — real-hardware
+    // profiling (2026-08-17, see beagleplay-falcon/NOTES.md and
+    // test/avm-benchmark/docs/measurement-notes.md) found CameraGridScreen
+    // running at 2-3 FPS on the BeaglePlay/PowerVR target, root-caused to
+    // both the GUI-thread scalar YUYV conversion AND the render-thread GPU
+    // upload cost scaling with full 1920x1080-per-camera pixel volume —
+    // the benchmark's own TEST 3 measured ~530-577ms/frame (~2 FPS) for
+    // exactly this "4 cameras, full-res, converted+uploaded every frame"
+    // shape, and every configuration it measured as acceptable used either
+    // a smaller resolution or a native zero-copy import path, never full
+    // native res. CameraGridScreen only ever displays a feed at roughly a
+    // quarter of the window (two-per-row, two-per-column), so decoding at
+    // native res was always spending most of its cost on pixels that get
+    // thrown away by the eventual downscale anyway. Halving each dimension
+    // cuts both the conversion loop and the GPU upload byte count ~4x.
+    // Shared with SurroundView's stitched 360 view (both screens read the
+    // same CameraFeed) — a lower-res source for that compositor is an
+    // accepted tradeoff here, not a separate decision.
+    m_frameWidth = m_captureWidth / kDecimation;
+    m_frameHeight = m_captureHeight / kDecimation;
+    fprintf(stderr, "[camerafeed] negotiated %dx%d bytesperline=%d sizeimage=%u, decoding at %dx%d\n",
+            m_captureWidth, m_captureHeight, m_bytesPerLine, fmt.fmt.pix.sizeimage,
+            m_frameWidth, m_frameHeight);
     emit formatChanged();
 
     struct v4l2_requestbuffers req;
@@ -265,24 +290,34 @@ void CameraFeed::tryOpen()
 static inline quint8 clamp255(int v) { return quint8(v < 0 ? 0 : (v > 255 ? 255 : v)); }
 
 // bytesPerLine is the driver-granted V4L2 stride (fmt.fmt.pix.bytesperline),
-// NOT assumed to be width*2 — see the VIDIOC_S_FMT comment in tryOpen(). A
-// wrong assumption here would walk source rows past the actual stride,
-// eventually reading off the end of the mmap'd capture buffer.
-static void convertYUYVToRGB32(const uchar *src, QImage &dst, int width, int height, int bytesPerLine)
+// NOT assumed to be capture-width*2 — see the VIDIOC_S_FMT comment in
+// tryOpen(). A wrong assumption here would walk source rows past the actual
+// stride, eventually reading off the end of the mmap'd capture buffer.
+//
+// dstWidth/dstHeight are the DECODED size (m_frameWidth/m_frameHeight,
+// capture size / kDecimation — see tryOpen()), not the raw capture size:
+// this reads one source YUYV pixel-pair per kDecimation source pixel-pairs
+// (and one source row per kDecimation source rows), a plain nearest-
+// neighbor decimation done inline during the YUYV->RGB conversion rather
+// than as a separate downscale pass over a full-res intermediate image.
+// Stepping by whole pixel-pairs (never splitting one) keeps every read
+// aligned to YUYV's actual 4-byte/2-pixel chroma grouping.
+static void convertYUYVToRGB32(const uchar *src, QImage &dst, int dstWidth, int dstHeight,
+                                int bytesPerLine, int decimation)
 {
-    for (int y = 0; y < height; ++y) {
-        const uchar *row = src + size_t(y) * bytesPerLine;
+    for (int y = 0; y < dstHeight; ++y) {
+        const uchar *row = src + size_t(y) * decimation * bytesPerLine;
         QRgb *out = reinterpret_cast<QRgb *>(dst.scanLine(y));
-        for (int x = 0; x < width; x += 2) {
-            int y0 = row[0], u = row[1] - 128, y1 = row[2], v = row[3] - 128;
-            row += 4;
+        for (int x = 0; x < dstWidth; x += 2) {
+            const uchar *px = row + size_t(x / 2) * decimation * 4;
+            int y0 = px[0], u = px[1] - 128, y1 = px[2], v = px[3] - 128;
 
             int rUV = (359 * v) >> 8;
             int gUV = (88 * u + 183 * v) >> 8;
             int bUV = (454 * u) >> 8;
 
             out[x]     = qRgb(clamp255(y0 + rUV), clamp255(y0 - gUV), clamp255(y0 + bUV));
-            if (x + 1 < width)
+            if (x + 1 < dstWidth)
                 out[x + 1] = qRgb(clamp255(y1 + rUV), clamp255(y1 - gUV), clamp255(y1 + bUV));
         }
     }
@@ -328,14 +363,15 @@ void CameraFeed::onReadable()
     // change this code doesn't handle) is a plausible failure mode, and
     // without this check it would render partly-stale rows from a previous
     // frame's leftover buffer contents instead of being skipped. Checked
-    // against the driver's own stride (m_bytesPerLine), not an assumed
-    // width*2 — see convertYUYVToRGB32.
+    // against the driver's own stride and the actual CAPTURE height
+    // (m_captureHeight, not the decoded m_frameHeight) — see
+    // convertYUYVToRGB32's comment for why those differ.
     if (pending.index < quint32(m_numBuffersMapped) && m_frameWidth > 0 && m_frameHeight > 0
         && m_bytesPerLine > 0
-        && pending.bytesused >= quint32(m_bytesPerLine) * quint32(m_frameHeight)) {
+        && pending.bytesused >= quint32(m_bytesPerLine) * quint32(m_captureHeight)) {
         QImage frame(m_frameWidth, m_frameHeight, QImage::Format_RGB32);
         convertYUYVToRGB32(static_cast<const uchar *>(m_buffers[pending.index].start),
-                            frame, m_frameWidth, m_frameHeight, m_bytesPerLine);
+                            frame, m_frameWidth, m_frameHeight, m_bytesPerLine, kDecimation);
         m_frame = frame;
         setStreaming(true);
         emit frameReady();
