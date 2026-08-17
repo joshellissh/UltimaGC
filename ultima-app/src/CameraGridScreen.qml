@@ -69,7 +69,17 @@ Item {
     function open() {
         x = 0
         cameraTimedOut = false
-        fallbackTimer.restart()
+        // See Camera360Screen.qml's open() for why this checks current
+        // state instead of unconditionally restarting: these two screens
+        // share the same feeds[], so reopening one while the other left
+        // them streaming means anyStreaming is already true and won't
+        // change value, and a blind restart would blank to the placeholder
+        // 2s later over a perfectly working stream.
+        if (anyStreaming) {
+            fallbackTimer.stop()
+        } else {
+            fallbackTimer.restart()
+        }
         for (var i = 0; i < feeds.length; ++i)
             feeds[i].active = true
     }

@@ -67,7 +67,17 @@ Item {
     function open() {
         opacity = 1
         cameraTimedOut = false
-        fallbackTimer.restart()
+        // If feeds are already streaming (e.g. left active by
+        // CameraGridScreen sharing these same feeds), anyStreaming is
+        // already true and won't change value when active is set below —
+        // onAnyStreamingChanged never re-fires, so a blindly-restarted
+        // timer would fire in 2s and blank to the placeholder over a
+        // perfectly working stream. Check current state instead.
+        if (anyStreaming) {
+            fallbackTimer.stop()
+        } else {
+            fallbackTimer.restart()
+        }
         for (var i = 0; i < feeds.length; ++i)
             feeds[i].active = true
     }
