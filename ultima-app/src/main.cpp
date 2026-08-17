@@ -90,6 +90,9 @@ int main(int argc, char *argv[])
     OdoStore odoStore("/data/odometer.json");
     g_odoStore = &odoStore;
 
+    // Same /data persistence pattern as OdoStore above — see calibrationstore.h.
+    CalibrationStore calibrationStore("/data/calibration.json");
+
     CanBus canBus(&odoStore);
     g_canBus = &canBus;
 
@@ -125,6 +128,7 @@ int main(int argc, char *argv[])
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("bootTime", t0);
     engine.rootContext()->setContextProperty("odoStore", &odoStore);
+    engine.rootContext()->setContextProperty("calibrationStore", &calibrationStore);
     engine.rootContext()->setContextProperty("sim", &canBus);
     engine.rootContext()->setContextProperty("systemClock", &systemClock);
     engine.rootContext()->setContextProperty("cameraFeed1", &cameraFeed1);

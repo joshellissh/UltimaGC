@@ -26,9 +26,11 @@ CONFIG += c++17
 # re-enabling this — don't just flip the CONFIG line again.
 TARGET = ultima-app
 HEADERS += odostore.h canbus.h systemclock.h camerafeed.h cameraview.h \
-    cameracalibration.h warpmesh.h shadermanager.h surroundtexture.h surroundview.h
+    cameracalibration.h warpmesh.h shadermanager.h surroundtexture.h surroundview.h \
+    calibrationstore.h
 SOURCES += main.cpp odostore.cpp canbus.cpp systemclock.cpp camerafeed.cpp cameraview.cpp \
-    cameracalibration.cpp warpmesh.cpp shadermanager.cpp surroundtexture.cpp surroundview.cpp
+    cameracalibration.cpp warpmesh.cpp shadermanager.cpp surroundtexture.cpp surroundview.cpp \
+    calibrationstore.cpp
 RESOURCES += qml.qrc
 
 # Off by default so the Buildroot/Pi build always uses real SocketCAN.

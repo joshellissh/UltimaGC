@@ -75,6 +75,7 @@ Item {
     function close() {
         opacity = 0
         fallbackTimer.stop()
+        calibrationScreen.close()
         for (var i = 0; i < feeds.length; ++i)
             feeds[i].active = false
     }
@@ -96,6 +97,7 @@ Item {
     SurroundView {
         anchors.fill: parent
         feeds: root.feeds
+        calibrationSource: calibrationStore
         visible: !showPlaceholder
     }
 
@@ -107,5 +109,61 @@ Item {
         anchors.fill: parent
         source: "qrc:/simulated_cameras.png"
         visible: showPlaceholder
+    }
+
+    // Calibration settings entry point — subtle by design (this is a tuning
+    // tool, not primary UI). Drawn on a Canvas rather than a text glyph:
+    // neither bundled font (bahnschrift, range) has a gear/settings glyph,
+    // and this app has no guaranteed system fallback font on target (see
+    // SetTimeScreen.qml's StepButton, which hit the identical problem for
+    // its up/down triangles) — confirmed the hard way here too, a "−" step
+    // button first drew as a missing-glyph box on real hardware. No PNG
+    // asset exists yet in qml.qrc's set (icon_360.png etc.) either — a
+    // simple 3-bar "menu" mark instead, swappable for a real icon later the
+    // same way defaultCalibration()'s placeholder numbers are meant to be
+    // swapped for real measured ones. Hidden once the panel itself is open
+    // (it has its own CLOSE button) and while showPlaceholder (nothing live
+    // to calibrate against).
+    Rectangle {
+        id: settingsIcon
+        width: 44; height: 44
+        radius: 8
+        color: "transparent"
+        opacity: settingsIconArea.pressed ? 0.35 : 0.55
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.margins: 16
+        visible: !showPlaceholder && !calibrationScreen.visible
+
+        Canvas {
+            anchors.centerIn: parent
+            width: 26; height: 18
+            onPaint: {
+                var ctx = getContext("2d")
+                ctx.reset()
+                ctx.fillStyle = "white"
+                var barH = 3
+                var gap = (height - barH * 3) / 2
+                ctx.fillRect(0, 0, width, barH)
+                ctx.fillRect(0, barH + gap, width, barH)
+                ctx.fillRect(0, (barH + gap) * 2, width, barH)
+            }
+        }
+
+        MouseArea {
+            id: settingsIconArea
+            anchors.fill: parent
+            anchors.margins: -12
+            onClicked: calibrationScreen.open()
+        }
+    }
+
+    // No anchors set here at all — CalibrationSettingsScreen.qml's root
+    // already anchors its own top/bottom and manages its own x (the
+    // slide-in position) internally; anchoring x here too would conflict
+    // with that the same way anchors.fill did (see that file's header
+    // comment).
+    CalibrationSettingsScreen {
+        id: calibrationScreen
     }
 }

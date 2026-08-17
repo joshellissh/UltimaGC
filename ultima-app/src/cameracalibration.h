@@ -1,6 +1,7 @@
 #ifndef CAMERACALIBRATION_H
 #define CAMERACALIBRATION_H
 
+#include <QJsonObject>
 #include <QString>
 
 // One camera's calibration — intrinsics, fisheye model, and pose. WarpMesh
@@ -34,6 +35,12 @@ struct CameraCalibration {
     double focalLengthPixels() const;
     double effectivePrincipalX() const { return principalPointX > 0 ? principalPointX : imageWidth / 2.0; }
     double effectivePrincipalY() const { return principalPointY > 0 ? principalPointY : imageHeight / 2.0; }
+
+    // Same documented JSON shape test/avm-benchmark's CalibrationLoader
+    // uses, so a real measured/auto-calibrated rig produced by either
+    // project loads into the other unchanged.
+    QJsonObject toJson() const;
+    static CameraCalibration fromJson(const QJsonObject &o);
 };
 
 // Vehicle footprint, ground-capture extent, and blend-wedge parameters
@@ -45,11 +52,17 @@ struct SurroundGeometryConfig {
     double groundHalfExtentYMeters = 5.5; // ground capture region: Y in [-ext, ext]
     double wedgeOverlapDegrees = 20.0;    // angular feather width between adjacent cameras
     int meshGridResolution = 64;          // vertices per side of each camera's warp mesh
+
+    QJsonObject toJson() const;
+    static SurroundGeometryConfig fromJson(const QJsonObject &o);
 };
 
 struct CalibrationSet {
     CameraCalibration front, rear, left, right;
     SurroundGeometryConfig geometry;
+
+    QJsonObject toJson() const;
+    static CalibrationSet fromJson(const QJsonObject &o);
 };
 
 // PLACEHOLDER rig — nobody has measured this car's real camera mount

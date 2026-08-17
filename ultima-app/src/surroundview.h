@@ -6,6 +6,7 @@
 #include <QMetaObject>
 
 #include "camerafeed.h"
+#include "calibrationstore.h"
 
 // Top-down 360°/birds-eye compositor: warps each of 4 CameraFeeds through a
 // precomputed WarpMesh (fisheye + ground-plane correction, done once, never
@@ -38,6 +39,7 @@
 class SurroundView : public QQuickFramebufferObject {
     Q_OBJECT
     Q_PROPERTY(QVariantList feeds READ feeds WRITE setFeeds NOTIFY feedsChanged)
+    Q_PROPERTY(CalibrationStore *calibrationSource READ calibrationSource WRITE setCalibrationSource NOTIFY calibrationSourceChanged)
 
 public:
     explicit SurroundView(QQuickItem *parent = nullptr);
@@ -45,18 +47,30 @@ public:
     QVariantList feeds() const;
     void setFeeds(const QVariantList &feeds);
 
+    CalibrationStore *calibrationSource() const { return m_calibrationSource; }
+    void setCalibrationSource(CalibrationStore *source);
+
     // Index 0..3 = front/rear/left/right — see class comment above. Used by
     // SurroundViewRenderer::synchronize() to read each feed's current frame.
     CameraFeed *feedAt(int index) const { return (index >= 0 && index < 4) ? m_feeds[index] : nullptr; }
+
+    // Consumed by SurroundViewRenderer::synchronize() each sync — returns
+    // true (and clears the flag) at most once per calibrationChanged().
+    bool consumeCalibrationDirty() { bool d = m_calibrationDirty; m_calibrationDirty = false; return d; }
+    CalibrationSet currentCalibration() const { return m_calibrationSource ? m_calibrationSource->toSet() : CalibrationSet(); }
 
     Renderer *createRenderer() const override;
 
 signals:
     void feedsChanged();
+    void calibrationSourceChanged();
 
 private:
     CameraFeed *m_feeds[4] = {nullptr, nullptr, nullptr, nullptr};
     QMetaObject::Connection m_frameConnections[4];
+    CalibrationStore *m_calibrationSource = nullptr;
+    QMetaObject::Connection m_calibrationConnection;
+    bool m_calibrationDirty = false;
 };
 
 #endif

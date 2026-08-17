@@ -40,12 +40,39 @@ public:
                 m_pendingValid[i] = true;
             }
         }
+
+        // Kept fresh every sync (cheap struct copy) so render()'s one-time
+        // init block always has the latest calibration by the time it runs
+        // — but only flagged dirty (triggering a mesh rebuild) on an actual
+        // edit, via consumeCalibrationDirty().
+        if (item->calibrationSource()) {
+            m_pendingCalib = item->currentCalibration();
+            if (item->consumeCalibrationDirty())
+                m_pendingCalibDirty = true;
+        }
+    }
+
+    // Rebuilds all 4 warp meshes (geometry only, not textures — textures
+    // are image-sized and calibration-independent) from m_calib. Used both
+    // for first-time init and for a live calibration edit; destroy() is
+    // safe to call on a not-yet-uploaded WarpMesh (empty VAO/buffers).
+    bool rebuildMeshes(QOpenGLFunctions *f) {
+        const CameraCalibration *cams[4] = {&m_calib.front, &m_calib.rear, &m_calib.left, &m_calib.right};
+        for (int i = 0; i < 4; ++i) {
+            m_meshes[i].destroy(f);
+            if (!m_meshes[i].build(*cams[i], m_calib.geometry, BlendQuality::Feather) ||
+                !m_meshes[i].upload(f)) {
+                qWarning() << "SurroundView: failed to build warp mesh for" << cams[i]->identity;
+                return false;
+            }
+        }
+        return true;
     }
 
     void render() override {
         if (!m_initialized && !m_initFailed) {
             auto *f = QOpenGLContext::currentContext()->functions();
-            m_calib = defaultCalibration();
+            m_calib = m_pendingCalib;
             m_prog = m_shaders.program(QStringLiteral(":/shaders/surround.vert"),
                                         QStringLiteral(":/shaders/surround.frag"));
             if (!m_prog) {
@@ -53,14 +80,12 @@ public:
                 m_initFailed = true;
                 return;
             }
+            if (!rebuildMeshes(f)) {
+                m_initFailed = true;
+                return;
+            }
             const CameraCalibration *cams[4] = {&m_calib.front, &m_calib.rear, &m_calib.left, &m_calib.right};
             for (int i = 0; i < 4; ++i) {
-                if (!m_meshes[i].build(*cams[i], m_calib.geometry, BlendQuality::Feather) ||
-                    !m_meshes[i].upload(f)) {
-                    qWarning() << "SurroundView: failed to build warp mesh for" << cams[i]->identity;
-                    m_initFailed = true;
-                    return;
-                }
                 if (!m_textures[i].create(f, cams[i]->imageWidth, cams[i]->imageHeight)) {
                     qWarning() << "SurroundView: failed to allocate texture for" << cams[i]->identity;
                     m_initFailed = true;
@@ -68,11 +93,17 @@ public:
                 }
             }
             m_initialized = true;
-            fprintf(stderr, "[surroundview] initialized 4 cameras (front/rear/left/right, placeholder calibration)\n");
+            fprintf(stderr, "[surroundview] initialized 4 cameras (front/rear/left/right)\n");
         }
         if (!m_initialized) return;
 
         auto *f = QOpenGLContext::currentContext()->functions();
+
+        if (m_pendingCalibDirty) {
+            m_calib = m_pendingCalib;
+            m_pendingCalibDirty = false;
+            rebuildMeshes(f); // on failure, keeps drawing the previous (still-valid) meshes
+        }
         QSize sz = framebufferObject()->size();
         f->glViewport(0, 0, sz.width(), sz.height());
         f->glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
@@ -103,6 +134,8 @@ public:
     bool m_pendingValid[4] = {false, false, false, false};
     bool m_initialized = false;
     bool m_initFailed = false;
+    CalibrationSet m_pendingCalib = defaultCalibration();
+    bool m_pendingCalibDirty = false;
 };
 
 } // namespace
@@ -125,6 +158,19 @@ void SurroundView::setFeeds(const QVariantList &feeds) {
         }
     }
     emit feedsChanged();
+}
+
+void SurroundView::setCalibrationSource(CalibrationStore *source) {
+    if (source == m_calibrationSource) return;
+    QObject::disconnect(m_calibrationConnection);
+    m_calibrationSource = source;
+    if (m_calibrationSource) {
+        m_calibrationConnection = connect(m_calibrationSource, &CalibrationStore::calibrationChanged, this,
+                                           [this]() { m_calibrationDirty = true; update(); });
+    }
+    m_calibrationDirty = true; // pick up the new source's values even before its first change
+    update();
+    emit calibrationSourceChanged();
 }
 
 QQuickFramebufferObject::Renderer *SurroundView::createRenderer() const {
