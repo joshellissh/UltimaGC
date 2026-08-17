@@ -1,0 +1,16 @@
+[Unit]
+Description=Resolve /dev/mycam/cam1..4 to the active mycam004m backend (fake)
+# mycam004m-fake is out-of-tree (see mycam004m-fake.conf, loaded via
+# systemd-modules-load.service rather than udev coldplug — same reasoning
+# as pvrsrvkm.conf in ultima-app.bb) — its 4 /dev/videoX nodes only exist
+# once that unit has actually finished.
+After=systemd-modules-load.service
+Requires=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/select-camera-backend.sh fake
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

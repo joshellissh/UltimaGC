@@ -1,5 +1,14 @@
 IMAGE_INSTALL:append:beagleplay-ti = " ultima-app ultima-splash can-utils mmc-utils ultima-hwclock-load ultima-data-mount volatile-binds"
 
+# mycam004m (2026-08-17): the quad-camera V4L2 driver's mock/fake backend
+# (mycam004m-fake.ko + its 4 static reference frames + the boot-time
+# select-camera-backend.sh run), enabled by default since no real
+# MY-CAM004M hardware is attached yet — see
+# recipes-kernel/mycam004m/mycam004m.bb. The real backend's .ko is built
+# by the same recipe but its devicetree overlay is deliberately not
+# applied here, so it stays inert.
+IMAGE_INSTALL:append:beagleplay-ti = " mycam004m"
+
 # GPU enablement spike (2026-08-12): explicit rather than relying on the
 # RRECOMMENDS chain (mesa-megadriver -> ti-img-rogue-driver ->
 # ti-img-rogue-umlibs, see mesa-pvr_24.0.1.bb) to pull the rogue stack in on
