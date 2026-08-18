@@ -707,13 +707,13 @@ Window {
         }
     }
 
-    // Odometer — "ODO  x mi", centered on x=660 (recomputed from width on
-    // every text change) so it grows evenly outward as the digit count
-    // changes instead of drifting to one side.
+    // Odometer — "ODO  x mi", right-aligned with top-right corner pinned
+    // at (788, 604) (x recomputed from width on every text change) so the
+    // right edge stays put as the digit count grows.
     Text {
         id: odoText
-        x: 660 - width / 2
-        y: 597
+        x: 788 - width
+        y: 604
         font.family: rangeFont.name
         font.pixelSize: 24
         color: "white"
