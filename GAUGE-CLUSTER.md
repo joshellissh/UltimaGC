@@ -153,10 +153,11 @@ Read from SCal Datastreams → Generic CAN Transmit → Transmit Content. Frame 
 
 ### MCE18 CAN Bus Expander (Unverified — Datasheet Default, Not Wire-Confirmed)
 
-Fills part of the gap above: `flvlA` (fuel level) and five booleans that have no
-Syvecs channel at all (`leftIndicator`, `rightIndicator`, `axleLift`, `lowBeams`,
-`highBeams`) are read from a CANchecked-protocol MCE18 CAN bus expander instead of
-the ECU. Source: "CAN2 MCE18 Mapping.pdf" (CANchecked MCE18 manual, Rev 2.0).
+Fills part of the gap above: `flvlA` (fuel level) and six booleans that have no
+Syvecs channel at all (`leftIndicator`, `rightIndicator`, `hazard`, `axleLift`,
+`lowBeams`, `highBeams`) are read from a CANchecked-protocol MCE18 CAN bus expander
+instead of the ECU. Source: "CAN2 MCE18 Mapping.pdf" (CANchecked MCE18 manual, Rev
+2.0).
 `transmissionAuto` and `cruiseControl` are deliberately *not* part of this — both
 come from the Syvecs stream instead (`0x605` slot 3, ManualAuto_U12, and `0x601`
 slot 1, cruiseState — see the frame map above).
@@ -180,10 +181,13 @@ mapping.
   cruiseState — see the frame map above), not this expander. DIN6 is
   deliberately left unassigned too: the datasheet reuses that same pin for its
   Frequency 1 input (`**TX Base ID+3`, "Frequency 1 - DIN6"), so it's kept free
-  rather than double-booked. DIN7 is also unassigned, reserved for a possible
-  future use — Auto/Manual (`transmissionAuto`) comes from the Syvecs stream
-  instead (`0x605` slot 3, ManualAuto_U12 — see the frame map above), not this
-  expander.
+  rather than double-booked. DIN7 is `hazard` — treated the same as DIN0/DIN1
+  (`leftIndicator`/`rightIndicator`): the raw bit is assumed to already be the
+  on/off flasher waveform, not a static "switch pressed" level (unverified,
+  same as the rest of this frame — see `CanBus::decodeFrame()`'s `0x702` case
+  for what breaks if that assumption is wrong). Auto/Manual
+  (`transmissionAuto`) comes from the Syvecs stream instead (`0x605` slot 3,
+  ManualAuto_U12 — see the frame map above), not this expander.
 
   | Bit | Signal |
   |---|---|
@@ -194,7 +198,7 @@ mapping.
   | DIN4 | `highBeams` |
   | DIN5 | *(unassigned — cruise sourced from Syvecs instead)* |
   | DIN6 | *(unassigned — reserved for Frequency 1)* |
-  | DIN7 | *(unassigned)* |
+  | DIN7 | `hazard` |
 
 - **Analog scaling**: AIN0 can be configured on the unit as either raw 0-1023 ADC
   counts or pre-scaled 0-5000mV (the datasheet's own table shows both units without

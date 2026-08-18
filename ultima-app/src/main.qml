@@ -268,28 +268,45 @@ Window {
         pivotY: 74
     }
 
-    // Left turn signal indicator
+    // Left turn signal indicator — while hazards are engaged (hazardLatched,
+    // defined below), visibility tracks sim.hazard exclusively rather than
+    // OR'ing it with sim.leftIndicator. leftIndicator/hazard are independent
+    // raw waveforms with no shared phase (independent debug blink timers in
+    // CanBus, and no guarantee of phase alignment from real CAN either), so
+    // if a turn signal was already flashing on its own cycle when hazards
+    // started, OR'ing the two together made left/right flash out of sync
+    // with each other instead of together. hazardLatched (rather than raw
+    // sim.hazard) is what makes this an override instead of a fallback that
+    // still races leftIndicator's phase during hazard's off-phase — it stays
+    // true across hazard's full on+off cycle, matching main.qml's
+    // overlay-latch hold-time comment below. Camera overlays are separately
+    // suppressed during hazards by the same hazardLatched (see that
+    // property's comment) — on some wirings hazards also drive
+    // leftIndicator/rightIndicator themselves, which would otherwise pop
+    // the cameras too.
     Image {
         x: 25
         y: 23
         source: "qrc:/left_indicator.png"
-        visible: startupActive ? startupFlash : sim.leftIndicator
+        visible: startupActive ? startupFlash : (hazardLatched ? sim.hazard : sim.leftIndicator)
     }
 
-    // Right turn signal indicator (mirrored)
+    // Right turn signal indicator (mirrored) — see left indicator above for
+    // why hazardLatched overrides rather than ORs with rightIndicator.
     Image {
         x: 1600 - 25 - width
         y: 23
         source: "qrc:/left_indicator.png"
-        visible: startupActive ? startupFlash : sim.rightIndicator
+        visible: startupActive ? startupFlash : (hazardLatched ? sim.hazard : sim.rightIndicator)
         mirror: true
     }
 
-    // Debug-only keyboard trigger for the turn signals (dev-build testing;
-    // real hardware has no keyboard, so this is inert there regardless) —
-    // L/R toggle sim.leftIndicator/rightIndicator on/off via CanBus's
-    // debugToggleLeftIndicator()/debugToggleRightIndicator(), which only
-    // exist in simulate builds (see canbus.h). Window itself can't host
+    // Debug-only keyboard trigger for the turn signals/hazards — functional
+    // on every build, real hardware included if a keyboard happens to be
+    // plugged in (see canbus.h's Q_INVOKABLE comment). L/R toggle
+    // sim.leftIndicator/rightIndicator via CanBus's
+    // debugToggleLeftIndicator()/debugToggleRightIndicator(); H toggles
+    // sim.hazard via debugToggleHazard(). Window itself can't host
     // Keys.onPressed (that attached property is Item-only, Window isn't an
     // Item), hence this focused child Item covering the whole dash.
     Item {
@@ -314,6 +331,7 @@ Window {
         // a human would intend as two separate presses of a toggle key.
         property double lastLeftPressMs: 0
         property double lastRightPressMs: 0
+        property double lastHazardPressMs: 0
         Keys.onPressed: (event) => {
             if (event.isAutoRepeat) return
             var now = Date.now()
@@ -326,6 +344,11 @@ Window {
                 if (now - lastRightPressMs < 250) return
                 lastRightPressMs = now
                 sim.debugToggleRightIndicator()
+                event.accepted = true
+            } else if (event.key === Qt.Key_H) {
+                if (now - lastHazardPressMs < 250) return
+                lastHazardPressMs = now
+                sim.debugToggleHazard()
                 event.accepted = true
             }
         }
@@ -370,11 +393,34 @@ Window {
     // after they cancel.
     property bool leftIndicatorLatched: false
     property bool rightIndicatorLatched: false
-    readonly property bool leftCamOverlayActive: !startupActive && leftIndicatorLatched
-    readonly property bool rightCamOverlayActive: !startupActive && rightIndicatorLatched
+    // Hazard latch — same hold-across-a-full-flasher-period pattern as the
+    // two above, armed on sim.hazard rising edges. Two jobs:
+    // 1. Turn-signal Images above use it to make hazards an override rather
+    //    than an OR: leftIndicator/hazard are independent waveforms with no
+    //    shared phase, so OR'ing them let left/right flash out of sync with
+    //    each other whenever a turn signal was already engaged when hazards
+    //    started. Gating on hazardLatched (not raw sim.hazard) means the
+    //    override holds across hazard's off-phase too, not just its
+    //    on-phase — a raw sim.hazard ternary would still let
+    //    leftIndicator's independent phase leak through during every
+    //    hazard off-phase.
+    // 2. Gates both camera overlays below regardless of what
+    //    leftIndicator/rightIndicator are doing: on wiring where the hazard
+    //    switch flashes the same bulb circuits DIN0/DIN1 read (see
+    //    canbus.h's hazard Q_PROPERTY comment for why that's plausible,
+    //    unverified either way), leftIndicatorLatched/rightIndicatorLatched
+    //    would otherwise also arm from the hazard-driven blinking and pop
+    //    the cameras — which is exactly the "no cameras" hazards asked for.
+    // Latched rather than a raw !sim.hazard/sim.hazard check for both jobs,
+    // for the same reason as the other two latches: m_hazard itself blinks,
+    // so an instantaneous check would flip every off-phase.
+    property bool hazardLatched: false
+    readonly property bool leftCamOverlayActive: !startupActive && leftIndicatorLatched && !hazardLatched
+    readonly property bool rightCamOverlayActive: !startupActive && rightIndicatorLatched && !hazardLatched
 
     Timer { id: leftIndicatorHold; interval: 1000; onTriggered: leftIndicatorLatched = false }
     Timer { id: rightIndicatorHold; interval: 1000; onTriggered: rightIndicatorLatched = false }
+    Timer { id: hazardHold; interval: 1000; onTriggered: hazardLatched = false }
     Connections {
         target: sim
         function onLeftIndicatorChanged() {
@@ -382,6 +428,9 @@ Window {
         }
         function onRightIndicatorChanged() {
             if (sim.rightIndicator) { rightIndicatorLatched = true; rightIndicatorHold.restart() }
+        }
+        function onHazardChanged() {
+            if (sim.hazard) { hazardLatched = true; hazardHold.restart() }
         }
     }
 

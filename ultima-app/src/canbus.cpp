@@ -85,6 +85,11 @@ CanBus::CanBus(OdoStore *odo, const QString &iface, QObject *parent)
         m_rightIndicator = !m_rightIndicator;
         emit rightIndicatorChanged();
     });
+    m_hazardBlinkTimer.setInterval(350);
+    connect(&m_hazardBlinkTimer, &QTimer::timeout, this, [this]() {
+        m_hazard = !m_hazard;
+        emit hazardChanged();
+    });
 }
 
 CanBus::~CanBus()
@@ -324,21 +329,28 @@ void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
         // instead (see the 0x601 case above), not this expander. DIN6 is
         // also unassigned: the datasheet's Frequency-1 input reuses that
         // same pin (**TX Base ID+3, "Frequency 1 - DIN6"), so it's kept free
-        // rather than double-booked. DIN7 is also unassigned: Auto/Manual
-        // comes from the Syvecs stream instead (see the 0x605 case above),
-        // not this expander.
+        // rather than double-booked. DIN7 is hazard — same treatment as
+        // DIN0/DIN1 (leftInd/rightInd): assumed to already be the on/off
+        // flasher waveform, not a static "switch pressed" level, since
+        // that's the one assumption that makes a plain pass-through display
+        // hazards as blinking rather than solid-lit. Unverified like the
+        // rest of this frame; if it turns out to be a static level instead,
+        // this needs the same synthesized-blink treatment as
+        // debugToggleHazard() below (see canbus.h's Q_INVOKABLE comment).
         quint8 dinMask = d[2];
         bool leftInd = dinMask & (1 << 0);
         bool rightInd = dinMask & (1 << 1);
         bool axleLiftIn = dinMask & (1 << 2);
         bool lowBeamsIn = dinMask & (1 << 3);
         bool highBeamsIn = dinMask & (1 << 4);
+        bool hazardIn = dinMask & (1 << 7);
 
         if (leftInd != m_leftIndicator) { m_leftIndicator = leftInd; emit leftIndicatorChanged(); }
         if (rightInd != m_rightIndicator) { m_rightIndicator = rightInd; emit rightIndicatorChanged(); }
         if (axleLiftIn != m_axleLift) { m_axleLift = axleLiftIn; emit axleLiftChanged(); }
         if (lowBeamsIn != m_lowBeams) { m_lowBeams = lowBeamsIn; emit lowBeamsChanged(); }
         if (highBeamsIn != m_highBeams) { m_highBeams = highBeamsIn; emit highBeamsChanged(); }
+        if (hazardIn != m_hazard) { m_hazard = hazardIn; emit hazardChanged(); }
         break;
     }
     default:
@@ -538,4 +550,16 @@ void CanBus::debugToggleRightIndicator()
     }
     m_rightIndicator = m_rightIndicatorEngaged;
     emit rightIndicatorChanged();
+}
+
+void CanBus::debugToggleHazard()
+{
+    m_hazardEngaged = !m_hazardEngaged;
+    if (m_hazardEngaged) {
+        m_hazardBlinkTimer.start();
+    } else {
+        m_hazardBlinkTimer.stop();
+    }
+    m_hazard = m_hazardEngaged;
+    emit hazardChanged();
 }

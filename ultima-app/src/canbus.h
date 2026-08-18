@@ -46,6 +46,22 @@ class CanBus : public QObject
     Q_PROPERTY(bool lowBeams READ lowBeams NOTIFY lowBeamsChanged)
     Q_PROPERTY(bool highBeams READ highBeams NOTIFY highBeamsChanged)
     Q_PROPERTY(bool axleLift READ axleLift NOTIFY axleLiftChanged)
+    // Hazards — DIN7 on the MCE18 expander (see decodeFrame()'s 0x702 case),
+    // the one bit GAUGE-CLUSTER.md's MCE18 table left "reserved for a
+    // possible future use". Kept separate from leftIndicator/rightIndicator
+    // rather than folded into them: main.qml's turn-signal icons show this
+    // in place of (not OR'd with) leftIndicator/rightIndicator while
+    // main.qml's hazardLatched is true, so both flash in lockstep on
+    // hazard's own phase rather than each tracking its own independent
+    // waveform — see that latch's comment for why a plain OR let left/right
+    // fall out of sync whenever a turn signal was already blinking on its
+    // own cycle when hazards started. Camera overlays are suppressed during
+    // hazards by the same hazardLatched — needed explicitly rather than
+    // falling out for free, because on wiring where the hazard switch
+    // flashes the same bulb circuits DIN0/DIN1 read, leftIndicator/
+    // rightIndicator blink too during hazards and would otherwise arm the
+    // camera latch on their own.
+    Q_PROPERTY(bool hazard READ hazard NOTIFY hazardChanged)
     // Cruise control — unlike the MCE18-sourced booleans above, this comes
     // from the Syvecs stream: cruiseState (Frame 2/0x601, slot 1), SCal enum
     // 0=OFF 1=ON 2=ACTIVE. The icon only distinguishes OFF/ACTIVE; ON (armed
@@ -87,6 +103,7 @@ public:
     bool lowBeams() const { return m_lowBeams; }
     bool highBeams() const { return m_highBeams; }
     bool axleLift() const { return m_axleLift; }
+    bool hazard() const { return m_hazard; }
     bool cruiseControl() const { return m_cruiseControl; }
     bool transmissionAuto() const { return m_transmissionAuto; }
     QString driveMode() const { return m_driveMode; }
@@ -112,8 +129,11 @@ public:
     // decodeFrame() DIN0/DIN1 update would — if real CAN is also connected
     // and driving these at the same time, whichever writes last wins, same
     // as any other debug override in this app (e.g. debugSetCameraGrid()).
+    // debugToggleHazard() (main.qml's 'H' key) is the same pattern applied
+    // to m_hazard/DIN7.
     Q_INVOKABLE void debugToggleLeftIndicator();
     Q_INVOKABLE void debugToggleRightIndicator();
+    Q_INVOKABLE void debugToggleHazard();
 
 public slots:
     // Flush in-memory odometer to OdoStore and persist.
@@ -137,6 +157,7 @@ signals:
     void lowBeamsChanged();
     void highBeamsChanged();
     void axleLiftChanged();
+    void hazardChanged();
     void cruiseControlChanged();
     void transmissionAutoChanged();
     void driveModeChanged();
@@ -181,6 +202,7 @@ private:
     bool m_lowBeams = false;
     bool m_highBeams = false;
     bool m_axleLift = false;
+    bool m_hazard = false;
     bool m_cruiseControl = false;
     bool m_transmissionAuto = true;
     QString m_driveMode = QStringLiteral("SPORT");
@@ -192,17 +214,19 @@ private:
     // Odometer integration
     qint64 m_lastSpeedMs = 0;
 
-    // Debug keyboard-trigger state for the turn signals — see
-    // debugToggleLeftIndicator()/debugToggleRightIndicator() above. Engaged
-    // tracks stalk position (on/off); the blink timers flip
-    // m_leftIndicator/m_rightIndicator at a simulated flasher rate while
-    // engaged, matching main.qml's overlay-latch hold-time comment. Not
-    // simulate-only — see that Q_INVOKABLE comment for why this must work
-    // on real hardware too.
+    // Debug keyboard-trigger state for the turn signals/hazards — see
+    // debugToggleLeftIndicator()/debugToggleRightIndicator()/
+    // debugToggleHazard() above. Engaged tracks stalk/switch position
+    // (on/off); the blink timers flip m_leftIndicator/m_rightIndicator/
+    // m_hazard at a simulated flasher rate while engaged, matching
+    // main.qml's overlay-latch hold-time comment. Not simulate-only — see
+    // that Q_INVOKABLE comment for why this must work on real hardware too.
     bool m_leftIndicatorEngaged = false;
     bool m_rightIndicatorEngaged = false;
+    bool m_hazardEngaged = false;
     QTimer m_leftIndicatorBlinkTimer;
     QTimer m_rightIndicatorBlinkTimer;
+    QTimer m_hazardBlinkTimer;
 
 #if !defined(__linux__) || defined(ULTIMA_SIMULATE)
     // Dev-build data simulator (macOS always, Linux dev builds when built

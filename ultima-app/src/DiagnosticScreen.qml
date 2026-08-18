@@ -75,6 +75,7 @@ Item {
         { label: "Fuel Level", key: "fuelLevel", unit: "%", dec: 0, max: 100, mult: 100, unconfirmed: true },
         { label: "Left Turn", key: "leftIndicator", bool: true, unconfirmed: true },
         { label: "Right Turn", key: "rightIndicator", bool: true, unconfirmed: true },
+        { label: "Hazard", key: "hazard", bool: true, unconfirmed: true },
         { label: "Axle Lift", key: "axleLift", bool: true, unconfirmed: true },
         { label: "Low Beams", key: "lowBeams", bool: true, unconfirmed: true },
         { label: "High Beams", key: "highBeams", bool: true, unconfirmed: true }
@@ -184,7 +185,7 @@ Item {
         id: grid
         anchors.horizontalCenter: parent.horizontalCenter
         y: 66
-        columns: 4
+        columns: 5
         rows: 4
         columnSpacing: 18
         rowSpacing: 10
