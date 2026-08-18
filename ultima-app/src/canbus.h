@@ -48,19 +48,17 @@ class CanBus : public QObject
     Q_PROPERTY(bool axleLift READ axleLift NOTIFY axleLiftChanged)
     // Hazards — DIN7 on the MCE18 expander (see decodeFrame()'s 0x702 case),
     // the one bit GAUGE-CLUSTER.md's MCE18 table left "reserved for a
-    // possible future use". Kept separate from leftIndicator/rightIndicator
-    // rather than folded into them: main.qml's turn-signal icons show this
-    // in place of (not OR'd with) leftIndicator/rightIndicator while
-    // main.qml's hazardLatched is true, so both flash in lockstep on
-    // hazard's own phase rather than each tracking its own independent
-    // waveform — see that latch's comment for why a plain OR let left/right
-    // fall out of sync whenever a turn signal was already blinking on its
-    // own cycle when hazards started. Camera overlays are suppressed during
-    // hazards by the same hazardLatched — needed explicitly rather than
+    // possible future use". A static level like leftIndicator/rightIndicator
+    // (on while engaged, off when cancelled), not the flasher's own
+    // waveform — main.qml synthesizes the visible blink for all three off a
+    // single shared clock, so its turn-signal icons can just OR this in with
+    // leftIndicator/rightIndicator without the two falling out of phase.
+    // Camera overlays are suppressed during hazards explicitly (main.qml's
+    // leftCamOverlayActive/rightCamOverlayActive check !hazard) rather than
     // falling out for free, because on wiring where the hazard switch
     // flashes the same bulb circuits DIN0/DIN1 read, leftIndicator/
-    // rightIndicator blink too during hazards and would otherwise arm the
-    // camera latch on their own.
+    // rightIndicator would read true during hazards too and otherwise pop
+    // the cameras on their own.
     Q_PROPERTY(bool hazard READ hazard NOTIFY hazardChanged)
     // Cruise control — unlike the MCE18-sourced booleans above, this comes
     // from the Syvecs stream: cruiseState (Frame 2/0x601, slot 1), SCal enum
@@ -214,19 +212,6 @@ private:
     // Odometer integration
     qint64 m_lastSpeedMs = 0;
 
-    // Debug keyboard-trigger state for the turn signals/hazards — see
-    // debugToggleLeftIndicator()/debugToggleRightIndicator()/
-    // debugToggleHazard() above. Engaged tracks stalk/switch position
-    // (on/off); the blink timers flip m_leftIndicator/m_rightIndicator/
-    // m_hazard at a simulated flasher rate while engaged, matching
-    // main.qml's overlay-latch hold-time comment. Not simulate-only — see
-    // that Q_INVOKABLE comment for why this must work on real hardware too.
-    bool m_leftIndicatorEngaged = false;
-    bool m_rightIndicatorEngaged = false;
-    bool m_hazardEngaged = false;
-    QTimer m_leftIndicatorBlinkTimer;
-    QTimer m_rightIndicatorBlinkTimer;
-    QTimer m_hazardBlinkTimer;
 
 #if !defined(__linux__) || defined(ULTIMA_SIMULATE)
     // Dev-build data simulator (macOS always, Linux dev builds when built

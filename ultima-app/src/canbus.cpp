@@ -69,27 +69,6 @@ CanBus::CanBus(OdoStore *odo, const QString &iface, QObject *parent)
     m_reconnectTimer.setInterval(1000);
     connect(&m_reconnectTimer, &QTimer::timeout, this, &CanBus::tryConnect);
     tryConnect();
-
-    // Debug keyboard-trigger blink timers (see debugToggleLeftIndicator() /
-    // debugToggleRightIndicator()) — not simulate-only, see those
-    // Q_INVOKABLEs' comment in canbus.h. 350ms half-period (~1.4Hz full
-    // cycle) matches the standard 60-120/min automotive flasher rate
-    // main.qml's overlay-latch hold-time comment already assumes.
-    m_leftIndicatorBlinkTimer.setInterval(350);
-    connect(&m_leftIndicatorBlinkTimer, &QTimer::timeout, this, [this]() {
-        m_leftIndicator = !m_leftIndicator;
-        emit leftIndicatorChanged();
-    });
-    m_rightIndicatorBlinkTimer.setInterval(350);
-    connect(&m_rightIndicatorBlinkTimer, &QTimer::timeout, this, [this]() {
-        m_rightIndicator = !m_rightIndicator;
-        emit rightIndicatorChanged();
-    });
-    m_hazardBlinkTimer.setInterval(350);
-    connect(&m_hazardBlinkTimer, &QTimer::timeout, this, [this]() {
-        m_hazard = !m_hazard;
-        emit hazardChanged();
-    });
 }
 
 CanBus::~CanBus()
@@ -330,13 +309,12 @@ void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
         // also unassigned: the datasheet's Frequency-1 input reuses that
         // same pin (**TX Base ID+3, "Frequency 1 - DIN6"), so it's kept free
         // rather than double-booked. DIN7 is hazard — same treatment as
-        // DIN0/DIN1 (leftInd/rightInd): assumed to already be the on/off
-        // flasher waveform, not a static "switch pressed" level, since
-        // that's the one assumption that makes a plain pass-through display
-        // hazards as blinking rather than solid-lit. Unverified like the
-        // rest of this frame; if it turns out to be a static level instead,
-        // this needs the same synthesized-blink treatment as
-        // debugToggleHazard() below (see canbus.h's Q_INVOKABLE comment).
+        // DIN0/DIN1 (leftInd/rightInd): confirmed a static "switch pressed"
+        // level (on while engaged, off the instant it's cancelled), not the
+        // flasher's own on/off waveform — so this is a plain pass-through
+        // with no debounce/synthesis. The dash's visible blink is
+        // synthesized from this level in QML instead (see main.qml's
+        // blinkTimer) rather than read off the CAN signal directly.
         quint8 dinMask = d[2];
         bool leftInd = dinMask & (1 << 0);
         bool rightInd = dinMask & (1 << 1);
@@ -527,39 +505,24 @@ void CanBus::simulateTick()
 #endif
 
 // Not simulate-only — see the Q_INVOKABLE declarations in canbus.h for why
-// these must work on every build, real hardware included.
+// these must work on every build, real hardware included. Plain level
+// flips, matching real CAN's DIN pass-through (decodeFrame()'s
+// kMce18Base+2 case) — the visible blink is synthesized from the level in
+// QML (main.qml's blinkTimer), not here.
 void CanBus::debugToggleLeftIndicator()
 {
-    m_leftIndicatorEngaged = !m_leftIndicatorEngaged;
-    if (m_leftIndicatorEngaged) {
-        m_leftIndicatorBlinkTimer.start();
-    } else {
-        m_leftIndicatorBlinkTimer.stop();
-    }
-    m_leftIndicator = m_leftIndicatorEngaged;
+    m_leftIndicator = !m_leftIndicator;
     emit leftIndicatorChanged();
 }
 
 void CanBus::debugToggleRightIndicator()
 {
-    m_rightIndicatorEngaged = !m_rightIndicatorEngaged;
-    if (m_rightIndicatorEngaged) {
-        m_rightIndicatorBlinkTimer.start();
-    } else {
-        m_rightIndicatorBlinkTimer.stop();
-    }
-    m_rightIndicator = m_rightIndicatorEngaged;
+    m_rightIndicator = !m_rightIndicator;
     emit rightIndicatorChanged();
 }
 
 void CanBus::debugToggleHazard()
 {
-    m_hazardEngaged = !m_hazardEngaged;
-    if (m_hazardEngaged) {
-        m_hazardBlinkTimer.start();
-    } else {
-        m_hazardBlinkTimer.stop();
-    }
-    m_hazard = m_hazardEngaged;
+    m_hazard = !m_hazard;
     emit hazardChanged();
 }

@@ -268,36 +268,41 @@ Window {
         pivotY: 74
     }
 
-    // Left turn signal indicator — while hazards are engaged (hazardLatched,
-    // defined below), visibility tracks sim.hazard exclusively rather than
-    // OR'ing it with sim.leftIndicator. leftIndicator/hazard are independent
-    // raw waveforms with no shared phase (independent debug blink timers in
-    // CanBus, and no guarantee of phase alignment from real CAN either), so
-    // if a turn signal was already flashing on its own cycle when hazards
-    // started, OR'ing the two together made left/right flash out of sync
-    // with each other instead of together. hazardLatched (rather than raw
-    // sim.hazard) is what makes this an override instead of a fallback that
-    // still races leftIndicator's phase during hazard's off-phase — it stays
-    // true across hazard's full on+off cycle, matching main.qml's
-    // overlay-latch hold-time comment below. Camera overlays are separately
-    // suppressed during hazards by the same hazardLatched (see that
-    // property's comment) — on some wirings hazards also drive
-    // leftIndicator/rightIndicator themselves, which would otherwise pop
-    // the cameras too.
+    // Turn signal / hazard blink clock — sim.leftIndicator/rightIndicator/
+    // hazard are static levels (on while engaged, off the instant it's
+    // cancelled), not the flasher's own on/off waveform — confirmed against
+    // the real DIN wiring (see canbus.cpp's decodeFrame() DIN0/DIN1/DIN7
+    // comment), so the visible blink has to be synthesized here rather than
+    // read off the signal. One shared clock for all three rather than one
+    // per signal: left/right/hazard then always blink in the same phase, so
+    // OR'ing hazard into leftIndicator/rightIndicator below can't fall out
+    // of sync the way independent phases would.
+    property bool blinkPhase: true
+    Timer {
+        id: blinkTimer
+        interval: 350
+        repeat: true
+        running: sim.leftIndicator || sim.rightIndicator || sim.hazard
+        onTriggered: blinkPhase = !blinkPhase
+        // Show solid "on" the instant a signal engages instead of waiting up
+        // to 350ms for the first tick.
+        onRunningChanged: if (running) blinkPhase = true
+    }
+
+    // Left turn signal indicator.
     Image {
         x: 25
         y: 23
         source: "qrc:/left_indicator.png"
-        visible: startupActive ? startupFlash : (hazardLatched ? sim.hazard : sim.leftIndicator)
+        visible: startupActive ? startupFlash : (blinkPhase && (sim.hazard || sim.leftIndicator))
     }
 
-    // Right turn signal indicator (mirrored) — see left indicator above for
-    // why hazardLatched overrides rather than ORs with rightIndicator.
+    // Right turn signal indicator (mirrored).
     Image {
         x: 1600 - 25 - width
         y: 23
         source: "qrc:/left_indicator.png"
-        visible: startupActive ? startupFlash : (hazardLatched ? sim.hazard : sim.rightIndicator)
+        visible: startupActive ? startupFlash : (blinkPhase && (sim.hazard || sim.rightIndicator))
         mirror: true
     }
 
@@ -364,75 +369,21 @@ Window {
     // documented pivot x-coordinates (351) / (1251) rather than re-deriving
     // them.
     //
-    // sim.leftIndicator/rightIndicator are the raw blinking lamp state, not
-    // a latched "signal engaged" flag — the turn-signal Image elements above
-    // read them directly with no _warnFlash-style timer of their own, unlike
-    // the oil/battery/coolant warn icons, which only makes sense if the CAN
-    // input itself is already the on/off flasher waveform. Gating the
-    // overlay directly on that would toggle cameraFeed3/4.active in sync
-    // with the flasher and the feed would never outlive the "off" half of
-    // the cycle long enough to produce a frame (camerafeed.h: first frame
-    // is tens-to-hundreds of ms after activation) — it'd sit on "NO SIGNAL"
-    // forever. Latched instead: each rising edge (off->on transition) (re)
-    // arms a hold, so it stays continuously active across the flasher's
-    // off-phase and only drops a beat after the signal actually stops
-    // blinking.
-    //
-    // The hold must outlast a full flasher PERIOD, not just its off-phase:
-    // sim.leftIndicator toggles on a 350ms timer (see canbus.cpp), so
-    // rising edges land exactly 700ms apart (one on-phase + one off-phase
-    // per cycle), not every 350ms. An earlier version used a 700ms hold —
-    // exactly equal to that 700ms rising-edge spacing, a zero-margin race
-    // where the hold's own expiry and its next retrigger land at the same
-    // instant, so which one QML processes first is luck; on real hardware
-    // this reliably lost often enough to look like "closes immediately
-    // after opening." 1000ms gives ~300ms of slack over the 700ms period.
-    // Standard automotive flasher rate is assumed at 60-120/min (700ms
-    // matches the low end) — not measured against this car's actual rate,
-    // revisit if it flickers during real turn signals or lingers too long
-    // after they cancel.
-    property bool leftIndicatorLatched: false
-    property bool rightIndicatorLatched: false
-    // Hazard latch — same hold-across-a-full-flasher-period pattern as the
-    // two above, armed on sim.hazard rising edges. Two jobs:
-    // 1. Turn-signal Images above use it to make hazards an override rather
-    //    than an OR: leftIndicator/hazard are independent waveforms with no
-    //    shared phase, so OR'ing them let left/right flash out of sync with
-    //    each other whenever a turn signal was already engaged when hazards
-    //    started. Gating on hazardLatched (not raw sim.hazard) means the
-    //    override holds across hazard's off-phase too, not just its
-    //    on-phase — a raw sim.hazard ternary would still let
-    //    leftIndicator's independent phase leak through during every
-    //    hazard off-phase.
-    // 2. Gates both camera overlays below regardless of what
-    //    leftIndicator/rightIndicator are doing: on wiring where the hazard
-    //    switch flashes the same bulb circuits DIN0/DIN1 read (see
-    //    canbus.h's hazard Q_PROPERTY comment for why that's plausible,
-    //    unverified either way), leftIndicatorLatched/rightIndicatorLatched
-    //    would otherwise also arm from the hazard-driven blinking and pop
-    //    the cameras — which is exactly the "no cameras" hazards asked for.
-    // Latched rather than a raw !sim.hazard/sim.hazard check for both jobs,
-    // for the same reason as the other two latches: m_hazard itself blinks,
-    // so an instantaneous check would flip every off-phase.
-    property bool hazardLatched: false
-    readonly property bool leftCamOverlayActive: !startupActive && leftIndicatorLatched && !hazardLatched
-    readonly property bool rightCamOverlayActive: !startupActive && rightIndicatorLatched && !hazardLatched
-
-    Timer { id: leftIndicatorHold; interval: 1000; onTriggered: leftIndicatorLatched = false }
-    Timer { id: rightIndicatorHold; interval: 1000; onTriggered: rightIndicatorLatched = false }
-    Timer { id: hazardHold; interval: 1000; onTriggered: hazardLatched = false }
-    Connections {
-        target: sim
-        function onLeftIndicatorChanged() {
-            if (sim.leftIndicator) { leftIndicatorLatched = true; leftIndicatorHold.restart() }
-        }
-        function onRightIndicatorChanged() {
-            if (sim.rightIndicator) { rightIndicatorLatched = true; rightIndicatorHold.restart() }
-        }
-        function onHazardChanged() {
-            if (sim.hazard) { hazardLatched = true; hazardHold.restart() }
-        }
-    }
+    // Gated directly on the raw level (sim.leftIndicator/rightIndicator), no
+    // latch/hold: confirmed the CAN input is a static level (on while the
+    // signal is engaged, off the instant it's cancelled), not the flasher's
+    // own on/off waveform — see canbus.cpp's decodeFrame() DIN0/DIN1
+    // comment — so there's no blink off-phase to survive and no reason to
+    // hold the overlay (or cameraFeed3/4.active, bound below) open past the
+    // signal itself. !sim.hazard suppresses both regardless of what
+    // leftIndicator/rightIndicator are doing: on wiring where the hazard
+    // switch flashes the same bulb circuits DIN0/DIN1 read (see canbus.h's
+    // hazard Q_PROPERTY comment — plausible, unverified either way),
+    // leftIndicator/rightIndicator would otherwise also read true during
+    // hazards and pop the cameras, which is exactly the "no cameras"
+    // hazards asked for.
+    readonly property bool leftCamOverlayActive: !startupActive && sim.leftIndicator && !sim.hazard
+    readonly property bool rightCamOverlayActive: !startupActive && sim.rightIndicator && !sim.hazard
 
     // Single owner of every CameraFeed's active state, so it's never fought
     // over by multiple imperative writers. CameraGridScreen/Camera360Screen
