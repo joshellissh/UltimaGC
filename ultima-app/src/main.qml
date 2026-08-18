@@ -713,7 +713,7 @@ Window {
     Text {
         id: odoText
         x: 660 - width / 2
-        y: 617
+        y: 607
         font.family: rangeFont.name
         font.pixelSize: 24
         color: "white"
