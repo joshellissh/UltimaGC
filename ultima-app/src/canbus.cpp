@@ -69,6 +69,22 @@ CanBus::CanBus(OdoStore *odo, const QString &iface, QObject *parent)
     m_reconnectTimer.setInterval(1000);
     connect(&m_reconnectTimer, &QTimer::timeout, this, &CanBus::tryConnect);
     tryConnect();
+
+    // Debug keyboard-trigger blink timers (see debugToggleLeftIndicator() /
+    // debugToggleRightIndicator()) — not simulate-only, see those
+    // Q_INVOKABLEs' comment in canbus.h. 350ms half-period (~1.4Hz full
+    // cycle) matches the standard 60-120/min automotive flasher rate
+    // main.qml's overlay-latch hold-time comment already assumes.
+    m_leftIndicatorBlinkTimer.setInterval(350);
+    connect(&m_leftIndicatorBlinkTimer, &QTimer::timeout, this, [this]() {
+        m_leftIndicator = !m_leftIndicator;
+        emit leftIndicatorChanged();
+    });
+    m_rightIndicatorBlinkTimer.setInterval(350);
+    connect(&m_rightIndicatorBlinkTimer, &QTimer::timeout, this, [this]() {
+        m_rightIndicator = !m_rightIndicator;
+        emit rightIndicatorChanged();
+    });
 }
 
 CanBus::~CanBus()
@@ -497,3 +513,29 @@ void CanBus::simulateTick()
     if (battWarn != m_batteryWarn) { m_batteryWarn = battWarn; emit batteryWarnChanged(); }
 }
 #endif
+
+// Not simulate-only — see the Q_INVOKABLE declarations in canbus.h for why
+// these must work on every build, real hardware included.
+void CanBus::debugToggleLeftIndicator()
+{
+    m_leftIndicatorEngaged = !m_leftIndicatorEngaged;
+    if (m_leftIndicatorEngaged) {
+        m_leftIndicatorBlinkTimer.start();
+    } else {
+        m_leftIndicatorBlinkTimer.stop();
+    }
+    m_leftIndicator = m_leftIndicatorEngaged;
+    emit leftIndicatorChanged();
+}
+
+void CanBus::debugToggleRightIndicator()
+{
+    m_rightIndicatorEngaged = !m_rightIndicatorEngaged;
+    if (m_rightIndicatorEngaged) {
+        m_rightIndicatorBlinkTimer.start();
+    } else {
+        m_rightIndicatorBlinkTimer.stop();
+    }
+    m_rightIndicator = m_rightIndicatorEngaged;
+    emit rightIndicatorChanged();
+}

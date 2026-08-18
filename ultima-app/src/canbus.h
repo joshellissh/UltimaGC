@@ -98,6 +98,23 @@ public:
     void setTotalOdo(double v);
     void setTripOdo(double v);
 
+    // Debug-only keyboard trigger (see main.qml's 'L'/'R' Keys.onPressed) —
+    // fully functional on every build, real hardware included. Confirmed on
+    // real BeaglePlay hardware (2026-08-17) that a plugged-in USB keyboard's
+    // key events reach Keys.onPressed just fine (kernel/evdev/Qt input all
+    // work on this image). An earlier version gated the actual toggle logic
+    // to simulate builds only, on the theory that a real board's turn
+    // signals should only ever come from real CAN — but that's not a CAN
+    // safety concern (this touches no bus, unlike the CAN1/CAN2 rules), and
+    // it defeated the entire point of an on-board debug key: exercising the
+    // overlay on real hardware without needing CAN connected. Ungated, this
+    // simply overwrites m_leftIndicator/m_rightIndicator the same way a real
+    // decodeFrame() DIN0/DIN1 update would — if real CAN is also connected
+    // and driving these at the same time, whichever writes last wins, same
+    // as any other debug override in this app (e.g. debugSetCameraGrid()).
+    Q_INVOKABLE void debugToggleLeftIndicator();
+    Q_INVOKABLE void debugToggleRightIndicator();
+
 public slots:
     // Flush in-memory odometer to OdoStore and persist.
     void save();
@@ -174,6 +191,18 @@ private:
 
     // Odometer integration
     qint64 m_lastSpeedMs = 0;
+
+    // Debug keyboard-trigger state for the turn signals — see
+    // debugToggleLeftIndicator()/debugToggleRightIndicator() above. Engaged
+    // tracks stalk position (on/off); the blink timers flip
+    // m_leftIndicator/m_rightIndicator at a simulated flasher rate while
+    // engaged, matching main.qml's overlay-latch hold-time comment. Not
+    // simulate-only — see that Q_INVOKABLE comment for why this must work
+    // on real hardware too.
+    bool m_leftIndicatorEngaged = false;
+    bool m_rightIndicatorEngaged = false;
+    QTimer m_leftIndicatorBlinkTimer;
+    QTimer m_rightIndicatorBlinkTimer;
 
 #if !defined(__linux__) || defined(ULTIMA_SIMULATE)
     // Dev-build data simulator (macOS always, Linux dev builds when built

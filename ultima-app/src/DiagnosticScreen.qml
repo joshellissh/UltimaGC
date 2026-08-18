@@ -176,14 +176,18 @@ Item {
         text: "DIAGNOSTICS"
     }
 
+    // y/rowSpacing trimmed from 78/16 to make room for the page indicator
+    // below (see PageIndicator.qml) — the previous values put the grid's
+    // bottom edge at y=706 in this 720px-tall screen, leaving only 14px,
+    // not enough to fit dots without touching the last row.
     Grid {
         id: grid
         anchors.horizontalCenter: parent.horizontalCenter
-        y: 78
+        y: 66
         columns: 4
         rows: 4
         columnSpacing: 18
-        rowSpacing: 16
+        rowSpacing: 10
 
         Repeater {
             model: root.channels
@@ -193,6 +197,14 @@ Item {
                 cfg: modelData
             }
         }
+    }
+
+    // Page indicator — this screen is the "right" page (see
+    // PageIndicator.qml comment).
+    PageIndicator {
+        anchors.horizontalCenter: parent.horizontalCenter
+        y: 696
+        currentIndex: 2
     }
 
     component Tile: Rectangle {

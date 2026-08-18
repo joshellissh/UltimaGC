@@ -1,5 +1,6 @@
 import QtQuick 2.15
 import QtQuick.Window 2.15
+import Ultima 1.0
 
 Window {
     id: root
@@ -284,6 +285,189 @@ Window {
         mirror: true
     }
 
+    // Debug-only keyboard trigger for the turn signals (dev-build testing;
+    // real hardware has no keyboard, so this is inert there regardless) —
+    // L/R toggle sim.leftIndicator/rightIndicator on/off via CanBus's
+    // debugToggleLeftIndicator()/debugToggleRightIndicator(), which only
+    // exist in simulate builds (see canbus.h). Window itself can't host
+    // Keys.onPressed (that attached property is Item-only, Window isn't an
+    // Item), hence this focused child Item covering the whole dash.
+    Item {
+        anchors.fill: parent
+        focus: true
+
+        // Debounce: confirmed on real hardware (2026-08-18, journalctl
+        // trace) that a single physical keypress can generate two distinct
+        // Keys.onPressed events, both isAutoRepeat=false, arriving under
+        // 350ms apart (no blink tick logged between them) — not a Qt/QML
+        // dispatch bug (only one Keys.onPressed handler exists anywhere in
+        // this app), but the input layer itself double-delivering. Likely
+        // explanation: this board's DELL keyboard enumerates as three
+        // separate USB HID interfaces (base Keyboard, System Control,
+        // Consumer Control — see /proc/bus/input/devices), and Qt's
+        // evdevkeyboard plugin appears to pick the same physical key up
+        // from more than one of those device nodes. Since
+        // debugToggle*Indicator() is a plain flip, an on+off pair
+        // milliseconds apart nets to "closes right after opening" — this
+        // guard drops a same-key repress within 250ms of the last accepted
+        // one, well above the sub-350ms gap measured, well below anything
+        // a human would intend as two separate presses of a toggle key.
+        property double lastLeftPressMs: 0
+        property double lastRightPressMs: 0
+        Keys.onPressed: (event) => {
+            if (event.isAutoRepeat) return
+            var now = Date.now()
+            if (event.key === Qt.Key_L) {
+                if (now - lastLeftPressMs < 250) return
+                lastLeftPressMs = now
+                sim.debugToggleLeftIndicator()
+                event.accepted = true
+            } else if (event.key === Qt.Key_R) {
+                if (now - lastRightPressMs < 250) return
+                lastRightPressMs = now
+                sim.debugToggleRightIndicator()
+                event.accepted = true
+            }
+        }
+    }
+
+    // Turn-signal camera overlays — blind-spot-style popups showing cam3/
+    // cam4 (see surroundview.h's class comment for the cam-to-side mapping
+    // caveat), horizontally centered on the speedometer/tachometer needle
+    // pivot while the matching turn signal is on, but vertically centered on
+    // the screen rather than the pivot. A gauge's needle pivot is exactly
+    // its own (x + width/2, y + height/2) regardless of needleWidth/pivotX/Y
+    // — see CircularGauge.qml — so the x's reuse speedGauge/rpmGauge's own
+    // documented pivot x-coordinates (351) / (1251) rather than re-deriving
+    // them.
+    //
+    // sim.leftIndicator/rightIndicator are the raw blinking lamp state, not
+    // a latched "signal engaged" flag — the turn-signal Image elements above
+    // read them directly with no _warnFlash-style timer of their own, unlike
+    // the oil/battery/coolant warn icons, which only makes sense if the CAN
+    // input itself is already the on/off flasher waveform. Gating the
+    // overlay directly on that would toggle cameraFeed3/4.active in sync
+    // with the flasher and the feed would never outlive the "off" half of
+    // the cycle long enough to produce a frame (camerafeed.h: first frame
+    // is tens-to-hundreds of ms after activation) — it'd sit on "NO SIGNAL"
+    // forever. Latched instead: each rising edge (off->on transition) (re)
+    // arms a hold, so it stays continuously active across the flasher's
+    // off-phase and only drops a beat after the signal actually stops
+    // blinking.
+    //
+    // The hold must outlast a full flasher PERIOD, not just its off-phase:
+    // sim.leftIndicator toggles on a 350ms timer (see canbus.cpp), so
+    // rising edges land exactly 700ms apart (one on-phase + one off-phase
+    // per cycle), not every 350ms. An earlier version used a 700ms hold —
+    // exactly equal to that 700ms rising-edge spacing, a zero-margin race
+    // where the hold's own expiry and its next retrigger land at the same
+    // instant, so which one QML processes first is luck; on real hardware
+    // this reliably lost often enough to look like "closes immediately
+    // after opening." 1000ms gives ~300ms of slack over the 700ms period.
+    // Standard automotive flasher rate is assumed at 60-120/min (700ms
+    // matches the low end) — not measured against this car's actual rate,
+    // revisit if it flickers during real turn signals or lingers too long
+    // after they cancel.
+    property bool leftIndicatorLatched: false
+    property bool rightIndicatorLatched: false
+    readonly property bool leftCamOverlayActive: !startupActive && leftIndicatorLatched
+    readonly property bool rightCamOverlayActive: !startupActive && rightIndicatorLatched
+
+    Timer { id: leftIndicatorHold; interval: 1000; onTriggered: leftIndicatorLatched = false }
+    Timer { id: rightIndicatorHold; interval: 1000; onTriggered: rightIndicatorLatched = false }
+    Connections {
+        target: sim
+        function onLeftIndicatorChanged() {
+            if (sim.leftIndicator) { leftIndicatorLatched = true; leftIndicatorHold.restart() }
+        }
+        function onRightIndicatorChanged() {
+            if (sim.rightIndicator) { rightIndicatorLatched = true; rightIndicatorHold.restart() }
+        }
+    }
+
+    // Single owner of every CameraFeed's active state, so it's never fought
+    // over by multiple imperative writers. CameraGridScreen/Camera360Screen
+    // used to toggle feeds[i].active themselves in their own open()/close()
+    // — but a plain JS assignment to a property permanently breaks whatever
+    // binding was previously driving it, so a Binding element here trying to
+    // do the same job would get silently and permanently disconnected the
+    // first time either screen closed. Centralizing it as declarative
+    // Bindings here, with those screens' open()/close() only driving their
+    // own slide/fade state, avoids that: every consumer's "I want this feed
+    // on" is OR'd together at one single point of truth instead.
+    Binding { target: cameraFeed1; property: "active"; value: cameraGridScreen.isOpen || camera360Screen.visible }
+    Binding { target: cameraFeed2; property: "active"; value: cameraGridScreen.isOpen || camera360Screen.visible }
+    Binding { target: cameraFeed3; property: "active"; value: cameraGridScreen.isOpen || camera360Screen.visible || leftCamOverlayActive }
+    Binding { target: cameraFeed4; property: "active"; value: cameraGridScreen.isOpen || camera360Screen.visible || rightCamOverlayActive }
+
+    Item {
+        id: leftCamOverlay
+        z: 50
+        height: 400
+        // Container itself is aspect-correct at the new height (rather than
+        // a fixed-width box cropping an internally-aspect-correct
+        // CameraView, which was just a heavily zoomed-in vertical sliver of
+        // the real image) — width tracks CameraFeed's negotiated aspect
+        // ratio, falling back to 16:9 before the first frame negotiates a
+        // real size. x's binding on width keeps this horizontally centered
+        // on the pivot regardless of which aspect ratio it resolves to; y
+        // centers on the screen instead of the pivot (see comment above).
+        width: cameraFeed3.frameHeight > 0
+               ? Math.round(height * (cameraFeed3.frameWidth / cameraFeed3.frameHeight))
+               : Math.round(height * 16 / 9)
+        x: 351 - width / 2
+        anchors.verticalCenter: parent.verticalCenter
+        visible: leftCamOverlayActive
+
+        Rectangle { anchors.fill: parent; color: "black"; border.color: "white"; border.width: 3 }
+
+        CameraView {
+            feed: cameraFeed3
+            anchors.fill: parent
+            visible: !cameraFeed3.failed
+        }
+
+        Text {
+            anchors.centerIn: parent
+            color: "white"
+            font.family: bahnschriftFont.name
+            font.pixelSize: 16
+            text: cameraFeed3.failed ? "CAM FAILED" : "NO SIGNAL"
+            visible: !cameraFeed3.streaming
+        }
+    }
+
+    Item {
+        id: rightCamOverlay
+        z: 50
+        height: 400
+        // See leftCamOverlay above for why width is derived here rather
+        // than fixed.
+        width: cameraFeed4.frameHeight > 0
+               ? Math.round(height * (cameraFeed4.frameWidth / cameraFeed4.frameHeight))
+               : Math.round(height * 16 / 9)
+        x: 1251 - width / 2
+        anchors.verticalCenter: parent.verticalCenter
+        visible: rightCamOverlayActive
+
+        Rectangle { anchors.fill: parent; color: "black"; border.color: "white"; border.width: 3 }
+
+        CameraView {
+            feed: cameraFeed4
+            anchors.fill: parent
+            visible: !cameraFeed4.failed
+        }
+
+        Text {
+            anchors.centerIn: parent
+            color: "white"
+            font.family: bahnschriftFont.name
+            font.pixelSize: 16
+            text: cameraFeed4.failed ? "CAM FAILED" : "NO SIGNAL"
+            visible: !cameraFeed4.streaming
+        }
+    }
+
     // Warning flash timer (300ms cycle)
     property bool _warnFlash: true
     Timer {
@@ -321,6 +505,19 @@ Window {
             anchors.margins: -10
             onClicked: camera360Screen.visible ? camera360Screen.close() : camera360Screen.open()
         }
+    }
+
+    // Page indicator — bottom center, shows main as the middle of the
+    // 3-screen swipe layout (camera grid left, diagnostics right). Hidden
+    // while either overlay screen is open/opening, same as icon360 above —
+    // it lives at a spot those screens' own indicators cover once open, and
+    // showing it mid-swipe would double up with the incoming screen's dots.
+    PageIndicator {
+        anchors.horizontalCenter: parent.horizontalCenter
+        y: 696
+        z: 150
+        currentIndex: 1
+        visible: !diagnosticScreen.isOpen && !cameraGridScreen.isOpen
     }
 
     // Top indicator row — evenly spaced at 80px intervals, centered at x=800.

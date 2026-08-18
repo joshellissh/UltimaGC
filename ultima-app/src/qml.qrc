@@ -9,6 +9,7 @@
         <file>CameraGridScreen.qml</file>
         <file>CalibrationSettingsScreen.qml</file>
         <file>CalibrationParamRow.qml</file>
+        <file>PageIndicator.qml</file>
         <file>boost_circle.png</file>
         <file>background_overlay.png</file>
         <file>car_lights_off.png</file>

@@ -64,12 +64,16 @@ Item {
         }
     }
 
+    // feeds[i].active itself is driven centrally by main.qml (see its
+    // "Single owner of every CameraFeed's active state" comment) — visible
+    // (derived from opacity above) is what main.qml ORs into that, so
+    // open()/close() only need to drive this screen's own fade state.
     function open() {
         opacity = 1
         cameraTimedOut = false
         // If feeds are already streaming (e.g. left active by
         // CameraGridScreen sharing these same feeds), anyStreaming is
-        // already true and won't change value when active is set below —
+        // already true and won't change value when active goes true above —
         // onAnyStreamingChanged never re-fires, so a blindly-restarted
         // timer would fire in 2s and blank to the placeholder over a
         // perfectly working stream. Check current state instead.
@@ -78,15 +82,11 @@ Item {
         } else {
             fallbackTimer.restart()
         }
-        for (var i = 0; i < feeds.length; ++i)
-            feeds[i].active = true
     }
     function close() {
         opacity = 0
         fallbackTimer.stop()
         calibrationScreen.close()
-        for (var i = 0; i < feeds.length; ++i)
-            feeds[i].active = false
     }
 
     // Swallow touches to the dash underneath while open.

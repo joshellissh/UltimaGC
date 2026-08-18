@@ -66,6 +66,10 @@ Item {
         }
     }
 
+    // feeds[i].active itself is driven centrally by main.qml (see its
+    // "Single owner of every CameraFeed's active state" comment) — isOpen
+    // (derived from x below) is what main.qml ORs into that, so open()/
+    // close() only need to drive this screen's own slide state.
     function open() {
         x = 0
         cameraTimedOut = false
@@ -80,14 +84,10 @@ Item {
         } else {
             fallbackTimer.restart()
         }
-        for (var i = 0; i < feeds.length; ++i)
-            feeds[i].active = true
     }
     function close() {
         x = -parent.width
         fallbackTimer.stop()
-        for (var i = 0; i < feeds.length; ++i)
-            feeds[i].active = false
     }
 
     FontLoader { id: bahnschriftFont; source: "qrc:/bahnschrift._semibold.ttf" }
@@ -163,4 +163,14 @@ Item {
         }
     }
 
+    // Page indicator — this screen is the "left" page (see PageIndicator.qml
+    // comment). Declared after the Grid so it paints on top of the camera
+    // feeds; its dots carry their own dark border for contrast against
+    // whatever's under them, same reasoning as the outlined "CAM N" labels
+    // above.
+    PageIndicator {
+        anchors.horizontalCenter: parent.horizontalCenter
+        y: 696
+        currentIndex: 0
+    }
 }
