@@ -306,12 +306,14 @@ Window {
         mirror: true
     }
 
-    // Debug-only keyboard trigger for the turn signals/hazards — functional
-    // on every build, real hardware included if a keyboard happens to be
-    // plugged in (see canbus.h's Q_INVOKABLE comment). L/R toggle
-    // sim.leftIndicator/rightIndicator via CanBus's
+    // Debug-only keyboard trigger for the turn signals/hazards/gear —
+    // functional on every build, real hardware included if a keyboard
+    // happens to be plugged in (see canbus.h's Q_INVOKABLE comments). L/R
+    // toggle sim.leftIndicator/rightIndicator via CanBus's
     // debugToggleLeftIndicator()/debugToggleRightIndicator(); H toggles
-    // sim.hazard via debugToggleHazard(). Window itself can't host
+    // sim.hazard via debugToggleHazard(); Up/Down step sim.gear one position
+    // at a time through "PRN1234567" via debugGearUp()/debugGearDown().
+    // Window itself can't host
     // Keys.onPressed (that attached property is Item-only, Window isn't an
     // Item), hence this focused child Item covering the whole dash.
     Item {
@@ -337,6 +339,8 @@ Window {
         property double lastLeftPressMs: 0
         property double lastRightPressMs: 0
         property double lastHazardPressMs: 0
+        property double lastGearUpPressMs: 0
+        property double lastGearDownPressMs: 0
         Keys.onPressed: (event) => {
             if (event.isAutoRepeat) return
             var now = Date.now()
@@ -354,6 +358,16 @@ Window {
                 if (now - lastHazardPressMs < 250) return
                 lastHazardPressMs = now
                 sim.debugToggleHazard()
+                event.accepted = true
+            } else if (event.key === Qt.Key_Up) {
+                if (now - lastGearUpPressMs < 250) return
+                lastGearUpPressMs = now
+                sim.debugGearUp()
+                event.accepted = true
+            } else if (event.key === Qt.Key_Down) {
+                if (now - lastGearDownPressMs < 250) return
+                lastGearDownPressMs = now
+                sim.debugGearDown()
                 event.accepted = true
             }
         }
@@ -574,13 +588,9 @@ Window {
         font.family: bahnschriftFont.name
         font.pixelSize: 150
         color: "white"
-        text: {
-            var g = sim.gear
-            if (g === -2) return "P"
-            if (g === -1) return "R"
-            if (g === 0) return "N"
-            return g.toString()
-        }
+        // sim.gear is a plain index into this string (see canbus.h's gear
+        // Q_PROPERTY comment): 0=P 1=R 2=N 3..9=1st..7th.
+        text: "PRN1234567"[sim.gear]
     }
 
     // Widest glyph the gear indicator can show ("N", wider than "P"/"R" or
@@ -608,13 +618,16 @@ Window {
     }
 
     // Transmission mode badge — fixed to the right of the gear indicator,
-    // baseline-aligned with it.
+    // baseline-aligned with it. Auto/manual is meaningless in P/R/N, so
+    // only shown while sim.gear is one of the numbered gears (index >= 3,
+    // i.e. "PRN1234567"[3..9] — see gearIndicator above).
     Text {
         x: 813 + gearWidthMetric.width / 2
         y: gearIndicator.y + gearFontMetrics.ascent - transmissionBadgeMetrics.ascent
         font.family: bahnschriftFont.name
         font.pixelSize: 32
         color: "white"
+        visible: sim.gear >= 3
         text: sim.transmissionAuto ? "A" : "M"
     }
 
@@ -839,7 +852,7 @@ Window {
     // !startupActive guard is load-bearing: the ~2s startup self-test sweeps
     // gear through every value (see gearIndicator's binding above), which
     // would otherwise pop the camera overlay open on every single boot.
-    property bool reverseGear: !startupActive && sim.gear === -1
+    property bool reverseGear: !startupActive && sim.gear === 1
     onReverseGearChanged: reverseGear ? camera360Screen.open() : camera360Screen.close()
 
     // FPS overlay — top-left corner, above every screen this cluster shows

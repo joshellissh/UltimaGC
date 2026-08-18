@@ -260,13 +260,18 @@ void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
     }
     case 0x60E: {                                       // Frame 15: gear @ slot 2, vbat @ slot 3
         int g = be_s16(d, 2);
-        // Syvecs: 0=Unknown 1=Reverse 2=Neutral 3=1st .. 10=8th
-        // QML:    -2=P -1=R 0=N 1..8=forward
+        // Syvecs: 0=Unknown 1=Reverse 2=Neutral 3=1st .. 10=8th (this car
+        // only has 7 forward gears — see main.qml's "PRN1234567" comment).
+        // QML:    0=P 1=R 2=N 3..9=1st..7th — Syvecs' 3=1st..9=7th already
+        // equals the QML index directly, no offset needed. Syvecs has no
+        // Park value at all (TCM range, not something this standalone ECU
+        // tracks) so qmlGear 0 is unreachable from real CAN, same as before
+        // this encoding change — only debugToggle-free, simulateTick()
+        // (dev builds) can produce it.
         int qmlGear;
-        if (g == 1)                  qmlGear = -1;
-        else if (g == 2)             qmlGear = 0;
-        else if (g >= 3 && g <= 10)  qmlGear = g - 2;
-        else                         qmlGear = 0;       // Unknown → Neutral
+        if (g == 1)                  qmlGear = 1;        // Reverse
+        else if (g >= 3 && g <= 9)   qmlGear = g;         // 1st..7th
+        else                         qmlGear = 2;         // Neutral, Unknown, or unsupported 8th (10)
         if (qmlGear != m_gear) { m_gear = qmlGear; emit gearChanged(); }
 
         double vbat = be_u16(d, 4) * 0.001;
@@ -444,10 +449,14 @@ void CanBus::simulateTick()
 
     // Gear: cycle R N P 1..7 on a fixed timer (independent of simulated
     // speed) so the gear indicator and transmission-mode badge can be
-    // exercised for every glyph without real CAN hardware.
+    // exercised for every glyph without real CAN hardware. Values are
+    // indices into "PRN1234567" (see canbus.h's gear Q_PROPERTY comment):
+    // 0=P 1=R 2=N 3..9=1st..7th. Skipped for good once debugGearUp()/
+    // debugGearDown() sets m_simGearManualOverride — see canbus.h's comment
+    // on those.
     m_simGearCycleTimer -= dt;
-    if (m_simGearCycleTimer <= 0.0) {
-        static const int gearSequence[] = { -1, 0, -2, 1, 2, 3, 4, 5, 6, 7 };
+    if (!m_simGearManualOverride && m_simGearCycleTimer <= 0.0) {
+        static const int gearSequence[] = { 1, 2, 0, 3, 4, 5, 6, 7, 8, 9 };
         const int gearSequenceLen = int(sizeof(gearSequence) / sizeof(gearSequence[0]));
         int newGear = gearSequence[m_simGearCycleIndex];
         if (newGear != m_gear) { m_gear = newGear; emit gearChanged(); }
@@ -456,11 +465,11 @@ void CanBus::simulateTick()
     }
 
     double newRpm;
-    if (m_gear <= 0) {
+    if (m_gear < 3) {
         newRpm = 800.0 + rnd() * 100.0;
     } else {
-        static const double ratios[] = { 0, 3.5, 2.5, 1.8, 1.4, 1.1, 0.9, 0.75, 0.65 };
-        double base = m_speed * ratios[m_gear] * 30.0;
+        static const double ratios[] = { 0, 3.5, 2.5, 1.8, 1.4, 1.1, 0.9, 0.75 }; // [0] unused, [1..7]=1st..7th
+        double base = m_speed * ratios[m_gear - 2] * 30.0;
         newRpm = qBound(800.0, base + (rnd() - 0.5) * 200.0, 7200.0);
     }
     if (!qFuzzyCompare(1.0 + newRpm, 1.0 + m_rpm)) { m_rpm = newRpm; emit rpmChanged(); }
@@ -525,4 +534,22 @@ void CanBus::debugToggleHazard()
 {
     m_hazard = !m_hazard;
     emit hazardChanged();
+}
+
+void CanBus::debugGearUp()
+{
+    int newGear = qBound(0, m_gear + 1, 9);
+#if !defined(__linux__) || defined(ULTIMA_SIMULATE)
+    m_simGearManualOverride = true;
+#endif
+    if (newGear != m_gear) { m_gear = newGear; emit gearChanged(); }
+}
+
+void CanBus::debugGearDown()
+{
+    int newGear = qBound(0, m_gear - 1, 9);
+#if !defined(__linux__) || defined(ULTIMA_SIMULATE)
+    m_simGearManualOverride = true;
+#endif
+    if (newGear != m_gear) { m_gear = newGear; emit gearChanged(); }
 }

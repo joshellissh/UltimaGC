@@ -68,7 +68,9 @@ Item {
         { label: "Battery Volt", key: "vbat", unit: "V", dec: 2, max: 15.5 },
         { label: "Cruise State", key: "cruiseState", text: true },
         { label: "Limp Mode", key: "limpMode", text: true },
-        { label: "Gear", key: "gear", unit: "", dec: 0, min: -2, max: 8 },
+        // Index into "PRN1234567" (see canbus.h's gear Q_PROPERTY comment),
+        // not a magnitude — noBar below suppresses the bar for it.
+        { label: "Gear", key: "gear", unit: "", dec: 0, min: 0, max: 9, noBar: true },
         // Auto/Manual polarity is assumed, not confirmed — see canbus.h
         { label: "Trans Mode", key: "transmissionAuto", bool: true, boolText: ["M", "A"], unconfirmed: true },
         // MCE18 CAN expander — datasheet defaults, not wire-verified yet
@@ -127,9 +129,11 @@ Item {
     // A fixed-zero-origin bar misrepresents a signed/centered-on-zero
     // channel (min < 0) — a resting 0 would render as a half-full bar that
     // reads as a real positive value. Those channels get a number only; no
-    // bar. Gear is the one channel here that fits that shape (-2..8).
+    // bar. Gear (noBar: true) is excluded for a different reason: it's a
+    // position index ("PRN1234567"), not a magnitude, so a bar for it would
+    // be meaningless even though its range is non-negative.
     function barVisible(cfg) {
-        if (cfg.bool || cfg.text) return false
+        if (cfg.bool || cfg.text || cfg.noBar) return false
         if (cfg.min !== undefined && cfg.min < 0) return false
         return true
     }

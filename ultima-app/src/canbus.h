@@ -19,7 +19,10 @@ class CanBus : public QObject
     Q_OBJECT
     Q_PROPERTY(double speed READ speed NOTIFY speedChanged)             // mph
     Q_PROPERTY(double rpm READ rpm NOTIFY rpmChanged)
-    Q_PROPERTY(int gear READ gear NOTIFY gearChanged)                   // -2=P -1=R 0=N 1..8
+    // Index into the dash's "PRN1234567" gear-position string, not a raw
+    // ratio: 0=P 1=R 2=N 3..9=1st..7th. Chosen so main.qml's gear indicator
+    // is a plain string index (see its comment), not an if/else chain.
+    Q_PROPERTY(int gear READ gear NOTIFY gearChanged)
     Q_PROPERTY(double fuelLevel READ fuelLevel NOTIFY fuelLevelChanged) // 0..1
     Q_PROPERTY(double coolantTemp READ coolantTemp NOTIFY coolantTempChanged) // °F
     Q_PROPERTY(double boost READ boost NOTIFY boostChanged)             // psi (clamped >= 0)
@@ -133,6 +136,19 @@ public:
     Q_INVOKABLE void debugToggleRightIndicator();
     Q_INVOKABLE void debugToggleHazard();
 
+    // Debug-only keyboard trigger (see main.qml's Up/Down Keys.onPressed) —
+    // steps m_gear one position at a time through "PRN1234567", clamped at
+    // both ends (0=P, 9=7th) rather than wrapping, since neither end has a
+    // real gear beyond it to cycle into. On dev/simulate builds, the first
+    // press latches m_simGearManualOverride so simulateTick()'s 2s
+    // auto-cycle self-test (see its gear-cycle timer) stops overwriting
+    // m_gear from then on — without that, the auto-cycle would silently undo
+    // whatever the debug key just set within 2 seconds. On real hardware
+    // there's nothing to latch against: m_gear only otherwise changes via
+    // decodeFrame(), same as debugToggleLeftIndicator() et al.
+    Q_INVOKABLE void debugGearUp();
+    Q_INVOKABLE void debugGearDown();
+
 public slots:
     // Flush in-memory odometer to OdoStore and persist.
     void save();
@@ -185,7 +201,14 @@ private:
     // Gauge state
     double m_speed = 0.0;         // mph
     double m_rpm = 0.0;
-    int m_gear = 0;               // -2=P -1=R 0=N 1..8
+    // Index into "PRN1234567": 0=P 1=R 2=N 3..9=1st..7th. Starts at P (0),
+    // not N — before the first 0x60E frame ever arrives (app just launched,
+    // CAN not yet connected), the car is realistically parked, so P is the
+    // more honest guess to show than N. This is a different question from
+    // decodeFrame()'s "Unknown"/unsupported-8th fallback once frames are
+    // flowing, which stays Neutral on purpose — a live CAN glitch mid-drive
+    // should read as the more neutral, less alarming N, not flash P.
+    int m_gear = 0;
     double m_fuelLevel = 0.0;     // 0..1
     double m_coolantTempF = 0.0;
     double m_boostPsi = 0.0;
@@ -224,6 +247,7 @@ private:
     double m_simElapsedS = 0.0;      // free-running clock for sweep/toggle phases
     double m_simGearCycleTimer = 0.0; // seconds remaining before advancing the gear cycle
     int m_simGearCycleIndex = 0;      // index into the R/N/P/1..7 cycle
+    bool m_simGearManualOverride = false; // set by debugGearUp()/debugGearDown(); permanently stops the auto-cycle
     bool m_simOilFault = false;       // forces a low-oil-pressure dip to exercise the warn icon
     bool m_simBattFault = false;      // forces a low-voltage dip to exercise the warn icon
 #endif
