@@ -720,15 +720,16 @@ Window {
         text: "ODO  " + sim.totalOdo.toFixed(1) + " mi"
     }
 
-    // Trip odometer — right-aligned against the "mi" label at x=1013
+    // Trip odometer — "TRIP  x <resetbutton>", left-aligned at (810, odoText.y);
+    // the reset button (below) sits right after this text's trailing space.
     Text {
         id: tripText
-        x: 1001 - width
-        y: 617
+        x: 810
+        y: odoText.y
         font.family: rangeFont.name
         font.pixelSize: 24
         color: "white"
-        text: sim.tripOdo.toFixed(1)
+        text: "TRIP  " + sim.tripOdo.toFixed(1) + " "
     }
 
     // Trip reset button - a circular-arrow icon drawn on a Canvas rather
@@ -740,7 +741,7 @@ Window {
     // boostRing above, same QT_QUICK_BACKEND=software path).
     Item {
         id: tripReset
-        x: 1040
+        x: tripText.x + tripText.width
         y: tripText.y - 2
         width: 26
         height: 26
