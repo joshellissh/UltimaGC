@@ -729,7 +729,7 @@ Window {
         font.family: rangeFont.name
         font.pixelSize: 24
         color: "white"
-        text: "TRIP  " + sim.tripOdo.toFixed(1) + " "
+        text: "TRIP  " + sim.tripOdo.toFixed(1) + "  "
     }
 
     // Trip reset button - a circular-arrow icon drawn on a Canvas rather
@@ -742,7 +742,7 @@ Window {
     Item {
         id: tripReset
         x: tripText.x + tripText.width
-        y: tripText.y - 2
+        y: tripText.y + 1
         width: 26
         height: 26
         z: 200
