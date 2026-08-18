@@ -707,7 +707,9 @@ Window {
         }
     }
 
-    // Odometer — right-aligned against the "mi" label at x=772
+    // Odometer — "ODO x mi", right-aligned at x=760 (recomputed from width
+    // on every text change) so the right edge stays put as the digit count
+    // grows instead of the whole string drifting rightward.
     Text {
         id: odoText
         x: 760 - width
@@ -715,7 +717,7 @@ Window {
         font.family: rangeFont.name
         font.pixelSize: 24
         color: "white"
-        text: sim.totalOdo.toFixed(1)
+        text: "ODO " + sim.totalOdo.toFixed(1) + " mi"
     }
 
     // Trip odometer — right-aligned against the "mi" label at x=1013
