@@ -721,10 +721,16 @@ flipping the `CONFIG` line again** — don't re-trigger the same hang.
 
 ### Candidate 5 (small, image-size lever, not critical-path): drop `wlcore`/`wl18xx`
 
-There is no WiFi hardware wired into this build (see `GAUGE-CLUSTER.md` /
-CLAUDE.md) — `wlcore`/`wl18xx` firmware-load failures appear in every boot
+**Superseded, not acted on — see "WiFi AP" and "WiFi AP + captive portal
+abandoned, reverted to client mode" below.** The opposite happened: WiFi was
+enabled (2026-08-18), not trimmed. This section is kept for the boot-time
+reasoning (still valid background for anyone who *does* want to trim it
+later), not as a statement of current build config.
+
+There was no WiFi hardware wired into this build at the time this was
+written — `wlcore`/`wl18xx` firmware-load failures appeared in every boot
 log, always *after* first frame in the clean run (kernel_ts 6.36s vs. first
-frame at 5.42s), so this is **not** a critical-path fix. It's a `fitImage`
+frame at 5.42s), so this was **not** a critical-path fix. It's a `fitImage`
 size lever: the R5 SPL reads `tifalcon.bin` + `fitImage` off eMMC via its own
 ext4 driver before ATF even starts (falcon payload load → ATF start is
 ~0.77s in run 2), and that read time scales with image size. Trimming
@@ -1295,14 +1301,18 @@ build always produces is simultaneously a valid falcon-mode SD card
 (R5 SPL takes the direct path) — no separate raw-sector placement step,
 unlike what the generic (non-K3) U-Boot falcon mode documentation describes.
 
-`dropbear` is in this image by default. **Stale as of 2026-08-18 — see
-"WiFi AP" below**: WiFi was disabled when this paragraph was first written,
-then briefly a Skynet STA client, and is now a standalone AP (WL1807 is
-single-radio, so it's never both an AP and a Skynet client at once). SSH
-today reaches the board either over wired Ethernet with a DHCP lease
-(`cpsw`, plausible arago default, not confirmed) or by joining the AP
-itself (`192.168.4.1`, see "WiFi AP") — `journalctl -u ultima-app` over the
-serial console is still the fallback if neither network path is up.
+`dropbear` is in this image by default. **Stale as of 2026-08-19 — see
+"WiFi AP + captive portal abandoned, reverted to client mode" below**: WiFi
+went through several shapes since this paragraph was first written —
+disabled, then a Skynet STA client, then briefly a standalone AP with a
+captive portal, and as of 2026-08-19 it's back to a Skynet STA client (the
+AP/captive-portal work was fully reverted, not just paused). SSH today
+reaches the board either over wired Ethernet with a DHCP lease (`cpsw`,
+plausible arago default, not confirmed) or over WiFi once
+`/data/wifi-client.conf` has been provisioned with the Skynet credentials
+(see that section) — there's no fixed `192.168.4.1` to fall back to anymore
+now that AP mode is gone. `journalctl -u ultima-app` over the serial console
+is still the fallback if neither network path is up.
 
 ## Dash clock doesn't persist a manual set (2026-08-10) — root-caused on hardware
 
@@ -1489,8 +1499,9 @@ anything built here.
 
 Not yet checked on this hardware: CAN2 data actually arriving (needs the
 ODrive USB-CAN adapter connected to the Syvecs S7+), touch input, odometer
-persistence across reboots, WiFi (not wired up at all in this build, see
-above). Boot-time measurement with the full chain is now done — see
+persistence across reboots, WiFi (not wired up at all in this build at the
+time — since enabled, see "WiFi AP + captive portal abandoned, reverted to
+client mode"). Boot-time measurement with the full chain is now done — see
 "Boot-time measurement" → "Full power-on-to-gauge-cluster number" above
 (~8.9s power-on to framebuffer-ready, measured with `measure-boot.sh`, not
 the eyeballed ~12.3s this paragraph used to cite).

@@ -87,8 +87,17 @@ and doesn't belong in the Yocto-specific notes.
   anything else) starts crash-looping rather than leave it running to diagnose —
   an earlier session saw a crash-loop produce real `I/O error`s on the rootfs
   partition, on a build where this may have hit real storage rather than tmpfs.
-- No WiFi in this build — only wired Ethernet gives SSH/dropbear a path in;
-  otherwise it's serial-console-only.
+- **WiFi (onboard WL1807) is enabled as of 2026-08-19** — `wpa_supplicant`
+  STA-to-"Skynet" client mode, for bench/dev SSH convenience only (not a path
+  the deployed-in-car dash has any use for). It's not automatically up on a
+  fresh flash: the SSID/password live in `/data/wifi-client.conf`, which is
+  *not* in git or the image and has to be provisioned manually over SSH
+  first (see `beagleplay-falcon/NOTES.md` "WiFi AP + captive portal
+  abandoned, reverted to client mode"). An AP mode + captive-portal variant
+  was also tried and fully reverted — don't assume `192.168.4.1` or a
+  `hostapd`/`dnsmasq` setup is still there. Wired Ethernet remains the
+  always-available path (no manual provisioning needed); serial console is
+  still the fallback if neither network path is up.
 
 ## Workflow shortcuts
 

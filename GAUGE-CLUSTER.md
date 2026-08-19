@@ -13,11 +13,15 @@ All in `ultima-app/src/`. Don't copy these listings verbatim
 elsewhere — read `ultima-app.pro` / `qml.qrc` directly for the current file set; they
 change as the app evolves and a stale copy is worse than no copy.
 
-- **`ultima-app.pro`** — qmake project file: `HEADERS`/`SOURCES` list `odostore`,
-  `canbus`, `systemclock`; `RESOURCES += qml.qrc`. A `ultima_dev_sim` CONFIG flag
-  (set by `scripts/dev-build-wsl.sh`) defines `ULTIMA_SIMULATE` to force simulated
-  gauge data on a Linux dev build too — macOS dev builds simulate unconditionally
-  regardless of this flag (see `canbus.h`/`.cpp` below).
+- **`ultima-app.pro`** — qmake project file: `HEADERS`/`SOURCES` has grown well
+  beyond the original `odostore`/`canbus`/`systemclock` trio to include the
+  camera + 360 surround-view + calibration stack (`camerafeed`, `cameraview`,
+  `cameracalibration`, `warpmesh`, `shadermanager`, `surroundtexture`,
+  `surroundview`, `calibrationstore`); `RESOURCES += qml.qrc`. A `ultima_dev_sim`
+  CONFIG flag (set by `scripts/dev-build-wsl.sh`) defines `ULTIMA_SIMULATE` to
+  force simulated gauge data on a Linux dev build too — macOS dev builds
+  simulate unconditionally regardless of this flag (see `canbus.h`/`.cpp`
+  below).
 - **`main.cpp`** — creates `OdoStore` for persistent odometer, `CanBus` as the live
   gauge data source, and `SystemClock` for the time-set screen; exposes all three to
   QML as context properties (`odoStore`, `sim`, `systemClock`), plus a `bootTime`
@@ -51,17 +55,18 @@ change as the app evolves and a stale copy is worse than no copy.
 
 ### QML Files
 
-The app consists of 9 QML files, all in `ultima-app/src/`:
+The app consists of 11 QML files, all in `ultima-app/src/`:
 
-- **`main.qml`** — Root layout: 4 gauge needles over the Bavarian background layers, boost gauge (trapezoid black overlay with PSI readout), turn signal indicators, top indicator row (oil, check engine, beams, battery, coolant — warn icons flash at 300ms), gear indicator (Bahnschrift SemiBold font, P/R/N/1-7), odometer + trip odometer with reset button, touch feedback dot, 360-view tap icon. On startup, a ~1s splash-to-cluster intro (`introFrac`/`introTransitionDone`) shows `splash_screen.png` with `splash_car_start.png` overlaid at the exact offset it occupies in that art (262,167,1104x364 — pixel-matched against the source PNGs, not eyeballed), then fades the splash background out while the car cutout shrinks/moves onto `car_lights_off`'s alpha-bbox rect (627,479,346x128) and fades away, handing off to the real car artwork underneath. This exists so Qt's first frame is pixel-identical to what `beagleplay-falcon`'s pre-Qt `ultima-splash` framebuffer splash already painted (see that project's NOTES.md), keeping the modeset handoff invisible. Only once that finishes does the ~2s self-test (`startupActive`/`startupFrac`/`startupFlash`) sweep every needle to max and back and flash every icon before handing off to live `sim.*` values — real gauge/warning bindings are `startupActive ? <test value> : sim.<prop>`. Includes a periodic (30s) save timer for odometer persistence via `sim.save()`. All gauge values bind to the `sim` context property, which is the `CanBus` C++ object, not this file's `SimEngine.qml`. Hosts `SetTimeScreen`, `DiagnosticScreen`, `CameraGridScreen`, `Camera360Screen`, and `RearCameraScreen` as overlays; a swipe left/right on the main dash opens `DiagnosticScreen`/`CameraGridScreen` respectively.
+- **`main.qml`** — Root layout: 4 gauge needles over the Bavarian background layers, boost gauge (trapezoid black overlay with PSI readout), turn signal indicators, top indicator row (oil, check engine, beams, battery, coolant — warn icons flash at 300ms), a separate low-fuel badge (`icon_fuel_low.png`, turns the fuel-pump icon red under 1/4 tank — see `sim.lowFuelWarn`), gear indicator (Bahnschrift SemiBold font, P/R/N/1-7), odometer + trip odometer with reset button, touch feedback dot. Tapping the car (either lights state) opens `Camera360Screen` — this used to be a dedicated `icon_360.png` tap target; that icon and the binding were removed (2026-08-18) in favor of tapping the car itself. While a turn signal is active (and hazards aren't), `leftCamOverlay`/`rightCamOverlay` pop up a bordered `CameraView` fed by `cameraFeed3`/`cameraFeed4` respectively, reprojected through `mirror.frag`'s virtual-mirror view (see `CameraView`'s `mirrorViewSide` property below) — a live blind-spot mirror replacement, gone the instant the signal (a static level, not a blink waveform — see the CAN section) drops or hazards latch on. On startup, a ~1s splash-to-cluster intro (`introFrac`/`introTransitionDone`) shows `splash_screen.png` with `splash_car_start.png` overlaid at the exact offset it occupies in that art (262,167,1104x364 — pixel-matched against the source PNGs, not eyeballed), then fades the splash background out while the car cutout shrinks/moves onto `car_lights_off`'s alpha-bbox rect (627,479,346x128) and fades away, handing off to the real car artwork underneath. This exists so Qt's first frame is pixel-identical to what `beagleplay-falcon`'s pre-Qt `ultima-splash` framebuffer splash already painted (see that project's NOTES.md), keeping the modeset handoff invisible. Only once that finishes does the ~2s self-test (`startupActive`/`startupFrac`/`startupFlash`) sweep every needle to max and back and flash every icon before handing off to live `sim.*` values — real gauge/warning bindings are `startupActive ? <test value> : sim.<prop>`. Includes a periodic (30s) save timer for odometer persistence via `sim.save()`. All gauge values bind to the `sim` context property, which is the `CanBus` C++ object, not this file's `SimEngine.qml`. Hosts `SetTimeScreen`, `DiagnosticScreen`, `CameraGridScreen`, `Camera360Screen`, and `RearCameraScreen` as overlays; a swipe left/right on the main dash opens `DiagnosticScreen`/`CameraGridScreen` respectively — `PageIndicator` (below) shows dots for that 3-screen swipe layout.
 - **`CircularGauge.qml`** — Reusable needle gauge component: rotates `needle.png` over a transparent item positioned at the gauge center. Configurable start/end angles, counter-clockwise mode, needle size/pivot, optional debug arc overlay
 - **`SetTimeScreen.qml`** — Time-set overlay that calls into `SystemClock` (the `systemClock` context property) to push a new wall-clock time
 - **`DiagnosticScreen.qml`** — Full-screen grid of every CAN2 signal this build actually decodes today (ECU + MCE18 — see below), showing the raw decoded value/enum behind each dash gauge or icon rather than just its needle position or lit/unlit state. Opened by swiping left anywhere on the main dash, closed by swiping right
-- **`Camera360Screen.qml`** — Full-screen camera overlay, toggled open/closed (250ms cross-fade via a `Behavior on opacity`) only by tapping the 360 icon (`icon360`) on the main dash — reverse gear no longer auto-opens this screen (see `RearCameraScreen.qml` below). Feeds the 4 raw streams from the mycam004m driver (`cameraFeed1`..`cameraFeed4` context properties set up in `main.cpp`, each a `CameraFeed` opening one of the driver's stable `/dev/mycam/cam1`..`cam4` symlinks — fake or real backend, see `~/code/mycam004m/docs/ultima-app-integration.md`) into `SurroundView` (`surroundview.h`), which stitches them into one top-down birds-eye composite via a precomputed per-camera fisheye/ground-plane warp mesh + feather blend. Calibration (per-camera position/yaw/pitch/FOV, vehicle dimensions, ground extent, wedge overlap) defaults to a placeholder rig (`cameracalibration.cpp`'s `defaultCalibration()`) but is live-tunable and persisted via the gear-icon settings panel (`CalibrationSettingsScreen.qml`) — seams/ground-plane scale are only exactly right once real measured camera-mount data replaces the placeholder. `simulated_cameras.png` is a whole-screen fallback shown only if every feed has failed or none produce a frame within 2s of opening.
+- **`Camera360Screen.qml`** — Full-screen camera overlay, toggled open/closed (250ms cross-fade via a `Behavior on opacity`) by tapping the car (`car_lights_off`/`car_lights_on`) on the main dash to open, tapping anywhere on the overlay to close — reverse gear no longer auto-opens this screen (see `RearCameraScreen.qml` below). This used to be a dedicated `icon_360.png` tap target; that icon was removed (2026-08-18) in favor of tapping the car itself. Feeds the 4 raw streams from the mycam004m driver (`cameraFeed1`..`cameraFeed4` context properties set up in `main.cpp`, each a `CameraFeed` opening one of the driver's stable `/dev/mycam/cam1`..`cam4` symlinks — fake or real backend, see `~/code/mycam004m/docs/ultima-app-integration.md`) into `SurroundView` (`surroundview.h`), which stitches them into one top-down birds-eye composite via a precomputed per-camera fisheye/ground-plane warp mesh + feather blend. `car_360.png` (full 1600x720, car pre-centered on transparent background) is drawn on top over the vehicle-mask hole SurroundView's mesh leaves unpainted — not unused art, this is what makes the composite read as a car surrounded by ground rather than a car-shaped hole. Calibration (per-camera position/yaw/pitch/FOV, vehicle dimensions, ground extent, wedge overlap) defaults to a placeholder rig (`cameracalibration.cpp`'s `defaultCalibration()`) but is live-tunable and persisted via the gear-icon settings panel (`CalibrationSettingsScreen.qml`) — seams/ground-plane scale are only exactly right once real measured camera-mount data replaces the placeholder. If every feed has failed or none produce a frame within 2s of opening, `showPlaceholder` just hides `SurroundView` and the car icon, leaving the plain black backdrop — the older `simulated_cameras.png` fallback art was removed (2026-08-18), there's no dedicated placeholder image anymore.
 - **`RearCameraScreen.qml`** — Full-screen single-camera overlay, opened/closed automatically on reverse gear (`main.qml`'s `reverseGear`), like a real backup camera. Shows `cameraFeed2` (the rear feed — see `Camera360Screen.qml`'s `[front, rear, left, right]` feeds-order comment) raw via `CameraView`, no stitching, no calibration UI. Same 250ms opacity cross-fade and 2s live-frame timeout-to-blank pattern as `Camera360Screen`, scoped to just the one feed.
 - **`CameraGridScreen.qml`** — Persistent swipeable screen (mirror of `DiagnosticScreen`, reached by swiping right off the main dash) showing the same 4 mycam004m feeds as a plain 2x2 grid, one quadrant per physical camera, no stitching — a raw-feed debug view alongside `Camera360Screen`'s stitched one. Separate file/screen rather than a mode of `Camera360Screen` so that screen's opacity-fade behavior stays untouched.
 - **`CalibrationSettingsScreen.qml`** — Slide-in panel (opened from `Camera360Screen`'s gear icon) for live-tuning `SurroundView`'s stitching parameters; every edit writes to `CalibrationStore` (`calibrationstore.h`, persisted to `/data/calibration.json`, same load/save pattern as `OdoStore`) and re-warps the mesh immediately via `calibrationChanged()`, no restart needed. Fixed lens/render properties (image size, principal point, fisheye k1-k4, mesh grid resolution) aren't exposed here.
 - **`CalibrationParamRow.qml`** — Reusable row (label, live value, -/+ steppers with press-and-hold repeat) used throughout `CalibrationSettingsScreen`; touch-friendly for the small numeric steps calibration tuning needs.
+- **`PageIndicator.qml`** — Small reusable bottom dot row (active dot widens, LINE-design-system style) shown on the three swipeable screens (`CameraGridScreen`, `main.qml`, `DiagnosticScreen`) so the dots always match the physical left/right swipe layout. Informational only, not a tap target.
 - **`SimEngine.qml`** — **Not loaded at runtime.** Bundled only as a reference/potential `--demo` fallback; it predates `CanBus` and was the original simulated data source before real CAN integration. Speed wanders through city/suburban/highway/stop phases, RPM derived from gear ratios, automatic gear selection (P/R/N/1-7), fuel consumption, coolant temp, boost pressure (0-30 PSI). `CanBus::simulateTick()` reimplements this same phase logic directly in C++ so it can drive the live `sim` property — see [CAN Bus Integration](#can-bus-integration-syvecs-s7)
 
 ### Asset Files
@@ -83,8 +88,8 @@ The app consists of 9 QML files, all in `ultima-app/src/`:
 | `range.regular.ttf` | Font for odometer and boost PSI display |
 | `bahnschrift._semibold.ttf` | Bahnschrift SemiBold font for gear indicator |
 | `icon_oil_pressure.png`, `icon_check_engine.png`, `icon_battery.png`, `icon_coolant_warn.png`, `icon_low_beam.png`, `icon_high_beam.png`, `icon_axle_lift.png`, `icon_cruise.png` | ISO 7000-style dashboard warning icons (white on transparent) |
-| `icon_360.png` | 360-view tap target, centered at (280, 666); toggles `Camera360Screen` open/closed |
-| `simulated_cameras.png` | `Camera360Screen`'s whole-screen fallback art, shown when no camera feed is up (`car_360.png` is unused, kept in `qml.qrc` from an earlier version of this overlay) |
+| `icon_fuel_low.png` | Red fuel-pump badge shown in place of the normal fuel icon once `sim.lowFuelWarn` (fuel < 1/4 tank) |
+| `car_360.png` | `Camera360Screen`'s car-icon overlay — full 1600x720, car pre-centered on transparent background, drawn over the vehicle-mask hole `SurroundView`'s warp mesh leaves unpainted |
 
 The old single-image `background.png` face has been removed from the tree and
 `qml.qrc` — the Bavarian swap described above is complete, not in progress.
@@ -150,7 +155,7 @@ Read from SCal Datastreams → Generic CAN Transmit → Transmit Content. Frame 
 **Not on CAN2 in the current SCal config:**
 - `flvlA` (fuel level) — no Syvecs channel for this; now sourced from the MCE18 expander instead (see below), not SCal.
 - `sensorWarningLevel` — `checkEngine` currently derives from `limpMode` alone.
-- `mapMax` (boost, `0x614`/frame 21) — previously documented here as verified and wired to the boost gauge, but the xlsx built from `CAN2.png` (the source of truth for this mapping) shows frame 21 as all SPARE. Decode removed from `CanBus::decodeFrame()` pending re-verification against a current SCal Datastreams screenshot; boost gauge reads 0 until then.
+- `mapMax` (boost, `0x614`/frame 21) — previously documented here as verified and wired to the boost gauge, but the xlsx built from `CAN2.png` (the source of truth for this mapping) shows frame 21 as all SPARE. Decode removed from `CanBus::decodeFrame()`. The boost gauge isn't stuck at 0 waiting on this, though — it was rewired to `map1A` (`0x600` bytes 6-7, see the frame map above) instead, which *is* SCal-confirmed.
 
 **Not on CAN at all:** `driveMode` (no Syvecs channel exists, and no physical selector is known to exist in the car) is a real READ+NOTIFY property, but on real hardware it's only ever set to its default (`"SPORT"`) — nothing decodes it from a CAN frame or an MCE18 input. It's a 3-state QString, which doesn't fit a single digital input the way the MCE18-sourced booleans below do; wiring it (e.g. to a real drive-mode selector switch) is unstarted. The dev-build simulator (`simulateTick()`) is the only thing that ever changes it, for layout review.
 
@@ -165,11 +170,12 @@ instead of the ECU. Source: "CAN2 MCE18 Mapping.pdf" (CANchecked MCE18 manual, R
 come from the Syvecs stream instead (`0x605` slot 3, ManualAuto_U12, and `0x601`
 slot 1, cruiseState — see the frame map above).
 
-**Everything in this section is a datasheet default, not verified against this car**
+**Most of this section is a datasheet default, not verified against this car**
 — no MCE18 unit has been on the bench or candump'd yet. Treat frame IDs, byte order,
 and the analog protocol mode as assumptions to confirm before trusting a real
 reading, the same way `mapMax` above was a documented case of trusting an unverified
-mapping.
+mapping. The one exception: DIN0/DIN1/DIN7's static-level-vs-flasher-waveform
+question (see below) was confirmed 2026-08-18, ahead of the rest of this frame.
 
 - **TX Base ID**: `0x700` — the unit's datasheet default. Doesn't collide with the
   Syvecs frames (`0x600`-`0x614`), but this car's MCE18 unit hasn't been confirmed
@@ -184,13 +190,16 @@ mapping.
   cruiseState — see the frame map above), not this expander. DIN6 is
   deliberately left unassigned too: the datasheet reuses that same pin for its
   Frequency 1 input (`**TX Base ID+3`, "Frequency 1 - DIN6"), so it's kept free
-  rather than double-booked. DIN7 is `hazard` — treated the same as DIN0/DIN1
-  (`leftIndicator`/`rightIndicator`): the raw bit is assumed to already be the
-  on/off flasher waveform, not a static "switch pressed" level (unverified,
-  same as the rest of this frame — see `CanBus::decodeFrame()`'s `0x702` case
-  for what breaks if that assumption is wrong). Auto/Manual
-  (`transmissionAuto`) comes from the Syvecs stream instead (`0x605` slot 3,
-  ManualAuto_U12 — see the frame map above), not this expander.
+  rather than double-booked. DIN7 is `hazard`, treated the same as DIN0/DIN1
+  (`leftIndicator`/`rightIndicator`): **confirmed (2026-08-18) a static
+  "switch pressed" level** — on while the signal/hazard is engaged, off the
+  instant it's cancelled — not the flasher's own on/off waveform this doc
+  previously assumed. The dash's visible blink is synthesized in QML from a
+  shared clock instead (see `main.qml`'s `blinkTimer`), not read off the CAN
+  bit directly; camera overlays and the hazard latch bind straight to the raw
+  level with no hold timer. Auto/Manual (`transmissionAuto`) comes from the
+  Syvecs stream instead (`0x605` slot 3, ManualAuto_U12 — see the frame map
+  above), not this expander.
 
   | Bit | Signal |
   |---|---|
@@ -207,10 +216,11 @@ mapping.
   counts or pre-scaled 0-5000mV (the datasheet's own table shows both units without
   saying which is the power-on default). `CanBus::decodeFrame()` assumes raw
   0-1023 counts spanning the AIN's own 0-5000mV full scale (`kMce18AinRawMax` /
-  `kMce18AinFullScaleMv` in `canbus.cpp`). The fuel sender itself is 0V empty / 4V
-  full (linear, per sender spec) — narrower than the AIN's 0-5V range — so the
-  converted mV is then scaled again against `kFuelSenderFullScaleMv` (4000mV) to
-  get 0..1. Empty/full direction (low counts = empty) is assumed.
+  `kMce18AinFullScaleMv` in `canbus.cpp`). The fuel sender itself is 1V empty / 4V
+  full (linear, per sender spec) — narrower than the AIN's 0-5V range — so fuel
+  level is `(mv − kFuelSenderEmptyMv) / (kFuelSenderFullScaleMv − kFuelSenderEmptyMv)`
+  (1000mV/4000mV in `canbus.cpp`), not a plain ratio against full scale. Empty/full
+  direction (low counts = empty) is assumed.
 
 Needs, before trusting this on the road: `candump can0` with the MCE18 powered to
 confirm its actual configured base ID and analog protocol mode, and a known fuel
@@ -221,3 +231,5 @@ level (e.g. empty vs. full tank) to calibrate the AIN0 scaling.
 - `candump can0` (can-utils is included in the image) to watch raw traffic.
 - `ip -details link show can0` to check bitrate/link state.
 - `CanBus` logs `[canbus] ...` lines to stderr on connect/bind failures and reconnects — check `journalctl -u ultima-app` (BeaglePlay logs to journald, see `ultima-app.service`).
+- `main.cpp` polls for a handful of trigger files under `/tmp` every frame or so (dev/debug only, works over SSH on real hardware too, not just the dev-sim build): `/tmp/ultima-screenshot.request` (optionally containing an output path, default `/tmp/ultima-screenshot.png`) grabs a frame; `/tmp/ultima-camtest.request` containing `open`/`close`/`360open`/... drives the camera overlays without touching CAN; `/tmp/ultima-indicator.request` containing `left`/`right`/`hazard` toggles turn signals the same way the debug L/R/H keys do. Each trigger file is deleted after being read.
+- `CameraFeed` supports `ULTIMA_CAM_IMAGE_DIR` (env var) to serve real static photos instead of synthetic test bars from the fake mycam004m backend — useful for eyeballing `CameraView`'s mirror-view reprojection (`mirror.frag`) against real-world content instead of a test pattern.
