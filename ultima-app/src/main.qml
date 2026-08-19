@@ -765,6 +765,11 @@ Window {
 
     // Clock — mirrors the drive mode indicator's spot on the left side,
     // right-aligned against the mirror of its x=1087 left edge (center 800).
+    // Shows "--:--" instead of a real time until systemClock.timeIsValid()
+    // (see systemclock.h) — right after boot the system clock still holds
+    // its stale boot-default value until ultima-hwclock-load.service pulls
+    // the real time from the RTC, which otherwise flashes briefly (see
+    // beagleplay-falcon/NOTES.md "Dash clock doesn't persist a manual set").
     Text {
         id: clockText
         property date now: new Date()
@@ -773,7 +778,16 @@ Window {
         font.family: bahnschriftFont.name
         font.pixelSize: 28
         color: "white"
-        text: Qt.formatDateTime(now, "h:mm AP")
+        // Reads `now` unconditionally before branching — a ternary that
+        // only reads it in the true branch means QML never registers `now`
+        // as a dependency while timeIsValid() is false (its default right
+        // after boot), so the per-second Timer below would update `now`
+        // forever with nothing re-evaluating this binding to notice. Hit
+        // exactly this stuck-at-"--:--" symptom on a real reboot.
+        text: {
+            var t = now
+            return systemClock.timeIsValid() ? Qt.formatDateTime(t, "h:mm AP") : "--:--"
+        }
 
         Timer {
             interval: 1000

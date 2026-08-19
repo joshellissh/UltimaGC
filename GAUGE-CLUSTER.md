@@ -51,7 +51,10 @@ change as the app evolves and a stale copy is worse than no copy.
   (`SetTimeScreen.qml`) push a new wall-clock time to the kernel via
   `clock_settime()`, with a best-effort write-through to a battery-backed hardware
   RTC at `/dev/rtc0` if one is present (BeaglePlay has one, onboard BQ32002). No-op
-  on non-Linux dev builds.
+  on non-Linux dev builds. Also exposes `timeIsValid()`, which the dash clock
+  (`main.qml`) uses to show `--:--` instead of a stale boot-default time during the
+  brief post-boot window before the RTC's real time lands — see
+  `beagleplay-falcon/NOTES.md` "Dash clock doesn't persist a manual set".
 
 ### QML Files
 

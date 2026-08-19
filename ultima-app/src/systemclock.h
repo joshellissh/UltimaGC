@@ -23,6 +23,17 @@ public:
     // permission) or, on non-Linux dev builds, always — the host machine's
     // clock is never touched.
     Q_INVOKABLE bool setTime(int hour, int minute);
+
+    // False during the brief post-boot window where the system clock still
+    // holds its stale boot-default value rather than the BQ32002 RTC's real
+    // time (see beagleplay-falcon/NOTES.md "Dash clock doesn't persist a
+    // manual set" — ultima-hwclock-load.service hasn't won its race with
+    // ultima-app yet). Detected by reading /dev/rtc0 directly and comparing
+    // against the system clock — not by comparing against a build
+    // timestamp, which seemed simpler but isn't reliable (a build
+    // machine's own clock can drift; see systemclock.cpp). Always true on
+    // non-Linux dev builds.
+    Q_INVOKABLE bool timeIsValid() const;
 };
 
 #endif

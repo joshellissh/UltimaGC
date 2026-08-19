@@ -1393,6 +1393,44 @@ mid-unit — "Starting" logged under the stale boot-default time, "Finished"
 under the RTC-corrected one); `timedatectl` matched the RTC exactly with no
 network sync involved. Root-caused, fixed, and confirmed — not just built.
 
+**Follow-up (2026-08-19):** the "harmless cosmetic blip" above (dash briefly
+shows the stale boot-default time, e.g. 6:48 PM, before self-correcting)
+still visibly happened on hardware — decided it was worth masking on the
+display side rather than continuing to accept it, since that doesn't touch
+the boot-ordering tradeoff made above. Added `SystemClock::timeIsValid()`
+(`systemclock.h`/`.cpp`). `clockText` in `main.qml` shows `--:--` until it
+flips true, then shows the real time on the same per-second `Timer` tick
+that was already re-reading `new Date()`. No change to unit ordering or
+boot latency.
+
+First implementation compared the wall clock against this binary's own
+build time (`__DATE__`/`__TIME__`), on the theory that the stale
+boot-default is always earlier than build time and real time never is.
+**Deployed via the hot-deploy loop and immediately regressed to showing
+`--:--` permanently** — root cause: the Docker build container's clock had
+drifted ~5 hours ahead of real time (an OrbStack VM clock-drift case,
+likely from the Mac sleeping/waking; container read `22:38:52 UTC` against
+the board's actual, correct `17:38:33 UTC` at the same moment), so the
+embedded "build time" was itself hours in the future relative to real time
+— `timeIsValid()` couldn't flip true until the real clock caught up to that
+bogus future timestamp. The deeper problem wasn't the drift itself but the
+design: **no build machine's clock is trustworthy ground truth**, so
+comparing against one was never going to be reliable, drift or not.
+
+Fixed by reading `/dev/rtc0` directly instead — the same clock
+`ultima-hwclock-load.service` itself trusts, so it can't disagree with the
+thing that's supposed to correct the system clock in the first place.
+`timeIsValid()` now opens `/dev/rtc0`, `RTC_RD_TIME`-reads it, and compares
+against `time(nullptr)`; fails closed (reports invalid) if the device isn't
+there yet or the read fails, which correctly covers the brief window right
+after boot where the app is already running but `bq32k` hasn't registered
+`rtc0` yet. Re-deployed and confirmed via SSH: fresh `ultima-app` restart,
+system clock already RTC-correct, no `__DATE__`/`__TIME__` string left in
+the binary (`strings` confirms). Lesson for next time a "is this value
+sane" check is needed: prefer comparing against another value already
+proven live on the *target* device over anything baked in from the build
+side, even something as seemingly-safe as a compile timestamp.
+
 ## Glyph fix looked broken on hardware — wasn't Canvas, was stale sstate
 
 Separately, the glyph fix (see main session notes / git log for
@@ -1460,6 +1498,21 @@ Don't fight it by hand: the binary swap had already landed by that point
 systemd's own shutdown sequence remounts read-only as part of normal
 shutdown, succeeding where a live remount attempt didn't. Confirmed
 afterward: `findmnt` back to `ro`, binary md5 unchanged, service active.
+
+**Update (2026-08-19):** re-ran this loop for the dash-clock `--:--` fix
+(`systemclock.cpp`'s `timeIsValid()`) and hit `mount point is busy` on
+*both* directions again — first `remount,rw` (worked on retry), then
+`remount,ro` (didn't clear on retry this time). **This is the common case,
+not the rare one this section originally implied** — two-for-two sessions
+now. Also re-confirmed the `/tmp/ultima-app.new` disappearing-between-calls
+gotcha above: a diagnostic `ls` between the `scp` and the `mv` was enough to
+lose the staged file, so keep `scp` and the `mv` in the same immediate `ssh`
+call with nothing in between, every time, not just when convenient.
+`reboot`-as-fallback for the stuck `remount,ro` worked again, cleanly
+(`findmnt` back to `ro`, `md5sum` unchanged, service `active`, clean
+restart in the journal) — still the right move rather than fighting it by
+hand, but budget for needing it on essentially every hot-deploy, not as an
+edge case. Root cause of what's holding `/` open still not found.
 
 ## Hardware verification (2026-08-08) — done, working end to end
 
@@ -2119,11 +2172,19 @@ here simple, but don't put this image on a hostile network as-is.
 
 Practical notes:
 
-- **The host key changes whenever a card is reflashed** — `dropbearkey`
-  generates a fresh one on first boot, and the SD and eMMC systems both call
-  themselves `beagleplay-ti`. Pinning them makes every reflash produce
-  `REMOTE HOST IDENTIFICATION HAS CHANGED` and a hard refusal, so the scripts
-  pass `-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null`.
+- **The host key changes on every single boot, not just on reflash** —
+  originally thought this was a reflash-only thing (`dropbearkey` generating
+  a fresh one on first boot), but a hot-deploy session on 2026-08-19 hit
+  `REMOTE HOST IDENTIFICATION HAS CHANGED` twice from two plain `reboot`s of
+  the *same* card, with two different fingerprints. Means dropbear's host
+  key file isn't persisted anywhere writable under the read-only rootfs (see
+  "Read-only rootfs" below) — it's regenerated fresh into ephemeral storage
+  every boot, not just at first-boot-after-flash. Combined with the SD and
+  eMMC systems both calling themselves `beagleplay-ti`, pinning host keys is
+  pointless here. The scripts already pass
+  `-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null` for exactly
+  this reason — prefer that over a one-off `ssh-keygen -R` before every
+  connection, since "every boot" makes the manual version tedious fast.
 - `ssh root@beagleplay-ti.local 'sync; poweroff'` is the clean-shutdown path
   with no console attached. Given how many times unclean power-off has
   corrupted a rootfs on this board, this alone is worth having.
