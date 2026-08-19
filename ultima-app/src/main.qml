@@ -549,6 +549,7 @@ Window {
 
         CameraView {
             feed: cameraFeed3
+            mirrorViewSide: "left"
             anchors.fill: parent
             visible: !cameraFeed3.failed
         }
@@ -580,6 +581,7 @@ Window {
 
         CameraView {
             feed: cameraFeed4
+            mirrorViewSide: "right"
             anchors.fill: parent
             visible: !cameraFeed4.failed
         }

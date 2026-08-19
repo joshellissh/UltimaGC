@@ -3,6 +3,7 @@
 
 #include <QQuickFramebufferObject>
 #include <QMetaObject>
+#include <QString>
 
 #include "camerafeed.h"
 
@@ -39,6 +40,14 @@ class CameraView : public QQuickFramebufferObject
 {
     Q_OBJECT
     Q_PROPERTY(CameraFeed *feed READ feed WRITE setFeed NOTIFY feedChanged)
+    // "" (default) = raw passthrough, blit.vert/blit.frag, unchanged from
+    // before this property existed — what CameraGridScreen wants, so it
+    // never sets this. "left"/"right" = reproject through mirror.frag
+    // instead, using the matching placeholder yaw/pitch/roll/FOV constants
+    // in cameraview.cpp (see that file for where the numbers came from —
+    // found empirically against a hand-sketched target-FOV diagram, not a
+    // real measured mount). Any other value falls back to raw passthrough.
+    Q_PROPERTY(QString mirrorViewSide READ mirrorViewSide WRITE setMirrorViewSide NOTIFY mirrorViewSideChanged)
 
 public:
     explicit CameraView(QQuickItem *parent = nullptr);
@@ -46,14 +55,19 @@ public:
     CameraFeed *feed() const { return m_feed; }
     void setFeed(CameraFeed *feed);
 
+    QString mirrorViewSide() const { return m_mirrorViewSide; }
+    void setMirrorViewSide(const QString &side);
+
     Renderer *createRenderer() const override;
 
 signals:
     void feedChanged();
+    void mirrorViewSideChanged();
 
 private:
     CameraFeed *m_feed = nullptr;
     QMetaObject::Connection m_frameConnection;
+    QString m_mirrorViewSide;
 };
 
 #endif
