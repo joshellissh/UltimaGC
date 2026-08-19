@@ -232,6 +232,34 @@ int main(int argc, char *argv[])
             }
         });
         camTestTimer->start(250);
+
+        // Debug-only: toggles turn-signal/hazard indicators from
+        // /tmp/ultima-indicator.request ("left"/"right"/"hazard") — same
+        // polled-file pattern as the screenshot/camtest triggers above,
+        // needed because this board has no L/R/H key to press over SSH
+        // (see main.qml's Keys.onPressed). These are the same
+        // Q_INVOKABLE toggles that key handler calls, so a second
+        // trigger with the same command toggles it back off, just like a
+        // second keypress would.
+        auto *indicatorTestTimer = new QTimer(&app);
+        QObject::connect(indicatorTestTimer, &QTimer::timeout, &canBus, [&canBus]() {
+            QFile trigger(QStringLiteral("/tmp/ultima-indicator.request"));
+            if (!trigger.exists())
+                return;
+            QString cmd;
+            if (trigger.open(QIODevice::ReadOnly)) {
+                cmd = QString::fromUtf8(trigger.readAll()).trimmed();
+                trigger.close();
+            }
+            QFile::remove(QStringLiteral("/tmp/ultima-indicator.request"));
+            if (cmd == QStringLiteral("left"))
+                canBus.debugToggleLeftIndicator();
+            else if (cmd == QStringLiteral("right"))
+                canBus.debugToggleRightIndicator();
+            else if (cmd == QStringLiteral("hazard"))
+                canBus.debugToggleHazard();
+        });
+        indicatorTestTimer->start(250);
     }
 
     return app.exec();
