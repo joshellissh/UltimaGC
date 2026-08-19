@@ -8,10 +8,13 @@
 # see meta-ultima-beagleplay-src/recipes-ultima/ultima-app/ultima-app.bb,
 # which copies it into WORKDIR before building rather than building in
 # place, so this mount can stay read-only and the shared source tree is
-# never touched by the Yocto build. Same pattern for ../../mycam004m (see
-# recipes-kernel/mycam004m/mycam004m.bb) — a separate repo, sibling of this
-# UltimaGC checkout, holding the mycam004m V4L2 camera driver (real +
-# fake/mock backends).
+# never touched by the Yocto build. Same pattern for ../test/avm-benchmark
+# (see recipes-avm/avm-benchmark/avm-benchmark.bb) — a standalone
+# CMake/Qt5 bitbake target, not part of tisdk-base-image's IMAGE_INSTALL,
+# built with `./build.sh avm-benchmark`. Same pattern again for
+# ../../mycam004m (see recipes-kernel/mycam004m/mycam004m.bb) — a separate
+# repo, sibling of this UltimaGC checkout, holding the mycam004m V4L2
+# camera driver (real + fake/mock backends).
 #
 # Usage: ./build.sh [bitbake-target]   (defaults to tisdk-base-image)
 
@@ -21,6 +24,7 @@ cd "$(dirname "$0")"
 IMAGE=falcon-yocto:latest
 VOLUME=falcon-yocto-build
 ULTIMA_APP_SRC="$(cd ../ultima-app/src && pwd)"
+AVM_BENCHMARK_SRC="$(cd ../test/avm-benchmark && pwd)"
 MYCAM004M_SRC="$(cd ../../mycam004m && pwd)"
 TARGET="${1:-tisdk-base-image}"
 
@@ -53,6 +57,7 @@ TTY_ARGS=()
 docker run --rm ${TTY_ARGS[@]+"${TTY_ARGS[@]}"} --cap-add SYS_PTRACE \
   -v "$VOLUME:/home/builder/yocto" \
   -v "$ULTIMA_APP_SRC:/home/builder/yocto/ultima-app-src:ro" \
+  -v "$AVM_BENCHMARK_SRC:/home/builder/yocto/avm-benchmark-src:ro" \
   -v "$MYCAM004M_SRC:/home/builder/yocto/mycam004m-src:ro" \
   "$IMAGE" bash -c "
     source /home/builder/yocto/tisdk/sources/oe-core/oe-init-build-env /home/builder/yocto/tisdk/build

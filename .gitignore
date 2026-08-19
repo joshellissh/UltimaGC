@@ -9,3 +9,4 @@ beagleplay-falcon/boot-logs/
 **/.qtcreator/
 .tmp.driveupload/
 test/
+beagleplay-falcon/meta-ultima-beagleplay-src/recipes-avm/
