@@ -337,14 +337,15 @@ Window {
         mirror: true
     }
 
-    // Debug-only keyboard trigger for the turn signals/hazards/gear —
-    // functional on every build, real hardware included if a keyboard
-    // happens to be plugged in (see canbus.h's Q_INVOKABLE comments). L/R
-    // toggle sim.leftIndicator/rightIndicator via CanBus's
+    // Debug-only keyboard trigger for the turn signals/hazards/gear/
+    // headlights — functional on every build, real hardware included if a
+    // keyboard happens to be plugged in (see canbus.h's Q_INVOKABLE
+    // comments). L/R toggle sim.leftIndicator/rightIndicator via CanBus's
     // debugToggleLeftIndicator()/debugToggleRightIndicator(); H toggles
     // sim.hazard via debugToggleHazard(); Up/Down step sim.gear one position
-    // at a time through "PRN1234567" via debugGearUp()/debugGearDown().
-    // Window itself can't host
+    // at a time through "PRN1234567" via debugGearUp()/debugGearDown();
+    // Space steps sim.lowBeams/highBeams through off -> low -> high -> off
+    // via debugCycleHeadlights(). Window itself can't host
     // Keys.onPressed (that attached property is Item-only, Window isn't an
     // Item), hence this focused child Item covering the whole dash.
     Item {
@@ -372,6 +373,7 @@ Window {
         property double lastHazardPressMs: 0
         property double lastGearUpPressMs: 0
         property double lastGearDownPressMs: 0
+        property double lastHeadlightsPressMs: 0
         Keys.onPressed: (event) => {
             if (event.isAutoRepeat) return
             var now = Date.now()
@@ -399,6 +401,11 @@ Window {
                 if (now - lastGearDownPressMs < 250) return
                 lastGearDownPressMs = now
                 sim.debugGearDown()
+                event.accepted = true
+            } else if (event.key === Qt.Key_Space) {
+                if (now - lastHeadlightsPressMs < 250) return
+                lastHeadlightsPressMs = now
+                sim.debugCycleHeadlights()
                 event.accepted = true
             }
         }

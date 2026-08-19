@@ -151,6 +151,18 @@ public:
     Q_INVOKABLE void debugGearUp();
     Q_INVOKABLE void debugGearDown();
 
+    // Debug-only keyboard trigger (see main.qml's Space Keys.onPressed) —
+    // steps through off -> low beams -> high beams -> off, one state at a
+    // time, mutually exclusive (never both true at once) rather than high
+    // beams adding onto low beams. On dev/simulate builds, the first press
+    // latches m_simHeadlightsManualOverride so simulateTick()'s low-beam
+    // auto-toggle self-test (see its "Headlights" comment) stops overwriting
+    // m_lowBeams from then on — same reasoning as debugGearUp()/
+    // debugGearDown() and m_simGearManualOverride. On real hardware there's
+    // nothing to latch against: m_lowBeams/m_highBeams only otherwise change
+    // via decodeFrame(), same as debugToggleLeftIndicator() et al.
+    Q_INVOKABLE void debugCycleHeadlights();
+
 public slots:
     // Flush in-memory odometer to OdoStore and persist.
     void save();
@@ -252,6 +264,7 @@ private:
     double m_simGearCycleTimer = 0.0; // seconds remaining before advancing the gear cycle
     int m_simGearCycleIndex = 0;      // index into the R/N/P/1..7 cycle
     bool m_simGearManualOverride = false; // set by debugGearUp()/debugGearDown(); permanently stops the auto-cycle
+    bool m_simHeadlightsManualOverride = false; // set by debugCycleHeadlights(); permanently stops the low-beam auto-toggle
     bool m_simOilFault = false;       // forces a low-oil-pressure dip to exercise the warn icon
     bool m_simBattFault = false;      // forces a low-voltage dip to exercise the warn icon
 #endif

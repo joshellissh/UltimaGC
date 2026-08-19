@@ -381,9 +381,13 @@ void CanBus::simulateTick()
     m_simElapsedS += dt;
 
     // Headlights: toggle low beams on/off every 2s so the car art and
-    // low-beam icon can be exercised without real CAN hardware.
-    bool lowBeams = std::fmod(m_simElapsedS, 4.0) < 2.0;
-    if (lowBeams != m_lowBeams) { m_lowBeams = lowBeams; emit lowBeamsChanged(); }
+    // low-beam icon can be exercised without real CAN hardware. Skipped for
+    // good once debugCycleHeadlights() sets m_simHeadlightsManualOverride —
+    // see canbus.h's comment on it (same pattern as the gear auto-cycle).
+    if (!m_simHeadlightsManualOverride) {
+        bool lowBeams = std::fmod(m_simElapsedS, 4.0) < 2.0;
+        if (lowBeams != m_lowBeams) { m_lowBeams = lowBeams; emit lowBeamsChanged(); }
+    }
 
     // Cruise control: always engaged in the simulator so the icon can be
     // exercised without real CAN hardware.
@@ -556,4 +560,25 @@ void CanBus::debugGearDown()
     m_simGearManualOverride = true;
 #endif
     if (newGear != m_gear) { m_gear = newGear; emit gearChanged(); }
+}
+
+// off -> low -> high -> off, mutually exclusive (see canbus.h's comment on
+// why this doesn't layer high beams on top of low beams).
+void CanBus::debugCycleHeadlights()
+{
+#if !defined(__linux__) || defined(ULTIMA_SIMULATE)
+    m_simHeadlightsManualOverride = true;
+#endif
+    bool newLow = m_lowBeams;
+    bool newHigh = m_highBeams;
+    if (!m_lowBeams && !m_highBeams) {
+        newLow = true;
+    } else if (m_lowBeams) {
+        newLow = false;
+        newHigh = true;
+    } else {
+        newHigh = false;
+    }
+    if (newLow != m_lowBeams) { m_lowBeams = newLow; emit lowBeamsChanged(); }
+    if (newHigh != m_highBeams) { m_highBeams = newHigh; emit highBeamsChanged(); }
 }
