@@ -42,7 +42,7 @@ Window {
         if (open) cameraGridScreen.open()
         else cameraGridScreen.close()
     }
-    // Routed through toggleCamera360() (defined near icon360 below) rather
+    // Routed through toggleCamera360() (defined below) rather
     // than driving camera360Screen directly — a plain open()/close() here
     // would leave rearCameraScreen out of sync with reverseGear (both open
     // at once, or the rear cam never coming back) whenever this fires
@@ -168,11 +168,20 @@ Window {
     // the asset's actual alpha bounding box and positioned at the matching
     // (x, y) offset instead — pixel-identical result, much smaller quad.
     // Same fix already applied to boostRing above for the same reason.
+    // Tapping the car — either lights state — opens the 360 surround view
+    // (see toggleCamera360() below). This used to be a dedicated icon; now
+    // the car artwork itself is the tap target, so both car_lights_off and
+    // car_lights_on (below) carry the same MouseArea.
     Image {
         x: 627; y: 479
         width: 346; height: 128
         source: "qrc:/car_lights_off.png"
         visible: !sim.lowBeams && !sim.highBeams
+
+        MouseArea {
+            anchors.fill: parent
+            onClicked: toggleCamera360()
+        }
     }
     Image {
         x: 569; y: 479
@@ -186,6 +195,11 @@ Window {
         // it just means the very first boot with lights already on could
         // show a blank layer for a frame or two until the decode finishes.
         asynchronous: true
+
+        MouseArea {
+            anchors.fill: parent
+            onClicked: toggleCamera360()
+        }
     }
 
     // Periodic odometer save (every 30s) — CanBus owns integration and pushes
@@ -497,19 +511,19 @@ Window {
         onRunningChanged: if (running) _warnFlash = true
     }
 
-    // Axle lift indicator — centered below the gear readout at (800, 558)
+    // Axle lift indicator — centered at (445, 680)
     Image {
-        x: 800 - width / 2; y: 558 - height / 2
+        x: 445 - width / 2; y: 680 - height / 2
         source: "qrc:/icon_axle_lift.png"
         visible: startupActive ? startupFlash : sim.axleLift
     }
 
-    // 360 view icon — centered at (280, 666). Toggles the Camera360Screen
-    // overlay; z is above that overlay (600) so the icon stays the tap
-    // target that closes it, rather than getting covered once it's open.
-    // Hidden while the diagnostic screen or camera grid screen is
-    // open/opening — it lives at the same on-screen spot as diagnostic
-    // content, and it's the wrong action to expose over either screen anyway.
+    // Opens/closes the Camera360Screen overlay — called by car_lights_off's
+    // MouseArea below to open, and by Camera360Screen's closeRequested
+    // (emitted on a tap anywhere while it's open) to close. Kept as one
+    // toggle function, both routed through it, so the reverse-gear
+    // interaction below stays a single code path regardless of which
+    // direction triggered it.
     //
     // While reverseGear has RearCameraScreen up, this acts as an override
     // rather than a plain toggle: opening Camera360Screen hides the rear
@@ -530,27 +544,11 @@ Window {
         }
     }
 
-    Image {
-        id: icon360
-        x: 280 - width / 2; y: 666 - height / 2
-        z: 700
-        visible: !diagnosticScreen.isOpen && !cameraGridScreen.isOpen
-        source: "qrc:/icon_360.png"
-        opacity: icon360Area.pressed ? 0.6 : 1.0
-
-        MouseArea {
-            id: icon360Area
-            anchors.fill: parent
-            anchors.margins: -10
-            onClicked: toggleCamera360()
-        }
-    }
-
     // Page indicator — bottom center, shows main as the middle of the
     // 3-screen swipe layout (camera grid left, diagnostics right). Hidden
-    // while either overlay screen is open/opening, same as icon360 above —
-    // it lives at a spot those screens' own indicators cover once open, and
-    // showing it mid-swipe would double up with the incoming screen's dots.
+    // while either overlay screen is open/opening — it lives at a spot
+    // those screens' own indicators cover once open, and showing it
+    // mid-swipe would double up with the incoming screen's dots.
     PageIndicator {
         anchors.horizontalCenter: parent.horizontalCenter
         y: 696
@@ -866,17 +864,28 @@ Window {
         id: cameraGridScreen
     }
 
-    // 360-degree camera view — opened/closed only by tapping icon360 above;
-    // reverse gear used to auto-open this too, but a real backup camera
-    // shows the rear camera alone, not a stitched surround view, so reverse
-    // now drives RearCameraScreen below instead. Stacked above the time-set
-    // overlay; icon360 itself sits above this.
+    // 360-degree camera view — opened by tapping car_lights_off above,
+    // closed by tapping anywhere on the overlay itself (its closeRequested
+    // signal, handled below). Reverse gear used to auto-open this too, but
+    // a real backup camera shows the rear camera alone, not a stitched
+    // surround view, so reverse now drives RearCameraScreen below instead.
+    // Stacked above the time-set overlay.
     Camera360Screen {
         id: camera360Screen
     }
 
+    // Routes a tap-to-close on the 360 overlay through toggleCamera360()
+    // rather than letting Camera360Screen close itself directly — it's the
+    // only place that knows to hand back to RearCameraScreen if reverseGear
+    // is still active, and this keeps that hand-back in the same
+    // synchronized cross-fade a driver-initiated close always had.
+    Connections {
+        target: camera360Screen
+        function onCloseRequested() { toggleCamera360() }
+    }
+
     // Single rear-camera view — auto-opened/closed on reverse gear, like a
-    // real backup camera. toggleCamera360() (see icon360 above) is what
+    // real backup camera. toggleCamera360() (see above) is what
     // actually keeps this and camera360Screen mutually exclusive when the
     // driver swaps between them mid-reverse; declared after camera360Screen
     // here only as a fallback so the more relevant view still paints on top

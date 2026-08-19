@@ -7,8 +7,8 @@ import Ultima 1.0
 // screen instead of Camera360Screen. Shows cameraFeed2 raw (the "rear" feed
 // — see Camera360Screen.qml's [front, rear, left, right] feeds-order comment
 // for why index 1, cameraFeed2, is rear). Camera360Screen itself is
-// unchanged and still reachable manually via icon360 for the full 4-camera
-// surround view.
+// unchanged and still reachable manually by tapping car_lights_off for the
+// full 4-camera surround view.
 Item {
     id: root
     anchors.fill: parent

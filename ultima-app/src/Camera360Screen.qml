@@ -1,9 +1,9 @@
 import QtQuick 2.15
 import Ultima 1.0
 
-// Full-screen camera overlay, opened/closed by tapping the 360 icon on the
-// main dash (see main.qml's icon360) or automatically on reverse gear (see
-// main.qml's reverseGear). Shows the 4 feeds from the mycam004m driver
+// Full-screen camera overlay, opened by tapping car_lights_off on the main
+// dash and closed by tapping anywhere on this overlay (see main.qml's
+// toggleCamera360()). Shows the 4 feeds from the mycam004m driver
 // (cameraFeed1..cameraFeed4 context properties, see main.cpp) stitched into
 // one top-down birds-eye view via SurroundView (surroundview.h) — a
 // precomputed per-camera fisheye/ground-plane warp mesh + feather blend,
@@ -16,7 +16,14 @@ import Ultima 1.0
 Item {
     id: root
     anchors.fill: parent
-    z: 600  // above SetTimeScreen (500); icon360 in main.qml sits higher still so it stays the tap target that closes this
+    z: 600  // above SetTimeScreen (500)
+
+    // Emitted by the backdrop MouseArea below on a tap anywhere while open
+    // (except over the calibration panel, which owns its own touches).
+    // main.qml routes this through toggleCamera360() rather than this file
+    // closing itself directly — only main.qml knows whether reverseGear
+    // needs RearCameraScreen handed back.
+    signal closeRequested()
 
     // Driven by open()/close() rather than a plain visible flag, so the
     // whole overlay (backdrop + grid + placeholder, via opacity inheritance)
@@ -89,9 +96,15 @@ Item {
         calibrationScreen.close()
     }
 
-    // Swallow touches to the dash underneath while open.
+    // Swallow touches to the dash underneath while open, and treat any tap
+    // as a request to close. Disabled while the calibration panel is open
+    // so a tap beside that (partial-width, slide-in) panel doesn't yank the
+    // whole surround view away out from under it — it has its own CLOSE
+    // button for that.
     MouseArea {
         anchors.fill: parent
+        enabled: !calibrationScreen.visible
+        onClicked: closeRequested()
     }
 
     Rectangle {
@@ -135,8 +148,8 @@ Item {
     // SetTimeScreen.qml's StepButton, which hit the identical problem for
     // its up/down triangles) — confirmed the hard way here too, a "−" step
     // button first drew as a missing-glyph box on real hardware. No PNG
-    // asset exists yet in qml.qrc's set (icon_360.png etc.) either — a
-    // simple 3-bar "menu" mark instead, swappable for a real icon later the
+    // asset exists yet in qml.qrc's set for this either — a simple 3-bar
+    // "menu" mark instead, swappable for a real icon later the
     // same way defaultCalibration()'s placeholder numbers are meant to be
     // swapped for real measured ones. Hidden once the panel itself is open
     // (it has its own CLOSE button) and while showPlaceholder (nothing live
