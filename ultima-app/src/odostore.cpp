@@ -7,7 +7,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-static const double DEFAULT_TOTAL_ODO = 2347.0;
+static const double DEFAULT_TOTAL_ODO = 0.0;
 static const double DEFAULT_TRIP_ODO = 0.0;
 
 OdoStore::OdoStore(const QString &path, QObject *parent)

@@ -3148,3 +3148,24 @@ backup→restore round-trip itself is still unproven** on this hardware. Next
 reflash: write a marker file to `/data` first and confirm both the "backed
 up" log line and the marker's survival, to actually exercise the code path
 this was written for instead of its fallback.
+
+## Odometer reset to 0 (2026-08-19)
+
+Requested directly (not tied to any bug): reset the total odometer to 0,
+including the hardcoded fallback, not just the persisted value — so a
+future lost/corrupted `/data/odometer.json` (see the eMMC-wipe incident
+just above) reverts to 0 instead of reviving `2347.0`. Worth noting the
+`2347.0` being replaced was already itself the fallback default, not a
+live-tracked real value — per that same incident, the actual real-world
+odometer reading was lost in an earlier reflash, before the backup/restore
+fix existed. Nothing genuine was discarded here, just an old placeholder.
+
+Changed `DEFAULT_TOTAL_ODO` in `odostore.cpp` from `2347.0` to `0.0`, hot-
+deployed via the loop above, and reset the live value using the safe
+sequence "Odometer-persistence correctness test" documents further up this
+file: `systemctl stop ultima-app` *before* touching `/data/odometer.json`,
+not while it's running — otherwise the app's own SIGTERM-triggered save
+overwrites a live edit with its stale in-memory value on the way down.
+Wrote `{"totalOdo":0,"tripOdo":0}`, swapped the binary, `systemctl start`,
+confirmed via journal: `OdoStore: saved totalOdo=0.0 tripOdo=0.0` on the
+next 30s autosave, file contents matching.

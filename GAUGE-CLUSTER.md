@@ -31,7 +31,9 @@ change as the app evolves and a stale copy is worse than no copy.
   yet).
 - **`odostore.h` / `odostore.cpp`** — `OdoStore` is a `QObject` with `totalOdo` and
   `tripOdo` properties. Reads `/data/odometer.json` on construction (defaults to
-  2347.0 / 0.0 if missing). `save()` slot writes JSON. `main.qml`'s periodic save
+  0.0 / 0.0 if missing — was 2347.0 / 0.0 until the odometer was reset
+  2026-08-19, see `beagleplay-falcon/NOTES.md`). `save()` slot writes JSON.
+  `main.qml`'s periodic save
   timer calls `sim.save()`, which is `CanBus::save()` — it flushes into `OdoStore`
   before persisting (see below).
 - **`canbus.h` / `canbus.cpp`** — `CanBus` is the live gauge data source, exposed to
