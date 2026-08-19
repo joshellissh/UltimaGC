@@ -169,13 +169,13 @@ Window {
     // (x, y) offset instead — pixel-identical result, much smaller quad.
     // Same fix already applied to boostRing above for the same reason.
     Image {
-        x: 627; y: 409
+        x: 627; y: 479
         width: 346; height: 128
         source: "qrc:/car_lights_off.png"
         visible: !sim.lowBeams && !sim.highBeams
     }
     Image {
-        x: 569; y: 409
+        x: 569; y: 479
         width: 404; height: 165
         source: "qrc:/car_lights_on.png"
         visible: sim.lowBeams || sim.highBeams
@@ -697,12 +697,12 @@ Window {
     }
 
     // Odometer — "ODO  x mi", right-aligned with top-right corner pinned
-    // at (788, 599) (x recomputed from width on every text change) so the
+    // at (788, 651) (x recomputed from width on every text change) so the
     // right edge stays put as the digit count grows.
     Text {
         id: odoText
         x: 788 - width
-        y: 599
+        y: 651
         font.family: rangeFont.name
         font.pixelSize: 24
         color: "white"
