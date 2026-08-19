@@ -19,6 +19,11 @@ Window {
     property real startupFrac: 0
     property bool startupFlash: false
 
+    // Headlight dimming — low/high beams on darkens the whole dash by this
+    // fraction, like a real cluster's night mode. Configurable knob, not a
+    // hardcoded constant, since the right amount is a tuning call.
+    property real headlightDimAmount: 0.4
+
     // Boot splash simulation — dev-build only, opt-in via ULTIMA_SPLASH_IMAGE
     // (set by `scripts/dev-build.sh --boot`), empty/unset otherwise. Mimics
     // the on-target timeline from beagleplay-falcon/NOTES.md's "Boot splash
@@ -930,6 +935,21 @@ Window {
         } else {
             rearCameraScreen.close()
         }
+    }
+
+    // Headlight dim overlay — a single full-screen translucent black
+    // Rectangle is the cheapest way to darken everything under it: one
+    // extra alpha-blended quad for the GPU compositor (eglfs_kms) per
+    // frame, vs. re-deriving a dimmed color per element across every
+    // screen. Stacked above every screen (including camera/diagnostic
+    // overlays) so nothing escapes it, but below the FPS overlay and boot
+    // splash so debug chrome and the boot handoff always stay full-bright.
+    Rectangle {
+        anchors.fill: parent
+        color: "black"
+        z: 8000
+        opacity: (sim.lowBeams || sim.highBeams) ? headlightDimAmount : 0
+        visible: opacity > 0
     }
 
     // FPS overlay — top-left corner, above every screen this cluster shows
