@@ -32,6 +32,15 @@ out vec4 fragColor;
 
 void main() {
     vec2 ndc = vTexCoord * 2.0 - 1.0;
+    // Horizontal flip: rotatedBasis() in cameraview.cpp only re-aims the
+    // virtual camera (a pure rotation can't change handedness), so without
+    // this the reprojection reads as a plain camera crop -- car's own
+    // fender toward the outer edge of the overlay. A real side mirror
+    // reflects: fender toward the INNER edge (toward the gauge cluster's
+    // center), open road toward the outer edge. Confirmed against both
+    // sides' overlays on the macOS dev build (2026-08-19) with real
+    // fisheye reference frames before locking this in.
+    ndc.x = -ndc.x;
     vec3 rayVirtual = vec3(ndc.x * uTanHalfHFov, ndc.y * uTanHalfVFov, 1.0);
     vec3 rayPhysical = rayVirtual.x * uRight + rayVirtual.y * uUp + rayVirtual.z * uForward;
 
