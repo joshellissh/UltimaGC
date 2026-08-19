@@ -122,6 +122,12 @@ private:
     // logic can be exercised without a capture card.
     QTimer m_simTimer;
     double m_simPhase = 0.0;
+    // Dev-only real-photo override (ULTIMA_CAM_IMAGE_DIR) — see
+    // simulateTick()'s comment in the .cpp. Loaded at most once per
+    // instance; null means "unset, missing, or failed to decode", in
+    // which case simulateTick() falls through to the procedural bars.
+    QImage m_simStaticImage;
+    bool m_simStaticImageLoadAttempted = false;
 #endif
 };
 

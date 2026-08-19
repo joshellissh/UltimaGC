@@ -403,6 +403,32 @@ void CameraFeed::simulateTick()
         emit formatChanged();
     }
 
+    // Dev-only override, same idea as main.qml's ULTIMA_SPLASH_IMAGE: if
+    // ULTIMA_CAM_IMAGE_DIR is set, show a real static photo
+    // (<dir>/<camN>.png, camN taken from m_device's last path component,
+    // e.g. "cam3") instead of the bars below -- lets the macOS/non-Linux
+    // build be pointed at the same real reference frames the on-target
+    // fake driver serves (see ~/code/mycam004m/tools/gen_fake_frames.py),
+    // without needing that Linux-only V4L2 path compiled in. Loaded once
+    // and cached; unset/missing/undecodable all fall through to the bars.
+    if (!m_simStaticImageLoadAttempted) {
+        m_simStaticImageLoadAttempted = true;
+        const QString dir = qEnvironmentVariable("ULTIMA_CAM_IMAGE_DIR");
+        if (!dir.isEmpty()) {
+            const QString camId = m_device.section(QLatin1Char('/'), -1);
+            QImage img(dir + QLatin1Char('/') + camId + QStringLiteral(".png"));
+            if (!img.isNull())
+                m_simStaticImage = img.scaled(m_frameWidth, m_frameHeight,
+                                               Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        }
+    }
+    if (!m_simStaticImage.isNull()) {
+        m_frame = m_simStaticImage;
+        setStreaming(true);
+        emit frameReady();
+        return;
+    }
+
     m_simPhase += 4.0;
     QImage frame(m_frameWidth, m_frameHeight, QImage::Format_RGB32);
     QPainter p(&frame);
