@@ -19,6 +19,32 @@ Window {
     property real startupFrac: 0
     property bool startupFlash: false
 
+    // Splash-to-cluster intro: plays once at launch, after splashDone (see
+    // below) — i.e. immediately on real hardware, or after the dev-only
+    // boot-splash simulation if that's active. Shows splash_screen.png
+    // (the same art beagleplay-falcon's pre-Qt ultima-splash already
+    // painted to the framebuffer) with splash_car_start.png overlaid at
+    // the exact offset it occupies within that image — confirmed by
+    // pixel-diffing the two source PNGs, not eyeballed — so Qt's first
+    // frame is pixel-identical to what was already on screen and the
+    // fbdev-to-eglfs_kms modeset handoff stays invisible. introFrac then
+    // drives everything: the splash background fades out while the car
+    // cutout shrinks/moves from its splash position onto car_lights_off's
+    // own alpha-bbox rect (627,479,346x128, from that Image below) and
+    // fades away, handing off to the real (unlit) car artwork already
+    // sitting underneath the whole time. Gates the self-test sweep further
+    // below so it still runs after, unchanged.
+    readonly property real introCarStartX: 262
+    readonly property real introCarStartY: 167
+    readonly property real introCarStartW: 1104
+    readonly property real introCarStartH: 364
+    readonly property real introCarEndX: 627
+    readonly property real introCarEndY: 479
+    readonly property real introCarEndW: 346
+    readonly property real introCarEndH: 128
+    property bool introTransitionDone: false
+    property real introFrac: 0
+
     // Headlight dimming — low/high beams on darkens the whole dash by this
     // fraction, like a real cluster's night mode. Configurable knob, not a
     // hardcoded constant, since the right amount is a tuning call.
@@ -70,6 +96,12 @@ Window {
 
     SequentialAnimation {
         running: splashDone
+        NumberAnimation { target: root; property: "introFrac"; to: 1; duration: 1000; easing.type: Easing.InOutQuad }
+        PropertyAction { target: root; property: "introTransitionDone"; value: true }
+    }
+
+    SequentialAnimation {
+        running: splashDone && introTransitionDone
         PropertyAction { target: root; property: "startupFlash"; value: true }
         NumberAnimation { target: root; property: "startupFrac"; to: 1; duration: 1000; easing.type: Easing.OutQuad }
         PauseAnimation { duration: 200 }
@@ -204,6 +236,43 @@ Window {
         MouseArea {
             anchors.fill: parent
             onClicked: toggleCamera360()
+        }
+    }
+
+    // Splash-to-cluster intro overlay — see introFrac/introTransitionDone
+    // above for the timing/rationale. z:8500 sits above the dash (default
+    // z) and the headlight dim layer (8000) but below the FPS counter
+    // (9000) and dev-only boot-splash simulation (9999), matching those
+    // layers' existing "debug chrome always wins" ordering. Hidden outright
+    // once done rather than just transparent, so it stops costing paint
+    // time for the rest of the run.
+    Item {
+        id: introOverlay
+        anchors.fill: parent
+        z: 8500
+        visible: !introTransitionDone
+
+        Image {
+            anchors.fill: parent
+            source: "qrc:/splash_screen.png"
+            opacity: 1 - root.introFrac
+        }
+
+        Image {
+            id: introCar
+            x: introCarStartX + (introCarEndX - introCarStartX) * root.introFrac
+            y: introCarStartY + (introCarEndY - introCarStartY) * root.introFrac
+            width: introCarStartW
+            height: introCarStartH
+            source: "qrc:/splash_car_start.png"
+            opacity: 1 - root.introFrac
+
+            transform: Scale {
+                origin.x: 0
+                origin.y: 0
+                xScale: 1 + (introCarEndW / introCarStartW - 1) * root.introFrac
+                yScale: 1 + (introCarEndH / introCarStartH - 1) * root.introFrac
+            }
         }
     }
 

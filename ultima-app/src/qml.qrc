@@ -15,6 +15,8 @@
         <file>background_overlay.png</file>
         <file>car_lights_off.png</file>
         <file>car_lights_on.png</file>
+        <file>splash_screen.png</file>
+        <file>splash_car_start.png</file>
         <file>needle.png</file>
         <file>left_indicator.png</file>
         <file>range.regular.ttf</file>
