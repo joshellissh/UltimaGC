@@ -1,55 +1,24 @@
 IMAGE_INSTALL:append:beagleplay-ti = " ultima-app ultima-splash can-utils mmc-utils ultima-hwclock-load ultima-data-mount volatile-binds"
 
-# WiFi AP (2026-08-18): hostapd for a standalone 5GHz AP on the onboard
-# WL1807 (driver/hardware side unchanged, see ultima-wifi.cfg — AP mode is
-# already exposed by mac80211/wlcore with no extra kernel config, same
-# CFG80211/MAC80211/RFKILL/WLCORE/WLCORE_SDIO/WL18XX as STA used) + the
-# WL18xx firmware blob it needs either way. Replaces the wpa-supplicant
-# STA-to-Skynet setup from the same day (see git history) — WL1807 is a
-# single-radio chip, confirmed dual-band != dual-radio (TI's own WL1837 E2E
-# forum thread documents the throughput hit from time-slicing a single
-# radio across channels in "multichannel" AP+STA mode), so this board being
-# an AP and it being a Skynet client were never both available at once.
-# AP-only was the explicit choice made over a runtime toggle between modes.
+# WiFi client mode (2026-08-19): reverted from the standalone-AP +
+# captive-portal setup (see git history and NOTES.md "WiFi AP" /
+# "Captive portal + phone settings UI" for the full story of what was
+# tried and why it was abandoned — real-device testing showed the
+# OS-captive-portal-probe dance too unreliable to build on; a Bluetooth
+# link is the new plan for the phone-facing side instead). Back to
+# wpa_supplicant STA-to-Skynet, same driver/hardware side either way (see
+# ultima-wifi.cfg) — the WL1807's single-radio limitation that originally
+# motivated dropping STA-and-AP-simultaneously is moot now that AP mode
+# itself is gone.
 #
-# hostapd is meta-oe (confirmed via `bitbake-layers show-recipes hostapd`
-# against this build's actual layer set, not assumed present) — ships
-# hostapd.service reading a single flat /etc/hostapd.conf (not a
-# per-instance directory the way wpa_supplicant's config was), with
-# SYSTEMD_AUTO_ENABLE "disable" at the whole-package level (confirmed by
-# reading the recipe) — same granularity gap ultima_mask_timesyncd's
-# comment already documents, so the wants-symlink is created directly
-# below rather than fighting that variable.
-#
-# wl18xx-firmware is this layer's own recipe
-# (recipes-kernel/wl18xx-firmware/), not oe-core's "linux-firmware-wl18xx" —
-# that package builds empty in this environment (see wl18xx-firmware.bb's
-# comment for what was actually confirmed: WHENCE and ${S} both have the
-# file, but do_install's copy-firmware.sh drops it before ${D}, so no .ipk
-# ever gets written and opkg fails with "No candidates to install").
-#
-# wireless-regdb-static, specifically — not plain wireless-regdb (meta,
-# i.e. oe-core itself — confirmed via `bitbake-layers show-recipes
-# wireless-regdb`). Its recipe (recipes-kernel/wireless-regdb in oe-core)
-# splits PACKAGES = "${PN}-static ${PN}" and marks them RCONFLICTS: only
-# -static's FILES include /lib/firmware/regulatory.db(.p7s), which cfg80211
-# pulls in via the kernel's firmware-request path on kernel >=4.15 (this is
-# 6.12, no crda daemon needed — that userspace-helper mechanism is the
-# older path the plain, non-static package is actually for). First attempt
-# here specified bare "wireless-regdb" — a validly-named package, so
-# do_rootfs raised no error, but it doesn't ship regulatory.db at all
-# (confirmed by inspecting the built rootfs: still empty; only caught by
-# re-checking after the build claimed success, not by the build itself).
-# Without regulatory.db the wiphy stays in the permissive "world"
-# regulatory domain, which flags 5GHz no-initiating-radiation — a station
-# can still associate on 5GHz there (it passively adopts the AP's country
-# IE via 802.11d), which is why the prior STA-to-Skynet config never
-# surfaced this, but hostapd trying to *beacon* on channel 36 would be
-# rejected outright. Not yet confirmed on real hardware that this package
-# alone is sufficient (i.e. that nothing else in this kernel's regulatory
-# config blocks 5GHz AP mode) — only that regulatory.db now lands in the
-# built rootfs, which it didn't before.
-IMAGE_INSTALL:append:beagleplay-ti = " hostapd wireless-regdb-static wl18xx-firmware"
+# Unlike the very first STA-to-Skynet attempt (see git history — baked
+# ssid/psk straight into this file), the network config is assembled at
+# boot from a static base plus /data/wifi-client.conf (not committed to
+# git), same pattern the AP work built for its own credentials and for the
+# same reason: a home WiFi password doesn't belong in repo history.
+# Provisioning that file is a manual one-time step over SSH — see
+# ultima_enable_wifi's own comment below for the exact mechanism.
+IMAGE_INSTALL:append:beagleplay-ti = " wpa-supplicant wl18xx-firmware"
 
 # mycam004m (2026-08-17): the quad-camera V4L2 driver's mock/fake backend
 # (mycam004m-fake.ko + its 4 static reference frames + the boot-time
@@ -130,7 +99,7 @@ IMAGE_FEATURES += "read-only-rootfs"
 # exactly one service regardless of which package owns it — this runs after
 # all package postinsts (including systemd's own "enable" pass), so it wins
 # regardless of ordering.
-ROOTFS_POSTPROCESS_COMMAND += "ultima_mask_timesyncd; ultima_journald_volatile; ultima_coredump_disable; ultima_mask_resize_rootfs; ultima_mask_getty_tty1; ultima_enable_wifi_ap; "
+ROOTFS_POSTPROCESS_COMMAND += "ultima_mask_timesyncd; ultima_journald_volatile; ultima_coredump_disable; ultima_mask_resize_rootfs; ultima_mask_getty_tty1; ultima_enable_wifi; "
 
 ultima_mask_timesyncd () {
     rm -f ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/multi-user.target.wants/systemd-timesyncd.service
@@ -190,178 +159,81 @@ ultima_mask_getty_tty1 () {
     ln -sf /dev/null ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/getty@tty1.service
 }
 
-# WiFi AP (2026-08-18): unlike the Skynet STA config it replaces, the SSID
-# and passphrase are deliberately NOT baked into this file, or anywhere
-# else in git — this network is one this board *hosts*, and (unlike
-# Skynet, a fixed network this board only ever joins) its credentials
-# shouldn't sit in repo history.
+# WiFi client mode (2026-08-19): STA-to-Skynet, same overall shape as the
+# very first WiFi commit (see git history) but with the credential handling
+# the AP work's own comment already argued for — a fixed home network's
+# password still doesn't belong baked into a git-tracked file, so this
+# assembles /run/wpa_supplicant-wlan0.conf at boot from a static base plus
+# /data/wifi-client.conf, exact same "cat base + secret = assembled config"
+# mechanism ultima-hostapd-config.service already used for the AP's own
+# passphrase — reused deliberately rather than inventing a second pattern.
 #
-# First draft of this tried hostapd's config-file `include=` directive to
-# pull the secret half in from /data at parse time — wrong, caught before
-# it shipped: hostapd's config_file.c has no such directive at all (grepped
-# the actual built source in the build volume; only C preprocessor
-# #includes show up, no "include" config token). hostapd is also strict
-# about unknown config lines (refuses to start on one), so that draft would
-# have failed closed for the wrong reason — a config syntax error, not the
-# "no credentials provisioned yet" case this is supposed to fail closed
-# for. Real mechanism: ultima-hostapd-config.service (a oneshot) cats the
-# static /etc/hostapd.conf together with /data/wifi-ap.conf into
-# /run/hostapd-wlan0.conf at boot, and hostapd.service's ExecStart is
-# overridden (via the .service.d drop-in below) to read that assembled
-# file instead of /etc/hostapd.conf directly.
+# /data/wifi-client.conf is the network={ ssid=... psk=... } stanza only,
+# plain wpa_supplicant config syntax:
+#     network={
+#         ssid="<network name>"
+#         psk="<WPA2 passphrase, 8-63 chars>"
+#     }
+# Provisioning it is a manual one-time step over SSH:
+#     ssh root@<board-ip> 'cat > /data/wifi-client.conf' <<'EOF'
+#     network={
+#         ssid="Skynet"
+#         psk="..."
+#     }
+#     EOF
+#     systemctl restart ultima-wpa-supplicant-config wpa_supplicant@wlan0
+# Fail-closed, same as the AP config assembler: the ExecStart below test
+# -f's /data/wifi-client.conf first and writes nothing to /run if it's
+# missing, and the wpa_supplicant@wlan0.service.d drop-in's Requires= on
+# the assembler means a missing/failed assembly leaves WiFi simply not
+# started, not started against a stale or partial file.
 #
-# /data/wifi-ap.conf is exactly two lines, plain hostapd config syntax —
-# still not JSON, even though this is now a runtime assembly step rather
-# than a native parse: it's a straight `cat`, not a real merge, so the
-# secret file's syntax has to already match what the assembled file needs.
-# A future JSON-based settings UI would need to emit these two lines in
-# this syntax, not write raw JSON here:
-#     ssid=<network name>
-#     wpa_passphrase=<8-63 char WPA2 passphrase>
-# Provisioning that file today is a manual one-time step over SSH/serial
-# (see NOTES.md "WiFi AP") until a settings screen exists to write it from
-# the touchscreen, the same way CalibrationSettingsScreen.qml writes
-# calibration.json today. Fail-closed is still the design, just enforced a
-# different way than the broken first draft assumed: the assembler's
-# ExecStart explicitly test -f's /data/wifi-ap.conf first and exits
-# non-zero if it's missing, writing nothing to /run — and because
-# hostapd.service Requires= that unit below, a failed/skipped assembly run
-# means hostapd never starts, rather than starting against a stale or
-# partial /run file.
+# wpa_supplicant@.service ships with Requires=/After=
+# sys-subsystem-net-devices-%i.device baked into the upstream unit itself
+# (confirmed by reading the built package — unlike hostapd.service, which
+# needed that ordering added via a drop-in) — the instance-specific
+# .service.d drop-in below only needs to add the assembler dependency and
+# override ExecStart to point at the assembled /run file instead of
+# /etc/wpa_supplicant/wpa_supplicant-wlan0.conf directly.
 #
-# hw_mode=g/channel=6 (2.4GHz), not the originally-planned 5GHz channel 36
-# (UNII-1, chosen to dodge DFS's Channel Availability Check delay — still
-# the right call if 5GHz ever works here). Downgraded after live hardware
-# testing over SSH (wired-Ethernet session, wlan0 freed by stopping
-# wpa_supplicant@wlan0.service first) rejected channel 36 outright:
-# hostapd's journal showed "IEEE 802.11 Configured channel (36) or
-# frequency (5180) ... not found from the channel list of the current mode
-# (2) IEEE 802.11a" / "Hardware does not support configured channel". Root
-# cause visible in dmesg from first boot, unrelated to this change: wlcore
-# logs "could not get configuration binary ti-connectivity/wl18xx-conf.bin:
-# -2" and "WARNING falling back to default config" — wl18xx-firmware (this
-# layer's recipe) only ever vendored the one firmware blob the driver's
-# base probe needs (see that recipe's own comment), not the NVS
-# calibration file (wl1271-nvs.bin) or this conf.bin, and the driver's
-# fallback default config apparently doesn't expose the 802.11a (5GHz)
-# channel list at all. Not yet root-caused further than that — unconfirmed
-# whether adding those two firmware files would unlock 5GHz outright, or
-# whether NVS calibration data is board/antenna-specific and can't just be
-# vendored generically the way the base firmware blob was. Real follow-up
-# item, not attempted here. hw_mode=g still runs `ieee80211n=1` (802.11n
-# on 2.4GHz is unaffected by any of this) and `ieee80211d=1` (country IE
-# advertisement, harmless/good-practice regardless of band) — dropped
-# `ieee80211h=1` since it's DFS/TPC-specific to 5GHz and doesn't apply
-# here. `wireless-regdb-static` (see IMAGE_INSTALL comment above) stays in
-# the image either way: harmless for 2.4GHz-only operation, and already in
-# place for whenever 5GHz gets unblocked.
-#
-# Hardware-verified end to end on real hardware over the wired-Ethernet SSH
-# path (192.168.50.220, not the beagleplay-ti.local mDNS name, specifically
-# so stopping wpa_supplicant@wlan0 couldn't cut the session): after
-# installing the built binary/config/units by hand (root remounted rw only
-# for the copy, back to ro immediately after — all the shared libs hostapd
-# needs, libnl-3/libnl-genl-3/libssl/libcrypto, were already present on the
-# board from other packages, nothing else needed) and writing the real
-# `ssid=Ultima RS` / `wpa_passphrase=linkedlist` to /data/wifi-ap.conf,
-# hostapd.service went active (not failed/deactivated), wlan0 came up at
-# 192.168.4.1/24 exactly as configured, and dmesg showed a clean
-# `deauthenticating ... by local choice (Reason: 3=DEAUTH_LEAVING)` from
-# the old Skynet BSSID as the interface transitioned from STA to AP — no
-# crash, no instability. Also removed the original image's
-# wpa_supplicant@wlan0.service wants-symlink from the live board (it was
-# still `WantedBy=multi-user.target` from the prior STA build and would
-# have raced hostapd for wlan0 on the next reboot otherwise) — confirmed
-# `wpa_supplicant@wlan0.service` now inactive with no wants-symlink,
-# `hostapd.service` active, root back to `ro,relatime`. Not yet confirmed:
-# an actual phone associating (only the AP side was checked; macOS's own
-# WiFi-scan tools — `airport -s`, `system_profiler SPAirPortDataType` —
-# came back empty on this Mac, inconclusive rather than a negative signal,
-# most likely a Location Services/permission restriction on the deprecated
-# `airport` tool rather than anything about the AP itself).
-#
-# hostapd.service ships with only After=network.target (confirmed by
-# reading the built unit) — no awareness of wlan0, /data, or the assembled
-# config path, unlike wpa_supplicant@.service's baked-in wlan0 ordering the
-# Skynet setup relied on. The .service.d drop-in adds all of that
-# explicitly: After=/Requires= on the wlan0 device (module autoload from
-# the SDIO device ID brings it up, same as before, no explicit modprobe
-# needed) and on ultima-hostapd-config.service, plus an ExecStart=
-# override (blank line first to clear the upstream one, standard systemd
-# drop-in mechanics) pointing at /run/hostapd-wlan0.conf instead of
-# /etc/hostapd.conf.
-#
-# 10-wlan-ap.network sorts ahead of the base tisdk image's own
-# /etc/systemd/network/30-wlan.network (Name=wlan*, DHCP=yes — confirmed by
-# inspecting the actual built rootfs, not just the meta-arago-distro recipe
-# source path, which is a different, inactive location) — both land in the
-# same directory, so this is a plain lexical-sort win, no cross-directory
-# (/etc vs /run vs /usr/lib) precedence question to reason about at all.
-# systemd-networkd applies only the first matching .network file per
-# interface, so DHCP=yes never applies to wlan0. DHCPServer=yes is
-# systemd-networkd's own DHCP server implementation (this build's systemd
-# is v255, comfortably new enough) — no dnsmasq/udhcpd package needed on
-# top of hostapd.
-#
-# Build-verified AND hardware-verified (see the hw_mode=g comment above for
-# the full story — channel 36/5GHz was hardware-verified to fail, this
-# 2.4GHz config was hardware-verified to work). `./build.sh
-# tisdk-base-image` ran clean and the produced rootfs was inspected
-# directly — every file below landed exactly as written, no wpa_supplicant
-# leftovers, hostapd binary present, regulatory.db present. Still not
-# verified: an actual phone associating (only the AP side was checked from
-# this Mac — see above).
-ultima_enable_wifi_ap () {
-    cat > ${IMAGE_ROOTFS}${sysconfdir}/hostapd.conf <<'EOF'
-interface=wlan0
-driver=nl80211
-hw_mode=g
-channel=6
-ieee80211d=1
-country_code=US
-ieee80211n=1
-wpa=2
-wpa_key_mgmt=WPA-PSK
-rsn_pairwise=CCMP
-auth_algs=1
-wmm_enabled=1
-EOF
-
-    install -d ${IMAGE_ROOTFS}${sysconfdir}/systemd/network
-    cat > ${IMAGE_ROOTFS}${sysconfdir}/systemd/network/10-wlan-ap.network <<'EOF'
-[Match]
-Name=wlan0
-
-[Network]
-Address=192.168.4.1/24
-DHCPServer=yes
+# No custom .network file needed for STA mode — the base tisdk image's own
+# /usr/lib/systemd/system... equivalent /etc/systemd/network/30-wlan.network
+# (Name=wlan*, DHCP=yes) already handles DHCP client mode for wlan0 (this
+# is exactly why the AP work needed its own 10-wlan-ap.network to sort
+# ahead of it, and exactly why removing that file here is correct, not an
+# oversight).
+ultima_enable_wifi () {
+    install -d ${IMAGE_ROOTFS}${sysconfdir}/wpa_supplicant
+    cat > ${IMAGE_ROOTFS}${sysconfdir}/wpa_supplicant/wpa_supplicant-base.conf <<'EOF'
+ctrl_interface=/var/run/wpa_supplicant
+update_config=0
 EOF
 
     install -d ${IMAGE_ROOTFS}${sysconfdir}/systemd/system
-    cat > ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/ultima-hostapd-config.service <<'EOF'
+    cat > ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/ultima-wpa-supplicant-config.service <<'EOF'
 [Unit]
-Description=Assemble /run/hostapd-wlan0.conf from the static base config plus /data/wifi-ap.conf
+Description=Assemble /run/wpa_supplicant-wlan0.conf from the static base config plus /data/wifi-client.conf
 After=ultima-data-mount.service
 Requires=ultima-data-mount.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/sh -c 'test -f /data/wifi-ap.conf && cat /etc/hostapd.conf /data/wifi-ap.conf > /run/hostapd-wlan0.conf'
+ExecStart=/bin/sh -c 'test -f /data/wifi-client.conf && cat /etc/wpa_supplicant/wpa_supplicant-base.conf /data/wifi-client.conf > /run/wpa_supplicant-wlan0.conf'
 EOF
 
-    install -d ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/hostapd.service.d
-    cat > ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/hostapd.service.d/ultima.conf <<'EOF'
+    install -d ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/wpa_supplicant@wlan0.service.d
+    cat > ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/wpa_supplicant@wlan0.service.d/ultima.conf <<'EOF'
 [Unit]
-After=sys-subsystem-net-devices-wlan0.device ultima-hostapd-config.service
-Requires=sys-subsystem-net-devices-wlan0.device ultima-hostapd-config.service
+After=ultima-wpa-supplicant-config.service
+Requires=ultima-wpa-supplicant-config.service
 
 [Service]
 ExecStart=
-ExecStart=/usr/sbin/hostapd /run/hostapd-wlan0.conf -P /run/hostapd.pid -B
+ExecStart=/usr/sbin/wpa_supplicant -c/run/wpa_supplicant-wlan0.conf -iwlan0
 EOF
 
     install -d ${IMAGE_ROOTFS}${systemd_system_unitdir}/multi-user.target.wants
-    ln -sf ${systemd_system_unitdir}/hostapd.service \
-        ${IMAGE_ROOTFS}${systemd_system_unitdir}/multi-user.target.wants/hostapd.service
+    ln -sf ${systemd_system_unitdir}/wpa_supplicant@.service \
+        ${IMAGE_ROOTFS}${systemd_system_unitdir}/multi-user.target.wants/wpa_supplicant@wlan0.service
 }

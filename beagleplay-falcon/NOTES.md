@@ -2972,3 +2972,107 @@ every file landed exactly as written, no `wpa_supplicant` leftovers,
 is `/etc/systemd/network/`, not `/usr/lib/systemd/network/` as the
 recipe's source path alone would suggest, and confirmed directly against
 hostapd 2.10's source that `config_file.c` has no `include=` token.
+
+## WiFi AP + captive portal abandoned, reverted to client mode (2026-08-19)
+
+Built on the AP work above: a captive-portal page that auto-pops when a
+phone joins "Ultima RS," handing off to a phone-facing settings UI
+(`ultima-app/src/portalserver.h/.cpp`, a hand-rolled HTTP server; `dnsmasq`
+in DNS-only role wildcarding every hostname on wlan0 to 192.168.4.1). This
+was **abandoned and reverted**, not just paused — the whole feature and
+its reasoning are described here for the record, not because any of it
+ships.
+
+**What actually worked, hardware-verified:** the network/HTTP plumbing
+itself was solid. dnsmasq correctly wildcarded arbitrary hostnames
+(`connectivitycheck.gstatic.com`, `www.google.com`, ...) to 192.168.4.1; a
+real DHCP lease was handed out to a connecting phone; `PortalServer`
+correctly answered `GET /` and `GET /settings` with 200s bound only to
+192.168.4.1 (confirmed unreachable from the wired debug network by
+construction — the socket table showed no wired-interface listener at
+all). A live `tcpdump` capture during a real phone connecting showed real
+`GET / HTTP/1.1` requests landing on the server.
+
+**What didn't hold up: the actual captive-portal auto-popup UX.** Whether
+an OS shows its "Sign in to network" prompt automatically is real,
+per-OS-version, best-effort behavior — flagged as the real risk before any
+of this was built (see the AP section's own hardware-verification gap
+above, and this section's own earlier design discussion), and it bore out:
+real-device testing didn't produce a clearly reliable auto-pop, and
+iterating on it would have meant a cycle of destructive reflashes (see
+below) per adjustment to figure out exactly what each OS's probe expected.
+Decided not worth the cost — a Bluetooth link is the new plan for
+whatever phone-facing settings/telemetry surface this project wants
+instead, sidestepping the entire OS-captive-portal-heuristic problem.
+
+**Reverted:** `portalserver.h/.cpp` deleted; `ultima-app.pro`/`main.cpp`
+back to no `QtNetwork` dependency; `dnsmasq` and the AP's
+`hostapd`/`wireless-regdb-static` both dropped from `IMAGE_INSTALL`;
+`10-wlan-ap.network`'s custom `[Network]`/`[DHCPServer]` config removed.
+WiFi is back to `wpa_supplicant` STA-to-Skynet client mode — see
+`tisdk-base-image.bbappend`'s current `ultima_enable_wifi()` comment for
+the mechanism. Unlike the very first STA-to-Skynet attempt (which baked
+`ssid`/`psk` straight into a git-tracked file — see git history), this
+version assembles `/run/wpa_supplicant-wlan0.conf` at boot from a static
+base plus `/data/wifi-client.conf`, reusing the exact same
+"cat base + secret file" pattern the AP work already built for its own
+passphrase (`ultima-wpa-supplicant-config.service`, mirroring
+`ultima-hostapd-config.service`) — worth keeping even though AP mode
+itself is gone, for the same reason it was built the first time: a home
+WiFi password doesn't belong in repo history.
+
+**Hardware-verified end to end (2026-08-19):** rebuilt, reflashed to eMMC,
+provisioned `/data/wifi-client.conf` with the Skynet stanza (`psk`
+confirmed still current), restarted the `ultima-wpa-supplicant-config` →
+`wpa_supplicant@wlan0` chain. `wpa_cli -i wlan0 status` showed
+`wpa_state=COMPLETED` against Skynet with a normal DHCP lease, `ultima-app`
+stayed active with zero restarts through the WiFi service restarts, and
+`systemctl --failed` came back empty. Board is back to its pre-session
+client-mode baseline (modulo the `/data` loss noted below).
+
+### Discovered along the way: reflashing eMMC silently wipes `/data`
+
+`emmc-install.sh`'s image write is `dd` of the *entire* disk
+(`f.xz` bakes partitions 1+2+3 together, not just boot+rootfs), so every
+reflash was silently resetting `/data` to whatever blank partition 3 the
+image ships with — not something either eMMC promotion before this one
+happened to surface, since neither had anything real on `/data` yet at the
+time. Caught live during this revert's own reflash prep: `/data/wifi-ap.conf`
+(the AP's provisioned SSID/passphrase) was gone after a routine push, and
+`/data/odometer.json` had reset to `2347` — confirmed that's literally
+`OdoStore`'s hardcoded `DEFAULT_TOTAL_ODO`, not a coincidence, meaning
+whatever real odometer value existed before that flash is gone.
+
+Fixed in `emmc-install.sh` itself, not worked around per-flash: before the
+whole-disk `dd`, mount the *old* `/dev/mmcblk0p3` read-only and `tar` it to
+`/tmp/data-backup.tar`; after the write (and `blockdev --rereadpt`), mount
+the *freshly-flashed* `/dev/mmcblk0p3` (guaranteed a valid empty ext4
+filesystem — the `.wic` bakes a real filesystem for `/data` at build time,
+not just reserved space) and untar the backup onto it. Best-effort by
+design: a first-ever flash (no `/data` filesystem yet) or an unmountable
+old `/data` just skips the backup and proceeds with a blank one, rather
+than blocking the whole image update on a partition that might already be
+in a bad state — this is meant to stop *silent* loss on routine reflashes,
+not to be a real backup system.
+
+Layout-independent by construction (tar-based, not partition-offset math)
+— considered and rejected a partial-`dd`-that-skips-p3 approach instead:
+faster, but only safe as long as the `.wks` partition layout never changes
+between flashes, and silently corrupts `/data` at the old offsets the
+moment it does. The tar approach can't hit that failure mode.
+
+**Ran for real during this revert's own reflash — hit the safe-fallback
+path, not the backup/restore path.** The install log showed "no readable
+/data on the current eMMC ... proceeding without a backup" rather than
+"backed up /data" — `mount -t ext4 -o ro /dev/mmcblk0p3` failed even though
+that partition should have held the just-written `wifi-ap.conf` from
+earlier in the session. Root cause unconfirmed: the install log lives on
+the SD-booted board's tmpfs and was gone once the script powered the board
+off per its own instructions, so the actual mount error was never captured.
+No real loss resulted (that `/data` only held throwaway AP test credentials
+and the already-defaulted `odometer.json` — the real odometer value was
+lost in the *prior* flash, before this fix existed), but **the
+backup→restore round-trip itself is still unproven** on this hardware. Next
+reflash: write a marker file to `/data` first and confirm both the "backed
+up" log line and the marker's survival, to actually exercise the code path
+this was written for instead of its fallback.

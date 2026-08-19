@@ -74,6 +74,31 @@ md5sum -c md5sums.txt || die "md5 mismatch — transfer was corrupted, re-copy a
 T3E_MMCDEV=$(strings t3e.bin | grep -E '^mmcdev=' || true)
 [ "$T3E_MMCDEV" = "mmcdev=0" ] || die "t3e.bin is not the eMMC SPL variant (got '${T3E_MMCDEV:-none}', need mmcdev=0)"
 
+# --- 1.5. back up /data (mmcblk0p3) before the whole-disk write below wipes it ---
+# The image write in step 2 is `dd` of the *entire* disk (f.xz bakes partitions
+# 1+2+3 together, not just boot+rootfs), so without this, every reflash silently
+# resets /data to whatever blank partition 3 the image ships — discovered the
+# hard way (2026-08-19): a reflash wiped a live board's /data/wifi-ap.conf and
+# reset /data/odometer.json back to OdoStore's hardcoded default. Best-effort:
+# if this is a first-ever flash (no /data filesystem yet) or the old /data won't
+# mount for any reason, skip the backup and proceed with a blank /data rather
+# than blocking the whole image update on a partition that might already be in
+# a bad state.
+DATA_BACKUP=/tmp/data-backup.tar
+rm -f "$DATA_BACKUP"
+mkdir -p /tmp/old-data
+if mount -t ext4 -o ro /dev/mmcblk0p3 /tmp/old-data 2>/dev/null; then
+    if tar -C /tmp/old-data -cf "$DATA_BACKUP" . 2>/dev/null; then
+        say "backed up /data ($(wc -c < "$DATA_BACKUP") bytes) — will restore onto the freshly-flashed partition after the image write"
+    else
+        rm -f "$DATA_BACKUP"
+        say "WARNING: /data mounted but tar failed — proceeding without a backup"
+    fi
+    umount /tmp/old-data
+else
+    say "no readable /data on the current eMMC (first flash, or partition not yet formatted) — proceeding without a backup"
+fi
+
 # --- 2. eMMC user area ---
 # umount by device, not by a guessed /run/media/<label>-<dev> path: systemd's
 # auto-mount naming follows the filesystem LABEL (this eMMC's rootfs is
@@ -116,6 +141,18 @@ if grep -q differ /tmp/cmp.out; then die "eMMC content differs from image: $(cat
 
 blockdev --rereadpt /dev/mmcblk0
 sleep 2
+
+# --- 2.5. restore /data onto the freshly-written partition 3 ---
+# Partition 3 is guaranteed a valid, mountable, empty ext4 filesystem at this
+# point — the .wic image bakes a real (if empty) filesystem for /data at
+# build time (see wic/ultima-beagleplay.wks.in), not just reserved space.
+if [ -f "$DATA_BACKUP" ]; then
+    mkdir -p /tmp/new-data
+    mount /dev/mmcblk0p3 /tmp/new-data || die "could not mount freshly-flashed /data to restore the backup"
+    tar -C /tmp/new-data -xf "$DATA_BACKUP" || die "restoring /data backup onto the freshly-flashed partition failed"
+    umount /tmp/new-data
+    say "restored previous /data onto the freshly-flashed partition"
+fi
 
 # --- 3. keep the SD's PARTUUID distinct from the eMMC's ---
 # An MBR PARTUUID is derived from the 4-byte disk signature at offset 440, and

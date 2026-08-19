@@ -7,3 +7,5 @@ beagleplay-falcon/boot-logs/
 **/.DS_Store
 .qtcreator/
 **/.qtcreator/
+.tmp.driveupload/
+test/
