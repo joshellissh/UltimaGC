@@ -268,6 +268,18 @@ Window {
         pivotY: 74
     }
 
+    // Low-fuel warning — overlays the black fuel-pump badge baked into
+    // background_overlay.png at this exact pixel rect (extracted from that
+    // asset, so it lines up perfectly and fully occludes the badge
+    // underneath) with a red/white version, shown once fuelLevel drops
+    // under 1/4 tank.
+    Image {
+        x: 110; y: 662
+        width: 38; height: 35
+        source: "qrc:/icon_fuel_low.png"
+        visible: !startupActive && sim.lowFuelWarn
+    }
+
     // Bottom-right: Coolant temp — pivot at (1453, 602)
     CircularGauge {
         id: coolantGauge

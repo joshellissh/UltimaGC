@@ -31,6 +31,7 @@ class CanBus : public QObject
     Q_PROPERTY(bool oilPressureWarn READ oilPressureWarn NOTIFY oilPressureWarnChanged)
     Q_PROPERTY(bool batteryWarn READ batteryWarn NOTIFY batteryWarnChanged)
     Q_PROPERTY(bool coolantWarn READ coolantWarn NOTIFY coolantWarnChanged)
+    Q_PROPERTY(bool lowFuelWarn READ lowFuelWarn NOTIFY lowFuelWarnChanged)
     Q_PROPERTY(bool checkEngine READ checkEngine NOTIFY checkEngineChanged)
     // Raw readings behind the four warn/status booleans above — the dash
     // only needs the boolean, but the diagnostics screen shows the actual
@@ -98,6 +99,7 @@ public:
     bool oilPressureWarn() const { return m_oilPressureWarn; }
     bool batteryWarn() const { return m_batteryWarn; }
     bool coolantWarn() const { return m_coolantWarn; }
+    bool lowFuelWarn() const { return m_lowFuelWarn; }
     bool checkEngine() const { return m_checkEngine; }
     bool leftIndicator() const { return m_leftIndicator; }
     bool rightIndicator() const { return m_rightIndicator; }
@@ -165,6 +167,7 @@ signals:
     void oilPressureWarnChanged();
     void batteryWarnChanged();
     void coolantWarnChanged();
+    void lowFuelWarnChanged();
     void checkEngineChanged();
     void leftIndicatorChanged();
     void rightIndicatorChanged();
@@ -217,6 +220,7 @@ private:
     bool m_oilPressureWarn = false;
     bool m_batteryWarn = false;
     bool m_coolantWarn = false;
+    bool m_lowFuelWarn = false;   // fuelLevel < 1/4 tank
     bool m_checkEngine = false;
     bool m_leftIndicator = false;
     bool m_rightIndicator = false;

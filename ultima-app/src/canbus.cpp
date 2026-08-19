@@ -305,6 +305,8 @@ void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
             m_fuelLevel = fuel;
             emit fuelLevelChanged();
         }
+        bool lowFuel = fuel < 0.25;
+        if (lowFuel != m_lowFuelWarn) { m_lowFuelWarn = lowFuel; emit lowFuelWarnChanged(); }
         break;
     }
     case kMce18Base + 2: {                               // MCE18 frame @ Base ID+2: AIN8, DIN0-7 mask @ byte 2
@@ -415,6 +417,8 @@ void CanBus::simulateTick()
         m_fuelLevel = fuelLevel;
         emit fuelLevelChanged();
     }
+    bool lowFuelWarn = m_fuelLevel < 0.25;
+    if (lowFuelWarn != m_lowFuelWarn) { m_lowFuelWarn = lowFuelWarn; emit lowFuelWarnChanged(); }
 
     m_simPhaseTimer -= dt;
     if (m_simPhaseTimer <= 0.0) {
