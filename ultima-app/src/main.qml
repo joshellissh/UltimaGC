@@ -42,9 +42,14 @@ Window {
         if (open) cameraGridScreen.open()
         else cameraGridScreen.close()
     }
+    // Routed through toggleCamera360() (defined near icon360 below) rather
+    // than driving camera360Screen directly — a plain open()/close() here
+    // would leave rearCameraScreen out of sync with reverseGear (both open
+    // at once, or the rear cam never coming back) whenever this fires
+    // during reverse. Only acts if the requested state differs from
+    // current, since toggleCamera360() is a toggle, not a set.
     function debugSetCamera360(open) {
-        if (open) camera360Screen.open()
-        else camera360Screen.close()
+        if (camera360Screen.visible !== open) toggleCamera360()
     }
 
     Timer {
@@ -410,7 +415,7 @@ Window {
     // own slide/fade state, avoids that: every consumer's "I want this feed
     // on" is OR'd together at one single point of truth instead.
     Binding { target: cameraFeed1; property: "active"; value: cameraGridScreen.isOpen || camera360Screen.visible }
-    Binding { target: cameraFeed2; property: "active"; value: cameraGridScreen.isOpen || camera360Screen.visible }
+    Binding { target: cameraFeed2; property: "active"; value: cameraGridScreen.isOpen || camera360Screen.visible || rearCameraScreen.visible }
     Binding { target: cameraFeed3; property: "active"; value: cameraGridScreen.isOpen || camera360Screen.visible || leftCamOverlayActive }
     Binding { target: cameraFeed4; property: "active"; value: cameraGridScreen.isOpen || camera360Screen.visible || rightCamOverlayActive }
 
@@ -505,6 +510,26 @@ Window {
     // Hidden while the diagnostic screen or camera grid screen is
     // open/opening — it lives at the same on-screen spot as diagnostic
     // content, and it's the wrong action to expose over either screen anyway.
+    //
+    // While reverseGear has RearCameraScreen up, this acts as an override
+    // rather than a plain toggle: opening Camera360Screen hides the rear
+    // cam first (both are full-screen overlays at the same z, and a real
+    // backup camera shouldn't stay layered under the surround view), and
+    // closing Camera360Screen again hands back to the rear cam if still in
+    // reverse, rather than dropping to the plain dash underneath. Also used
+    // by debugSetCamera360() above so on-device SSH testing (no
+    // touchscreen) exercises this same reverse-override behavior instead
+    // of a naive direct open()/close().
+    function toggleCamera360() {
+        if (camera360Screen.visible) {
+            camera360Screen.close()
+            if (reverseGear) rearCameraScreen.open()
+        } else {
+            if (reverseGear) rearCameraScreen.close()
+            camera360Screen.open()
+        }
+    }
+
     Image {
         id: icon360
         x: 280 - width / 2; y: 666 - height / 2
@@ -517,7 +542,7 @@ Window {
             id: icon360Area
             anchors.fill: parent
             anchors.margins: -10
-            onClicked: camera360Screen.visible ? camera360Screen.close() : camera360Screen.open()
+            onClicked: toggleCamera360()
         }
     }
 
@@ -841,19 +866,43 @@ Window {
         id: cameraGridScreen
     }
 
-    // 360-degree camera view — opened/closed by tapping icon360 above, or
-    // automatically on reverse gear, like a real backup camera.
-    // Stacked above the time-set overlay; icon360 itself sits above this.
+    // 360-degree camera view — opened/closed only by tapping icon360 above;
+    // reverse gear used to auto-open this too, but a real backup camera
+    // shows the rear camera alone, not a stitched surround view, so reverse
+    // now drives RearCameraScreen below instead. Stacked above the time-set
+    // overlay; icon360 itself sits above this.
     Camera360Screen {
         id: camera360Screen
     }
 
-    // Reverse-gear auto-open/close for camera360Screen above. The
+    // Single rear-camera view — auto-opened/closed on reverse gear, like a
+    // real backup camera. toggleCamera360() (see icon360 above) is what
+    // actually keeps this and camera360Screen mutually exclusive when the
+    // driver swaps between them mid-reverse; declared after camera360Screen
+    // here only as a fallback so the more relevant view still paints on top
+    // in the brief cross-fade window, or if that invariant is ever broken.
+    RearCameraScreen {
+        id: rearCameraScreen
+    }
+
+    // Reverse-gear auto-open/close for rearCameraScreen above. The
     // !startupActive guard is load-bearing: the ~2s startup self-test sweeps
     // gear through every value (see gearIndicator's binding above), which
     // would otherwise pop the camera overlay open on every single boot.
+    // Skips the auto-open if camera360Screen is already up: that only
+    // happens if the driver opened it manually during a previous reverse
+    // (see toggleCamera360()) and never closed it before shifting out and
+    // back into reverse — without this check, re-entering reverse would
+    // pop rearCameraScreen open underneath/over it, breaking the two
+    // screens' mutual exclusivity.
     property bool reverseGear: !startupActive && sim.gear === 1
-    onReverseGearChanged: reverseGear ? camera360Screen.open() : camera360Screen.close()
+    onReverseGearChanged: {
+        if (reverseGear) {
+            if (!camera360Screen.visible) rearCameraScreen.open()
+        } else {
+            rearCameraScreen.close()
+        }
+    }
 
     // FPS overlay — top-left corner, above every screen this cluster shows
     // (diagnostic, camera grid, 360 view + its calibration panel, time-set)

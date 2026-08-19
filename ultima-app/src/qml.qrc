@@ -6,6 +6,7 @@
         <file>SetTimeScreen.qml</file>
         <file>DiagnosticScreen.qml</file>
         <file>Camera360Screen.qml</file>
+        <file>RearCameraScreen.qml</file>
         <file>CameraGridScreen.qml</file>
         <file>CalibrationSettingsScreen.qml</file>
         <file>CalibrationParamRow.qml</file>
