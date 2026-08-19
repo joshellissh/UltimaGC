@@ -1295,13 +1295,14 @@ build always produces is simultaneously a valid falcon-mode SD card
 (R5 SPL takes the direct path) — no separate raw-sector placement step,
 unlike what the generic (non-K3) U-Boot falcon mode documentation describes.
 
-`dropbear` is in this image by default, but **WiFi is not wired up in this
-Yocto build at all** — unlike the Buildroot boards, nothing here ported the
-TI WL1807/wlcore/wl18xx firmware+config side, only the kernel CAN fragment.
-So SSH only works if BeaglePlay's wired Ethernet comes up with a DHCP lease
-(`cpsw`, plausible arago default, not confirmed); otherwise `journalctl -u
-ultima-app` needs to happen over the serial console directly. Don't assume
-WiFi/SSH access the way the Buildroot bring-up notes do.
+`dropbear` is in this image by default. **Stale as of 2026-08-18 — see
+"WiFi AP" below**: WiFi was disabled when this paragraph was first written,
+then briefly a Skynet STA client, and is now a standalone AP (WL1807 is
+single-radio, so it's never both an AP and a Skynet client at once). SSH
+today reaches the board either over wired Ethernet with a DHCP lease
+(`cpsw`, plausible arago default, not confirmed) or by joining the AP
+itself (`192.168.4.1`, see "WiFi AP") — `journalctl -u ultima-app` over the
+serial console is still the fallback if neither network path is up.
 
 ## Dash clock doesn't persist a manual set (2026-08-10) — root-caused on hardware
 
@@ -2161,8 +2162,10 @@ symptoms:
 ### Transferring files to the board
 
 Don't type them. Bring up ethernet and pull over HTTP — `./emmc-serve.sh` on
-the Mac does the staging and prints the exact board-side line. There is no
-WiFi in this build; wired ethernet is the only network path.
+the Mac does the staging and prints the exact board-side line. Wired
+ethernet was the only network path when this was written; as of 2026-08-18
+the board also runs its own WiFi AP (see "WiFi AP" below), which a Mac
+could join instead if it's ever more convenient than ethernet.
 
 ### Shell gotcha worth remembering: `pipefail` + `grep -q`
 
@@ -2773,3 +2776,199 @@ production boot source rather than staying on the SD spike card. Confirmed
 board was on `/dev/mmcblk1p2` (SD) before pushing.  `kmscube`/`mesa-demos`
 removal (open item above) still not done — this promotion didn't wait on
 it, same as the GPU-enablement eMMC promotion earlier didn't either.
+
+## WiFi AP (2026-08-18)
+
+WL1807 briefly ran as a WPA2 STA joining a home network ("Skynet," see git
+history) the same day this was written, then got reconfigured to a
+standalone AP instead (2.4GHz — see "5GHz doesn't work on this hardware
+yet" below for why the original 5GHz plan didn't survive hardware testing)
+— both changes landed within hours of each other. Not a toggle between the
+two: WL1807 is single-radio (confirmed —
+dual-band means tunable to 2.4 or 5GHz, not two independent radios running
+both at once; TI's own WL1837 E2E forum thread documents the throughput
+hit from time-slicing one radio across channels in "multichannel" AP+STA
+mode), so being a Skynet client and being this board's own AP were never
+both available simultaneously. AP-only was the explicit choice over
+building a mode-switch mechanism.
+
+`hostapd` (meta-oe) replaced `wpa-supplicant` for this. Config is split in
+two, deliberately — the SSID/passphrase should never sit in repo history
+the way Skynet's did. First draft tried hostapd's config-file `include=`
+directive to pull the secret half in from `/data` at parse time; **wrong**,
+caught before it shipped by an advisor review, then confirmed by grepping
+hostapd 2.10's actual built source in the volume — `config_file.c` has no
+`include=` config directive at all, only C preprocessor `#include`s. hostapd
+also refuses to start on any unknown config line, so that draft would have
+failed closed, but for the wrong reason (a syntax error, not "no
+credentials yet"). Real mechanism:
+
+- `/etc/hostapd.conf` — baked into the image (see
+  `tisdk-base-image.bbappend`'s `ultima_enable_wifi_ap`), everything
+  *except* the network identity: `interface=wlan0`, `driver=nl80211`,
+  `hw_mode=g` + `channel=6`, WPA2-PSK/CCMP. No SSID/passphrase, no
+  `include=`. **Originally `hw_mode=a` + `channel=36`** (5GHz, UNII-1 —
+  deliberately non-DFS, since a DFS channel needs a Channel Availability
+  Check, up to 60s/10min, before the AP can even come up — bad fit for
+  "get in the car, connect a phone") — downgraded to 2.4GHz after live
+  hardware testing rejected it outright. See "5GHz doesn't work on this
+  hardware yet" below.
+- `/data/wifi-ap.conf` — **not in git, not in the image at all** — two
+  lines, plain hostapd config syntax:
+  ```
+  ssid=<network name>
+  wpa_passphrase=<8-63 char WPA2 passphrase>
+  ```
+  Still hostapd syntax rather than JSON even now that this is a runtime
+  assembly step, not a native parse — it's a plain `cat`, not a real
+  merge, so the secret file's syntax has to already match what the
+  assembled file needs. A future JSON-based settings UI would need to
+  emit these two lines in this syntax, not write raw JSON here.
+- `ultima-hostapd-config.service` — a new oneshot unit, `After=`/`Requires=
+  ultima-data-mount.service`, that runs
+  `test -f /data/wifi-ap.conf && cat /etc/hostapd.conf /data/wifi-ap.conf
+  > /run/hostapd-wlan0.conf` at boot. `hostapd.service`'s own
+  `ExecStart=` is overridden via a `.service.d` drop-in (blank
+  `ExecStart=` first to clear the upstream one, then point at
+  `/run/hostapd-wlan0.conf`), and that same drop-in adds
+  `After=`/`Requires=` on both `sys-subsystem-net-devices-wlan0.device`
+  and `ultima-hostapd-config.service` — upstream `hostapd.service` only
+  ships `After=network.target`, no awareness of wlan0 or of the assembled
+  config path.
+
+  /data is partition 3, the one persistent writable partition on this
+  board (see `ultima-data-mount.service`) — `wifi-ap.conf` has to be
+  created once per device, by hand, over SSH or serial:
+  ```
+  ssh root@<board-ip-or-192.168.4.1> 'cat > /data/wifi-ap.conf' <<'EOF'
+  ssid=...
+  wpa_passphrase=...
+  EOF
+  systemctl restart ultima-hostapd-config hostapd
+  ```
+  (No `/` remount needed — unlike a live edit anywhere else in this repo's
+  read-only-rootfs notes, `/data` is writable by design.) A settings screen
+  to write this from the touchscreen, the same way
+  `CalibrationSettingsScreen.qml` writes `calibration.json`, is planned but
+  not built yet. Until then, or on a freshly flashed board with no
+  `/data/wifi-ap.conf` yet: **fails closed, not open** — the assembler's
+  `test -f` guard exits non-zero and writes nothing to `/run` when the
+  secrets file is missing, and because `hostapd.service` `Requires=` that
+  unit, a failed/skipped assembly run means hostapd never starts at all,
+  rather than starting broadcasting with no password.
+
+`10-wlan-ap.network` (static `192.168.4.1/24` + systemd-networkd's own
+`DHCPServer=yes`, no dnsmasq needed) is named to sort ahead of the base
+tisdk image's own `/etc/systemd/network/30-wlan.network` (`Name=wlan*`,
+`DHCP=yes`) — both land in the same directory (confirmed against the
+actual built rootfs, not just the recipe's source path), so it's a plain
+lexical-sort win, no `/etc` vs `/run` vs `/usr/lib` precedence question in
+play. networkd applies only the first matching `.network` file per
+interface, so this one wins for `wlan0` and the base image's DHCP-client
+default never applies to it.
+
+5GHz AP mode also needs `wireless-regdb-static` in the image (added to
+`IMAGE_INSTALL` alongside `hostapd`) — without `/lib/firmware/regulatory.db`,
+cfg80211 stays in the permissive "world" regulatory domain, which flags
+5GHz no-initiating-radiation. The earlier Skynet **STA** config never
+surfaced this gap because a station passively adopts the AP's country IE
+via 802.11d instead of needing its own regulatory database — only *hosting*
+a 5GHz AP needs it locally. No crda daemon needed on this kernel (6.12) —
+cfg80211 pulls `regulatory.db` in directly via the firmware-request path.
+The `-static` suffix is load-bearing, not decoration: `wireless-regdb`'s
+recipe (oe-core, `recipes-kernel/wireless-regdb`) splits `PACKAGES =
+"${PN}-static ${PN}"` and marks the two `RCONFLICTS` — only `-static`'s
+`FILES` include `regulatory.db`/`.db.p7s`; the plain `wireless-regdb`
+package instead ships the older `regulatory.bin` for a crda daemon that
+isn't in this image. First attempt specified bare `wireless-regdb` — a
+validly-named package, so `do_rootfs` raised no error at all, and only
+re-inspecting the built rootfs (not the build succeeding) caught that
+`regulatory.db` still wasn't there.
+
+### 5GHz doesn't work on this hardware yet — missing wl18xx firmware files
+
+Live-tested over SSH on real hardware (wired-Ethernet session at
+`192.168.50.220`, deliberately not the `beagleplay-ti.local` mDNS name,
+so stopping `wpa_supplicant@wlan0.service` to free `wlan0` for hostapd
+couldn't cut the session out from under itself) before committing to a
+full rebuild+reflash cycle: installed the built `hostapd` binary +
+`/etc/hostapd.conf` + `regulatory.db` + the new systemd units onto the
+board by hand (`mount -o remount,rw /`, copy, `mount -o remount,ro /`
+immediately after — every shared library `hostapd` needs, `libnl-3`,
+`libnl-genl-3`, `libssl`, `libcrypto`, was already present from other
+packages, nothing else to bring over), then wrote the real
+`ssid=Ultima RS` / `wpa_passphrase=linkedlist` to `/data/wifi-ap.conf`.
+
+With `hw_mode=a`/`channel=36` as originally designed, hostapd's journal
+showed:
+```
+wlan0: IEEE 802.11 Configured channel (36) or frequency (5180)
+  (secondary_channel=0) not found from the channel list of the current
+  mode (2) IEEE 802.11a
+wlan0: IEEE 802.11 Hardware does not support configured channel
+```
+and the service cleanly deactivated (not a crash-loop — no instability,
+no repeated restarts, just a refusal to start). Root cause visible in
+`dmesg` from the very first boot, unrelated to anything in this change:
+```
+wl18xx_driver wl18xx.6.auto: Direct firmware load for
+  ti-connectivity/wl1271-nvs.bin failed with error -2
+wl18xx_driver wl18xx.6.auto: Direct firmware load for
+  ti-connectivity/wl18xx-conf.bin failed with error -2
+wlcore: ERROR could not get configuration binary
+  ti-connectivity/wl18xx-conf.bin: -2
+wlcore: WARNING falling back to default config
+```
+`wl18xx-firmware` (this layer's own recipe) only ever vendored the one
+firmware blob the driver's base probe needs — not the NVS calibration file
+(`wl1271-nvs.bin`) or the `wl18xx-conf.bin` runtime config, and the
+driver's fallback default config apparently doesn't expose an 802.11a
+(5GHz) channel list at all. **Not yet root-caused further than that** —
+open questions for whoever picks this up: does adding those two firmware
+files unlock 5GHz outright, or is NVS calibration data board/antenna-
+specific (common for WiLink parts) such that it can't just be vendored
+generically the way the single base firmware blob was? Real follow-up
+item, not attempted here.
+
+Switched `hostapd.conf` to `hw_mode=g`/`channel=6` (2.4GHz) instead and
+re-ran the same live test: `hostapd.service` went `active` (not
+failed/deactivated), `wlan0` came up at `192.168.4.1/24` exactly as
+configured, and `dmesg` showed a clean `deauthenticating ... by local
+choice (Reason: 3=DEAUTH_LEAVING)` from the old Skynet BSSID as the
+interface transitioned from STA to AP. Also removed the original image's
+`wpa_supplicant@wlan0.service` wants-symlink from the live board directly
+— it was still `WantedBy=multi-user.target` from the prior STA build and
+would have raced hostapd for `wlan0` on the next reboot otherwise.
+Confirmed after cleanup: `wpa_supplicant@wlan0.service` inactive with no
+wants-symlink, `hostapd.service` active, root back to `ro,relatime`.
+
+**A phone associating was the one gap this whole write-up left open — now
+closed.** The AP-side checks from this Mac were inconclusive (`airport -s`
+and `system_profiler SPAirPortDataType` both came back empty, most likely
+a Location Services/permission restriction on the deprecated `airport`
+tool on modern macOS, not anything about the AP itself), but a real phone
+joining "Ultima RS" with `linkedlist` confirmed the whole path end to end:
+`/data/wifi-ap.conf` → `ultima-hostapd-config.service` assembly →
+`hostapd` on `hw_mode=g`/`channel=6` → a client actually associating.
+`wireless-regdb-static` stays in the image regardless of band — harmless
+for 2.4GHz-only operation, already in place for whenever 5GHz gets
+unblocked.
+
+**Build-verified and hardware-verified, phone included — no open gaps.**
+`./build.sh tisdk-base-image` ran clean four times over the course of
+getting this right — the `include=`, missing-regdb,
+wrong-regdb-package-name, and 5GHz-doesn't-work mistakes were each only
+found by inspecting the actual built rootfs or testing on real hardware
+(the first two also needed an advisor review to even go looking), never
+by the build itself reporting an error, which is worth remembering next
+time this file's "build succeeded" gets read as "the logic is right."
+Only pre-existing sstate-taint warnings appeared across all four runs,
+unrelated to this change. Final pass's rootfs was inspected directly in
+`arago-tmp-default-glibc/work/beagleplay_ti-oe-linux/tisdk-base-image/`:
+every file landed exactly as written, no `wpa_supplicant` leftovers,
+`hostapd` binary present at `/usr/sbin/hostapd`, `regulatory.db` +
+`.db.p7s` present under `/usr/lib/firmware/`, `hostapd.conf` shipping
+`hw_mode=g`/`channel=6`. Also confirmed `30-wlan.network`'s real location
+is `/etc/systemd/network/`, not `/usr/lib/systemd/network/` as the
+recipe's source path alone would suggest, and confirmed directly against
+hostapd 2.10's source that `config_file.c` has no `include=` token.
