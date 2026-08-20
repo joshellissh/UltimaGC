@@ -13,30 +13,41 @@ settings screens already do). That design was never implemented dash-side
 control, not layered alongside it. If you need the old config-service spec,
 pull this file from git history before this commit.
 
-## Status: nothing below exists yet except advertising
+## Status: implemented, not yet hardware-verified
 
-As of 2026-08-20, `BluetoothManager` (`ultima-app/src/bluetoothmanager.cpp`)
-only advertises the dash as a connectable, discoverable BLE peripheral named
-`"Ultima RS"` — confirmed working on real hardware (HCI trace + seen from
-Windows; see `beagleplay-falcon/NOTES.md` "Bluetooth via CC1352P7" ›
-"Hardware-verified working"). **It registers no GATT service and no
-characteristics.** A central can connect to it today, but there is nothing
-to read or write once connected.
+As of 2026-08-20 (commit `b401514`), everything in this document is
+implemented dash-side: `BluetoothManager` registers the Ultima AUX Control
+Service (`ensureAuxService()`) with all 6 characteristics below, and
+`CanBus` has a real Tx path (`setAux()`/`allAuxOff()`/`sendAuxFrame()`)
+that sends the AUX-command CAN frame described in "CAN Tx protocol" below.
+Advertising itself was already confirmed working on real hardware before
+this (HCI trace + seen from Windows; see `beagleplay-falcon/NOTES.md`
+"Bluetooth via CC1352P7" › "Hardware-verified working") — that part hasn't
+changed.
 
-Also new: `CanBus` (`ultima-app/src/canbus.cpp`) has never transmitted a CAN
-frame. It opens `can0` and only ever reads (`onReadable()` off a
-`QSocketNotifier`) — every existing gauge value flows one way, off the wire
-into Qt properties. AUX control needs a write path added to `CanBus` (or a
-small sibling class) that doesn't exist in any form today; this is a
-different, larger piece of new work than the old config design's GATT
-wrappers around already-writable objects (`SystemClock`, `OdoStore`,
-`CalibrationStore`).
+**What's actually been verified, and what hasn't:**
+- Compiles clean on both the macOS Qt6 dev build and the real Qt5/Yocto
+  target toolchain (`beagleplay-falcon/build.sh ultima-app`, via Docker —
+  no board needed for that part).
+- On the macOS dev build, `addService()` was exercised at runtime and
+  returned null (Qt's Darwin/CoreBluetooth backend needs an Info.plist
+  entitlement this bare dev binary doesn't carry) — confirmed the null
+  path is handled gracefully rather than crashing, but this says nothing
+  about the target's Qt5/BlueZ backend, which is a different
+  implementation entirely.
+- **`addService()` has never run on the actual target stack (Qt5/BlueZ on
+  the BeaglePlay), and no AUX CAN frame has ever reached a real MCE18.**
+  No board was available this session. Treat the whole GATT-server-actually-
+  works question as open until that pass happens — see "Connection &
+  security model" below for why that's a real risk, not routine caution.
+- The AUX-command CAN ID (`0x640`) and the periodic-refresh behavior are
+  both still datasheet assumptions, not wire-confirmed — see "CAN Tx
+  protocol" below.
 
-Everything in this document — the service, every characteristic, the
-CAN Tx behavior — is a design to implement, not a description of working
-code. Treat the GATT table below as the target for `BluetoothManager`'s
-dash-side implementation and for the Android app both, so the two sides are
-built against the same contract instead of drifting.
+Treat the GATT table below as the actual current contract (not a proposal)
+for both `BluetoothManager`'s dash-side implementation and the Android app,
+so the two sides stay in sync — but validate the dash side on real hardware
+before trusting it beyond "it compiles."
 
 Also relevant going in: **a phone's own Bluetooth Settings app cannot do any
 of this.** Neither iOS nor Android's built-in Settings pairs with or talks
@@ -149,7 +160,7 @@ val gatt = device.connectGatt(context, /* autoConnect = */ false, gattCallback,
   app's control, but worth stating plainly given what this service can now
   actually do.
 - One nuance specific to this dash's Bluetooth stack, worth knowing before
-  implementing the GATT server dash-side: the raw-HCI path Qt5's BlueZ
+  trusting the GATT server dash-side: the raw-HCI path Qt5's BlueZ
   backend uses for *advertising* bypasses `bluetoothd` entirely (confirmed
   during hardware bring-up — see NOTES.md). The app log line seen live
   during that same testing, `qt.bluetooth: Using BlueZ kernel ATT
@@ -159,10 +170,13 @@ val gatt = device.connectGatt(context, /* autoConnect = */ false, gattCallback,
   socket. **That's not the same as confirming a full local GATT server
   works** — `QLowEnergyController::addService()` plus characteristic
   read/write callbacks is a different, historically flakier corner of
-  QtBluetooth's BlueZ backend that this session never exercised (only
-  advertising + connection were tested). Treat `addService()` as unproven
-  on this stack and spike it first, dash-side, before building the full
-  characteristic set against it.
+  QtBluetooth's BlueZ backend. The full characteristic set (below) is now
+  implemented against this API and compiles on the target Qt5 toolchain,
+  but **it has never actually run against BlueZ** — no board was available
+  when it was built. Treat "does a central actually see this service, and
+  can it read/write/subscribe to it" as the first thing to check once
+  hardware is available, not something already settled by the code
+  existing.
 
 ## GATT service definition
 
@@ -283,12 +297,12 @@ Frame layout (8 bytes, all others besides AUX1-4 unused):
 |---|---|---|---|---|---|
 | Meaning | AUX1 | AUX2 | AUX3 | AUX4 (0\|1 or PWM 0-100%) | unused |
 
-`CanBus` needs a write path added to send this frame — nothing in the class
-does this today (see "Status" above). A minimal shape: a
-`setAux(int index, int value)`-style entry point that updates an in-memory
-4-byte state array and writes one CAN frame (`struct can_frame` over the
-existing `can0` socket, ID `0x640` — likely needs to be its own writable fd
-use or reuse of `m_fd`, since the class currently only reads).
+Implemented as `CanBus::setAux(int index, int value)` — updates an
+in-memory 4-byte state array and writes one CAN frame (`struct can_frame`,
+ID `0x640`) by reusing the same `m_fd` the class already reads from
+(SocketCAN sockets are bidirectional; no separate fd needed). `allAuxOff()`
+zeroes the state and sends the same frame unconditionally — see "Failsafe
+on BLE disconnect" below.
 
 ### Failsafe on BLE disconnect
 
@@ -351,9 +365,13 @@ Android app should expect:
   manual's §7.16/PWM-output option, §4.1) — a V4 unit may not accept or
   apply duty values on AUX4 until that's configured, even though the wire
   protocol accepts 0-100 unconditionally.
-- `QLowEnergyController::addService()` is unproven on this stack (same
-  caveat carried over from the old config-service design) — spike it first,
-  dash-side, before building the full characteristic set against it.
+- `QLowEnergyController::addService()` and the full characteristic set are
+  implemented and compile on the target toolchain, but have never run
+  against the target's Qt5/BlueZ backend — this is the first thing to check
+  once a board is available (connect a central, confirm the service is
+  discoverable, confirm a write actually reaches `onAuxCharacteristicChanged()`).
+  If it turns out to be broken on BlueZ, this may need a fallback design,
+  not just a bugfix.
 - Should bonded devices be remembered (whitelist) so the driver doesn't
   re-pair every drive, or should the dash forget bonds on
   reboot/`stopAdvertising()`? Affects whether the Android app needs its own
