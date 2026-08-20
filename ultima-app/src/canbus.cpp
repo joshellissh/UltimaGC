@@ -547,6 +547,7 @@ void CanBus::setAux(int index, int value)
     m_auxState[index] = clamped;
     sendAuxFrame();
     updateAuxRefreshTimer();
+    emit auxStateChanged();
 }
 
 void CanBus::allAuxOff()
@@ -560,6 +561,12 @@ void CanBus::allAuxOff()
         v = 0;
     sendAuxFrame();
     updateAuxRefreshTimer();
+    emit auxStateChanged();
+}
+
+QVariantList CanBus::auxStates() const
+{
+    return { m_auxState[0], m_auxState[1], m_auxState[2], m_auxState[3] };
 }
 
 void CanBus::updateAuxRefreshTimer()

@@ -295,6 +295,27 @@ int main(int argc, char *argv[])
                 canBus.debugToggleHazard();
         });
         indicatorTestTimer->start(250);
+
+        // Debug-only: opens/closes BluetoothScreen from
+        // /tmp/ultima-bluetooth.request ("open"/"close") — same polled-file
+        // pattern as the triggers above, needed because BluetoothScreen is
+        // reached only by tapping the bottom-right glyph, with no swipe/key
+        // path of its own to drive from SSH otherwise.
+        auto *bluetoothTestTimer = new QTimer(&app);
+        QObject::connect(bluetoothTestTimer, &QTimer::timeout, rootWindow, [rootWindow]() {
+            QFile trigger(QStringLiteral("/tmp/ultima-bluetooth.request"));
+            if (!trigger.exists())
+                return;
+            QString cmd;
+            if (trigger.open(QIODevice::ReadOnly)) {
+                cmd = QString::fromUtf8(trigger.readAll()).trimmed();
+                trigger.close();
+            }
+            QFile::remove(QStringLiteral("/tmp/ultima-bluetooth.request"));
+            QMetaObject::invokeMethod(rootWindow, "debugSetBluetoothScreen",
+                                       Q_ARG(QVariant, cmd == QStringLiteral("open")));
+        });
+        bluetoothTestTimer->start(250);
     }
 
     return app.exec();

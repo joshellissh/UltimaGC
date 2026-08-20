@@ -5,6 +5,7 @@
 #include <QString>
 #include <QTimer>
 #include <QSocketNotifier>
+#include <QVariantList>
 
 class OdoStore;
 
@@ -82,6 +83,13 @@ class CanBus : public QObject
     // "SPORT+", "RACE"; the dev-build simulator (see simulateTick()) cycles
     // through them for layout review.
     Q_PROPERTY(QString driveMode READ driveMode NOTIFY driveModeChanged)
+    // Live AUX1-4 output state (see setAux()/allAuxOff() below) as a 4-int
+    // list, indices matching those methods (0-3 = AUX1-4). Exposed so
+    // BluetoothScreen.qml can show what a connected phone app has actually
+    // commanded — the only way to confirm a BLE write reached CanBus without
+    // a scope on the physical output. Read-only from QML on purpose: AUX is
+    // driven by BluetoothManager (phone-controlled), not the touchscreen.
+    Q_PROPERTY(QVariantList auxStates READ auxStates NOTIFY auxStateChanged)
 
 public:
     explicit CanBus(OdoStore *odo, const QString &iface = QStringLiteral("can0"),
@@ -187,6 +195,8 @@ public:
     // ANDROID-BLE-INTEGRATION.md's "AUX State" characteristic for why that
     // distinction matters).
     int auxState(int index) const { return (index >= 0 && index < 4) ? m_auxState[index] : 0; }
+    // QML-facing form of the same state — see the Q_PROPERTY above.
+    QVariantList auxStates() const;
 
 public slots:
     // Flush in-memory odometer to OdoStore and persist.
@@ -219,6 +229,9 @@ signals:
     void vbatChanged();
     void cruiseStateChanged();
     void limpModeChanged();
+    // Fires on every setAux()/allAuxOff() call that actually changes state —
+    // backs the auxStates Q_PROPERTY above.
+    void auxStateChanged();
 
 private slots:
     void onReadable();

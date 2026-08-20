@@ -82,6 +82,15 @@ Window {
     function debugSetCamera360(open) {
         if (camera360Screen.visible !== open) toggleCamera360()
     }
+    // Same pattern, for BluetoothScreen — needed since it's a direct-tap
+    // overlay (the bottom-right glyph) with no swipe/key path of its own,
+    // so there was no other way to reach it without a touchscreen. Also
+    // doubles as a way to exercise BluetoothScreen's live AUX status card
+    // (see canbus.h's auxStates) over SSH without a real phone connected.
+    function debugSetBluetoothScreen(open) {
+        if (open) bluetoothScreen.open()
+        else bluetoothScreen.close()
+    }
 
     Timer {
         running: !splashDone
