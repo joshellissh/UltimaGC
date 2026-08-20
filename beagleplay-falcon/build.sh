@@ -24,8 +24,15 @@ cd "$(dirname "$0")"
 IMAGE=falcon-yocto:latest
 VOLUME=falcon-yocto-build
 ULTIMA_APP_SRC="$(cd ../ultima-app/src && pwd)"
-AVM_BENCHMARK_SRC="$(cd ../test/avm-benchmark && pwd)"
-MYCAM004M_SRC="$(cd ../../mycam004m && pwd)"
+# Both optional: only avm-benchmark/mycam004m bitbake targets actually need
+# their source, but the mount args below are unconditional either way, so a
+# checkout without these sibling repos (e.g. one that only has UltimaApp,
+# the Android companion app, alongside this one) shouldn't hard-fail a
+# build of an unrelated target like ultima-app. Fall back to an empty dir
+# under the volume itself so the bind-mount source always exists.
+AVM_BENCHMARK_SRC="$(cd ../test/avm-benchmark 2>/dev/null && pwd || echo /tmp/ultima-empty-avm-benchmark)"
+MYCAM004M_SRC="$(cd ../../mycam004m 2>/dev/null && pwd || echo /tmp/ultima-empty-mycam004m)"
+mkdir -p /tmp/ultima-empty-avm-benchmark /tmp/ultima-empty-mycam004m
 TARGET="${1:-tisdk-base-image}"
 
 # Sync this directory's layer into the volume — the volume is the only

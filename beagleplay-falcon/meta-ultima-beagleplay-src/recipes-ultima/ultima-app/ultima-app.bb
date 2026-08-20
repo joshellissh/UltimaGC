@@ -53,6 +53,25 @@ python do_unpack:append() {
 # what "always mirror the current host source" already claims to do.
 do_unpack[nostamp] = "1"
 
+# do_configure[nostamp] added 2026-08-20, found the same way as the comment
+# above: a build that reported success but silently used a stale Makefile.
+# do_unpack's nostamp does force do_compile/do_install/do_package to rerun
+# every time, but NOT do_configure — bitbake still considered its own
+# cached result valid, so qmake never reran even though do_unpack had just
+# copied in newer source. Every previous hot-deploy iteration only ever
+# edited the BODY of a file already listed in ultima-app.pro's
+# HEADERS/SOURCES, which do_configure genuinely has no reason to care about
+# (qmake doesn't need to rerun just because a .cpp's contents changed).
+# This one added a NEW file (bluetoothagent.cpp/.h) to HEADERS/SOURCES — the
+# first change that actually needed qmake to regenerate the Makefile itself
+# — and that's exactly when the gap showed up: do_compile ran against a
+# Makefile with no bluetoothagent rule at all, linked a binary that quietly
+# lacked the new translation unit, and reported a clean build the whole
+# time. Confirmed by comparing timestamps directly in the build volume:
+# the freshly re-unpacked bluetoothagent.cpp (do_unpack's copy) postdated
+# the generated Makefile (do_configure's output) by over an hour.
+do_configure[nostamp] = "1"
+
 SYSTEMD_SERVICE:${PN} = "ultima-app.service"
 SYSTEMD_AUTO_ENABLE:${PN} = "enable"
 

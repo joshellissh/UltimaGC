@@ -134,31 +134,78 @@ val gatt = device.connectGatt(context, /* autoConnect = */ false, gattCallback,
   before touching it. Every characteristic here is 1-4 bytes — the default
   23-byte ATT MTU (20 usable) is comfortably enough, so skip that step
   entirely.
-- **Bonding.** All four AUX write characteristics require an encrypted link
-  — see the per-characteristic table below. Android auto-triggers pairing
-  the first time an app touches an attribute that requires encryption and
-  the link isn't encrypted yet (fires `BluetoothDevice.ACTION_PAIRING_REQUEST`),
-  but that shows up to the app as a failed write that needs a retry once
-  bonding completes, which is a worse UX than doing it upfront. Recommend
-  proactively bonding right after service discovery, before any writes:
+- **Bonding.** All four AUX write characteristics require an encrypted,
+  authenticated link — see the per-characteristic table below. Android
+  auto-triggers pairing the first time an app touches an attribute that
+  requires encryption and the link isn't encrypted yet (fires
+  `BluetoothDevice.ACTION_PAIRING_REQUEST`), but that shows up to the app
+  as a failed write that needs a retry once bonding completes, which is a
+  worse UX than doing it upfront. Recommend proactively bonding right after
+  service discovery, before any writes:
   ```kotlin
   if (device.bondState == BluetoothDevice.BOND_NONE) {
       device.createBond()
       // wait for ACTION_BOND_STATE_CHANGED -> BOND_BONDED before writing
   }
   ```
-- **Pairing method:** the dash's existing `QBluetoothLocalDevice` plumbing
-  (`bluetoothmanager.cpp`) already handles "Just Works" and PIN-display
-  pairing callbacks — no numeric-comparison/MITM-protected pairing is wired
-  up dash-side today. That means the encrypted link protects against
-  passive eavesdropping but not an active attacker present at pairing time.
-  **This matters more here than it did for the old config design**: a
-  successful write to one of these characteristics directly energizes a
-  physical low-side output in the car, not just a config value. Don't wire
-  anything safety-relevant (fuel, ignition, anything ECU-adjacent) to an
-  AUX output reachable this way — that's a wiring decision outside this
-  app's control, but worth stating plainly given what this service can now
-  actually do.
+- **Pairing method — real hardware bug found and fixed, 2026-08-20.**
+  `bluetoothmanager.cpp` used to assume `QBluetoothLocalDevice`'s Qt5/BlueZ
+  backend registered a working BlueZ pairing agent internally (that's what
+  its `pairingDisplayConfirmation`/`pairingDisplayPinCode` signals implied).
+  First real end-to-end pairing attempt against actual hardware proved that
+  wrong: every attempt failed with `bluetoothd` itself logging `No agent
+  available for request type 2` / `device_confirm_passkey: Operation not
+  permitted`, regardless of the adapter's `Pairable` state — there was
+  simply nobody for BlueZ to ask. Fixed by implementing `org.bluez.Agent1`
+  directly (`bluetoothagent.h`/`.cpp`, `BluetoothAgent`), registered via
+  `BluetoothManager::registerAgent()` with IO capability `DisplayYesNo` —
+  this dash has a screen and can show yes/no, but no keyboard. That drives
+  BlueZ toward Numeric Comparison (`RequestConfirmation`) when the peer also
+  supports display+confirm, which the existing `BluetoothScreen.qml`
+  Accept/Reject panel already assumed. `confirmPairing()` now replies to
+  the deferred D-Bus call `BluetoothAgent::RequestConfirmation()` hands off,
+  not to `QBluetoothLocalDevice` (that path is removed — it never worked).
+  **As of 2026-08-20 the AUX write characteristics also require
+  `AttAuthenticationRequired` in addition to `AttEncryptionRequired`**
+  (`bluetoothmanager.cpp`'s `makeAuxWriteChar()`), specifically so a plain
+  unauthenticated "Just Works" bond can't satisfy a write — BlueZ has to
+  reach an MITM-protected method (numeric comparison, now that an agent
+  actually exists to complete one) or the write fails. **This matters more
+  here than it did for the old config design**: a successful write to one
+  of these characteristics directly energizes a physical low-side output in
+  the car, not just a config value. Don't wire anything safety-relevant
+  (fuel, ignition, anything ECU-adjacent) to an AUX output reachable this
+  way — that's a wiring decision outside this app's control, but worth
+  stating plainly given what this service can now actually do.
+  Hardware-verified: the refusal path (an unbonded phone's write correctly
+  comes back `ATT error 0x0F Insufficient Encryption`, then the link resets
+  when BlueZ can't complete pairing while `Pairable: no`), and — once the
+  agent above actually existed — a phone completing a Passkey Entry bond
+  for real (`bluetoothctl info <addr>` showed `Paired: yes` / `Bonded: yes`
+  / `Connected: yes`) with a subsequent AUX write succeeding (visible as a
+  burst of periodic AUX CAN-frame sends in the journal, `CanBus`'s
+  100ms-refresh-while-nonzero behavior — see "Failsafe on BLE disconnect"
+  above).
+
+  **Second real hardware bug found in the same test, also fixed
+  2026-08-20**: after that successful pairing, `BluetoothScreen.qml`'s
+  "Pairing with..." prompt never closed. Root cause: Passkey Entry's
+  display-only side (`BluetoothAgent::DisplayPasskey`/`DisplayPinCode`) has
+  no explicit "you're done" callback on the Agent1 interface at all — BlueZ
+  completes the procedure entirely on its own once the peer finishes
+  typing. This dash was relying on `QBluetoothLocalDevice::pairingFinished`
+  to notice that and close the dialog, and — matching the *exact* class of
+  bug the agent registration above already found once — that signal simply
+  never fired on this stack either. Fixed by watching `org.bluez.Device1`'s
+  `Paired` property directly over D-Bus
+  (`BluetoothManager::watchDevicePaired()`/`onDevicePropertiesChanged()`),
+  scoped to the specific device path via `showPairingCode()`, which now
+  receives that path from `BluetoothAgent` instead of guessing from
+  whichever device happens to be currently connected. Also fixed in the
+  same pass: `DisplayPasskey`'s code wasn't zero-padded to 6 digits
+  (`QString::number(passkey)` would show "42" instead of "000042") — not
+  just a cosmetic gap, since that's literally the wrong code to type in for
+  any passkey under 100000.
 - One nuance specific to this dash's Bluetooth stack, worth knowing before
   trusting the GATT server dash-side: the raw-HCI path Qt5's BlueZ
   backend uses for *advertising* bypasses `bluetoothd` entirely (confirmed
@@ -372,10 +419,32 @@ Android app should expect:
   discoverable, confirm a write actually reaches `onAuxCharacteristicChanged()`).
   If it turns out to be broken on BlueZ, this may need a fallback design,
   not just a bugfix.
-- Should bonded devices be remembered (whitelist) so the driver doesn't
-  re-pair every drive, or should the dash forget bonds on
-  reboot/`stopAdvertising()`? Affects whether the Android app needs its own
-  "forget this dash" UX.
+- **Answered, 2026-08-20: bonded devices are remembered.** Two pieces,
+  both implemented, neither yet hardware-verified:
+  - Bonds now persist across reboots — `tisdk-base-image.bbappend`'s
+    `ultima_bluetooth_persist_bonds()` bind-mounts `/data/bluetooth` (the
+    one partition that survives a power cycle) over BlueZ's
+    `/var/lib/bluetooth`, which otherwise lives on this image's tmpfs
+    `/var/lib` and gets wiped every boot.
+  - New bonding is closed by default and only opens for a timed window the
+    driver has to deliberately start — `BluetoothManager::enterPairingMode()`
+    (wired to a "PAIR NEW DEVICE" button on `BluetoothScreen.qml`) sets
+    `org.bluez.Adapter1`'s `Pairable` property true via QtDBus for 2 minutes
+    (`kPairingModeTimeoutMs`) or until the driver closes the screen;
+    outside that window the adapter is non-bondable, which refuses a new
+    bonding attempt at the adapter level regardless of association method
+    (unlike gating the `pairingDisplayConfirmation`/`pairingDisplayPinCode`
+    signals, which a Just Works negotiation with no display step would
+    bypass entirely). An already-bonded phone connects and reconnects at
+    any time either way — reconnecting reuses the stored link key and never
+    triggers a new bonding procedure, so it's unaffected by `Pairable`.
+  - No "forget this dash" UX needed on the Android side beyond what
+    Android's own Bluetooth settings already provide (unpair from there) —
+    nothing here needs its own forget-bond flow.
+  - Needs hardware verification like everything else newer in this
+    document: confirm `Pairable=false` actually refuses a new bond attempt
+    rather than merely hiding it from `bluetoothctl`, and confirm the
+    bind-mounted bond database actually survives a real reboot.
 - Once real loads are wired to AUX1-4, rename the characteristics/UI labels
   to match (e.g. "Light Bar", "Aux Fan") instead of the generic `AUX1..4`
   used throughout this document.

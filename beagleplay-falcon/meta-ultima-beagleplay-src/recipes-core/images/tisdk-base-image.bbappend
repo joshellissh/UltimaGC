@@ -35,7 +35,10 @@ IMAGE_INSTALL:append:beagleplay-ti = " wpa-supplicant wl18xx-firmware"
 # still needed whatever ends up feeding hci0 (a USB dongle needs it exactly
 # as much as a real controller-only CC1352P7 firmware would), and its
 # default PACKAGECONFIG already includes tools (btattach/hcitool) and
-# systemd (bluetooth.service) with no override needed here.
+# systemd (bluetooth.service). It DOES need an override now — see
+# ultima_bluetooth_persist_bonds() below, added once BLE actually started
+# working via the CC1352P7-as-controller path (see NOTES.md, same section,
+# "Hardware-verified working").
 IMAGE_INSTALL:append:beagleplay-ti = " bluez5"
 
 # mycam004m (2026-08-17): the quad-camera V4L2 driver's mock/fake backend
@@ -117,7 +120,7 @@ IMAGE_FEATURES += "read-only-rootfs"
 # exactly one service regardless of which package owns it — this runs after
 # all package postinsts (including systemd's own "enable" pass), so it wins
 # regardless of ordering.
-ROOTFS_POSTPROCESS_COMMAND += "ultima_mask_timesyncd; ultima_journald_volatile; ultima_coredump_disable; ultima_mask_resize_rootfs; ultima_mask_getty_tty1; ultima_enable_wifi; "
+ROOTFS_POSTPROCESS_COMMAND += "ultima_mask_timesyncd; ultima_journald_volatile; ultima_coredump_disable; ultima_mask_resize_rootfs; ultima_mask_getty_tty1; ultima_enable_wifi; ultima_bluetooth_persist_bonds; "
 
 ultima_mask_timesyncd () {
     rm -f ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/multi-user.target.wants/systemd-timesyncd.service
@@ -292,4 +295,50 @@ EOF
     install -d ${IMAGE_ROOTFS}${systemd_system_unitdir}/multi-user.target.wants
     ln -sf ${systemd_system_unitdir}/wpa_supplicant@.service \
         ${IMAGE_ROOTFS}${systemd_system_unitdir}/multi-user.target.wants/wpa_supplicant@wlan0.service
+}
+
+# Bluetooth bond persistence (2026-08-20). BlueZ's default bond database
+# lives at /var/lib/bluetooth, but /var/lib is one of the volatile-binds
+# tmpfs mounts on this image (see "read-only-rootfs" above) — confirmed by
+# reading that feature's own comment, not assumed. Left alone, every reboot
+# wipes every bond, which means every drive re-triggers the pairing prompt
+# BluetoothScreen.qml shows on-screen (see bluetoothmanager.cpp's
+# pendingPairNeedsConfirm flow). That's not just an annoyance: a prompt the
+# driver sees and taps "Accept" on every single startup stops being a real
+# gate against an unintended device and becomes startup noise trained into
+# reflexive acceptance. Bind-mounting /data/bluetooth (the one partition
+# that survives a power cycle — see ultima-data-mount.bb) over
+# /var/lib/bluetooth makes a bond made once actually stay trusted, so
+# pairing only has to happen — and be deliberately accepted — once.
+#
+# The mkdir has to happen in its own unit ordered strictly before
+# bluetooth.service, not inside bluetooth.service's own ExecStartPre:
+# BindPaths= implies PrivateMounts=yes, and that mount namespace (with the
+# bind already applied) is constructed once per activation and shared by
+# every Exec* of that same unit, including its first ExecStartPre — so by
+# the time any command in bluetooth.service itself runs, it's already too
+# late for that unit to create its own bind-mount source.
+ultima_bluetooth_persist_bonds () {
+    install -d ${IMAGE_ROOTFS}${sysconfdir}/systemd/system
+    cat > ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/ultima-bluetooth-storage.service <<'EOF'
+[Unit]
+Description=Create /data/bluetooth before bluetooth.service bind-mounts BlueZ bond storage onto it
+After=ultima-data-mount.service
+Requires=ultima-data-mount.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/mkdir -p /data/bluetooth
+EOF
+
+    install -d ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/bluetooth.service.d
+    cat > ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/bluetooth.service.d/ultima-persist-bonds.conf <<'EOF'
+[Unit]
+After=ultima-bluetooth-storage.service
+Requires=ultima-bluetooth-storage.service
+
+[Service]
+BindPaths=/data/bluetooth:/var/lib/bluetooth
+EOF
 }
