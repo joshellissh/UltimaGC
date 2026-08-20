@@ -3149,6 +3149,19 @@ reflash: write a marker file to `/data` first and confirm both the "backed
 up" log line and the marker's survival, to actually exercise the code path
 this was written for instead of its fallback.
 
+**Third occurrence, still the fallback path — Bluetooth eMMC push
+(2026-08-19).** `emmc-push.sh` for the Bluetooth-dongle image (see
+"Bluetooth via CC1352P7" > "Hardware-verified working") again logged "no
+readable /data on the current eMMC ... proceeding without a backup," same
+as before. Didn't write the marker file this suggested beforehand — wasn't
+anticipated going into that push — so the backup→restore round-trip is
+*still* unexercised after three real reflashes. No real consequence this
+time either: `DEFAULT_TOTAL_ODO` is `0.0` as of the odometer-reset commit
+below, which is exactly what a wiped `/data` falls back to anyway, so
+there was nothing live to lose. But the marker-file test from the
+paragraph above remains not done — still worth doing on the next reflash
+whenever there's actually something real on `/data` to protect.
+
 ## Odometer reset to 0 (2026-08-19)
 
 Requested directly (not tied to any bug): reset the total odometer to 0,
@@ -3169,3 +3182,413 @@ overwrites a live edit with its stale in-memory value on the way down.
 Wrote `{"totalOdo":0,"tripOdo":0}`, swapped the binary, `systemctl start`,
 confirmed via journal: `OdoStore: saved totalOdo=0.0 tripOdo=0.0` on the
 next 30s autosave, file contents matching.
+
+## Bluetooth via CC1352P7 (2026-08-19)
+
+Requested: a small Bluetooth icon on the gauge cluster (bottom-right corner
+of `main.qml`) opening a pairing screen — the phone-facing link the WiFi
+AP + captive portal work's own postmortem earlier this same day already
+named as its replacement plan (see "WiFi AP + captive portal abandoned,
+reverted to client mode" above: "a Bluetooth link is the new plan for
+whatever phone-facing settings/telemetry surface this project wants
+instead"). What shipped today is a general pairing screen (scan, tap to
+pair/forget) — the actual settings/telemetry GATT surface that motivated
+this is a real follow-up, not built yet.
+
+### BeaglePlay has no wired Bluetooth on the WL1807 — confirmed against the actual dts
+
+First assumption going in — that the onboard WL1807 (WiFi) is a combo
+chip with Bluetooth riding the same silicon, same as many WiLink parts —
+turned out wrong for this specific part. Read the real, currently-building
+device tree directly out of the Yocto work-shared kernel tree
+(`arago-tmp-default-glibc/work-shared/beagleplay-ti/kernel-source/arch/
+arm64/boot/dts/ti/k3-am625-beagleplay.dts`, not a copy, not memory) rather
+than assume: WiFi is `wlcore@2` on `sdhci2` (SDIO), `compatible = "ti,
+wl1807"` — no BT UART node anywhere in the file. TI's WiLink8 line splits
+WiFi-only (WL180x) from WiFi+BT combo (WL183x, e.g. WL1837) at the part
+number; BeaglePlay's schematic uses the WiFi-only WL1807. This matches a
+BeagleBoard.org maintainer (RobertCNelson) confirming on the forum
+("Can't detect inbuilt bluetooth of BeaglePlay") that Bluetooth instead
+comes from the board's *other* wireless radio: "BeaglePlay's Bluetooth is
+provided by the cc1352, the out of box firmware doesn't support BLE... You
+need to grab one of TI's blobs and flash it." No fully-documented recipe
+exists anywhere in the community for this — two other forum threads
+("No bluetooth on boot", GSoC-era) hit the same wall and went unanswered.
+This section is that recipe, as far as it's been carried today.
+
+### The CC1352P7 is a real second radio, already wired for exactly this
+
+BeaglePlay carries a TI CC1352P7 SimpleLink wireless MCU (BLE 5.2 +
+802.15.4/Zigbee/Thread/sub-1GHz) as a genuinely separate chip from the
+WL1807, normally used for BeagleConnect/Greybus (see `greybus-host.html`
+upstream and `drivers/greybus/gb-beagleplay.c` in the kernel tree). Per
+the dts: it's a child node (`compatible = "ti,cc1352p7"`) under
+`&main_uart6`, which itself is pinmuxed via `wifi_debug_uart_pins_default`
+(RXD/TXD only — **no RTS/CTS wired**, a real constraint on whatever HCI
+UART baud rate/flow-control this ends up needing). `main_gpio0`'s
+`gpio-line-names` already carries `"CC1352P7_BOOT"` (pin 13) and
+`"CC1352P7_RSTN"` (pin 14) — the bootloader-backdoor entry pins — so no
+devicetree change is needed to reach the chip's ROM bootloader from Linux
+userspace.
+
+### The UART is already free — confirmed on real hardware, no DT change needed
+
+The obvious worry: `gb-beagleplay`'s Greybus serdev driver normally claims
+`&main_uart6`'s child node, which would mean either it eats the tty
+outright or (per the upstream Debian-image docs) needs an overlay
+(`k3-am625-beagleplay-bcfserial-no-firmware.dtbo`) to unbind it first. Checked
+against the actual `.config` this build produces
+(`arago-tmp-default-glibc/work/beagleplay_ti-oe-linux/linux-ti-staging/
+6.12.57+git/build/.config`) rather than assumed: **`CONFIG_GREYBUS` is not
+set** — this kernel never builds Greybus at all, so nothing binds that
+child node's compatible string. `CONFIG_SERIAL_DEV_CTRL_TTYPORT=y` is also
+already on, which is exactly the fallback mechanism that turns an
+unclaimed serdev child node back into a plain tty rather than leaving the
+port stuck in serdev-controller limbo with no `/dev/ttyS*` at all.
+
+Confirmed live over SSH, not just reasoned from config: `ls -la
+/dev/ttyS*` on the currently-running board shows `/dev/ttyS1` present, and
+`dmesg | grep 2860000.serial` shows `ttyS1 at MMIO 0x2860000` —
+`0x02860000` is `MAIN_UART6`'s base address per the AM625 TRM's UART
+memory map (`MAIN_UART0`@`0x02800000` through `MAIN_UART6`@`0x02860000`,
+`0x10000` apart), so this is genuinely main_uart6, not a guess from alias
+ordering (the `serial0`/`serial1`/`serial2` aliases in the dts do **not**
+map straight to `ttyS0`/`ttyS1`/`ttyS2` — confirmed the hard way when the
+kernel cmdline's `console=ttyS2` turned out to be `main_uart0`/`serial2`,
+not the naive `serial0→ttyS0` guess). **No devicetree overlay, no kernel
+config fragment — CONFIG_BT/CONFIG_BT_HCIUART/CONFIG_BT_HCIUART_H4/
+CONFIG_BT_HCIUART_SERDEV are all already `=y`/`=m` in arago's base
+defconfig, confirmed directly against the built `.config`, same way the
+WiFi work confirmed CFG80211/MAC80211 were already there before it.**
+
+### Flashing: `cc1352-flasher` (BeagleBoard's own tool), GPIO backdoor sequence confirmed
+
+`pip install cc1352-flasher` (`github.com/beagleboard/cc1352-flasher`) —
+a cross-platform TI CC13xx/CC26xx serial-bootloader uploader BeagleBoard.org
+maintains specifically for this chip on this board. Its `--play`/`--beagleplay`
+convenience path assumes a udev-provided `/dev/play/cc1352/uart` symlink
+this image doesn't ship (that's Debian-image-specific) — plan to invoke it
+with explicit `--port /dev/ttyS1 --gpio auto` instead. `--gpio auto` reads
+the GPIO line names straight off gpiod (`gpiod.find_line("CC1352P7_BOOT")`
+/ `"CC1352P7_RSTN"`), which resolves correctly against this board's dts
+with no changes needed (confirmed by reading the tool's actual source, not
+assumed from the `--help` text) — entry sequence is boot=0, reset pulse
+low→high, boot=1, 0.2s between each, standard TI CC13xx ROM bootloader
+backdoor timing. Flashing itself is a manual one-time step over SSH, not
+baked into the image, same pattern as `/data/wifi-client.conf` provisioning.
+
+### Still open — this is a spike, not a finished, hardware-verified feature
+
+**Superseded — see "`host_test` is a dead end" below.** The TI-login
+blocker described in this subsection was cleared (SDK obtained, extracted,
+read), which is what surfaced the bigger problem: `host_test` can't drive
+BlueZ at all, login or no login. Left as-is below for the historical record
+of what was blocking at the time; don't act on the "unconfirmed once
+firmware exists" paragraph below — those questions were answered and the
+answer is worse than "unconfirmed."
+
+**Blocked on obtaining TI's own firmware.** RobertCNelson's "grab one of
+TI's blobs" points at the SimpleLink CC13x2/CC26x2 SDK's prebuilt
+`host_test` hex (`[SDK]/examples/rtos/LP_CC1352P7_1/ble5stack/hexfiles/`,
+per a TI E2E forum thread on this exact question) — a standard-HCI-over-UART
+firmware image meant for exactly this "use the chip as a plain Bluetooth
+controller" use case. TI's SDK download requires a myTI account login
+(confirmed: the direct `.run` installer URL 302s through `login.ti.com`
+OAuth) — not something scriptable/downloadable without a human completing
+that flow, and this session had no Claude-in-Chrome browser connected to
+do it via an already-logged-in session either. BeagleBoard's own
+`cc1352-firmware` GitLab repo (checked via `git clone`, not the gated web
+UI, which sits behind an Anubis anti-bot challenge) carries only
+blinky/micropython/wpanusb/mcuboot/sensortest for BeaglePlay — no
+Bluetooth image. Whoever picks this up next needs to actually get that
+hex file (log into ti.com, or has the SDK already) before anything past
+this point can be tested.
+
+**Unconfirmed once firmware exists:** the exact protocol host_test speaks
+over UART (assumed plain H4 — `btattach -P h4`) and its default baud rate
+(`ultima-bluetooth-hci.service` currently hardcodes `115200` as a
+placeholder — see that unit's own comment in `tisdk-base-image.bbappend`).
+The missing RTS/CTS wiring noted above means if host_test insists on
+hardware flow control, this doesn't work without a firmware rebuild
+targeting BeaglePlay's actual pin/flow-control config (the LaunchPad
+prebuilt hex's DIO12/DIO13 pinout matches this board's wiring per the
+Zephyr board docs, encouraging but not proof the rest of the config
+matches too).
+
+### App side — peripheral, not central; built and dev-build-verified, controller-agnostic
+
+First draft had the dash scan for and pair with nearby devices, like a
+classic car-stereo Bluetooth screen (`QBluetoothDeviceDiscoveryAgent` +
+`QBluetoothLocalDevice::requestPairing()`). **Wrong model, caught before
+committing to it, not after** — flagged in an advisor review of the whole
+feature: a phone's own OS doesn't advertise itself as a connectable BLE
+peripheral, so a central-role scan from this dash would essentially never
+show the driver's own phone in the results, only whatever incidental BLE
+beacons happen to be broadcasting nearby. That central-scan shape is real
+and correct for a dash that wants to *consume* a BLE accessory (an OBD-II
+dongle, a sensor), just not for "pair with your phone" — which is what was
+actually asked for, and matches what this project's own WiFi-AP postmortem
+already named as the plan ("a Bluetooth link for whatever phone-facing
+settings/telemetry surface"). Confirmed with the driver before rewriting:
+the dash should instead advertise *itself* (as `"Ultima RS"`, reusing the
+name already chosen for the since-reverted WiFi AP — see "WiFi AP" above)
+so a phone finds and connects to it from the phone's own Bluetooth
+settings, the same shape as pairing a fitness tracker.
+
+**Platform wrinkle assumed here, then disproven by real testing — see
+"Hardware-verified working" below for the corrected version.** This
+paragraph originally claimed Android's Settings > Bluetooth lists and pairs
+generic BLE peripherals directly, unlike iOS. That was reasoning from how
+these platforms are generally understood to behave, not from testing
+against this actual advertisement — and it turned out to be wrong: tested
+against a real Android phone once real hardware was available, and its
+Settings app didn't show "Ultima RS" either, only Windows did. **Neither
+current iOS nor Android's built-in Bluetooth settings pairs with a bare
+BLE peripheral like this one** — both need a companion app
+(CoreBluetooth on iOS, `BluetoothLeScanner`/GATT APIs on Android), and
+neither exists. Left the rest of this paragraph's now-stale reasoning
+below for the historical record of what was assumed going in; don't act on
+it.
+
+`BluetoothManager` (`bluetoothmanager.h`/`.cpp`) wraps `QLowEnergyController`
+in its `PeripheralRole` (`createPeripheral()`, `startAdvertising()` with a
+`QLowEnergyAdvertisingData` carrying just `setLocalName("Ultima RS")` +
+`DiscoverabilityGeneral` — no custom GATT service yet, so there's nothing
+past "connectable and named" for a phone to interact with; the actual
+settings/telemetry surface this was ultimately meant to enable is a real
+follow-up, not built yet) plus `QBluetoothLocalDevice` for pairing
+confirmation — that half is adapter-level, not central/peripheral-specific,
+so it carried over from the first draft essentially unchanged: BlueZ still
+needs a registered Agent to answer a numeric-comparison/PIN prompt
+regardless of which side initiated the connection. QtBluetooth
+(`qtconnectivity`) added to `ultima-app.bb`'s `DEPENDS` and gated into the
+image via `DISTRO_FEATURES:append = " bluetooth"` in this layer's own
+`layer.conf`, since qtconnectivity's own PACKAGECONFIG only pulls in its
+bluez backend when that feature is present — confirmed against the actual
+built rootfs, not just assumed: `bitbake -e tisdk-base-image` shows
+`bluetooth` in the resolved `DISTRO_FEATURES`, and qtconnectivity's own
+`bitbake -e` + its `log.do_configure` show `PACKAGECONFIG="bluez"` and the
+real `-feature-bluez` configure flag, not `-no-feature-bluez`. Exposed as
+the `bluetooth` context property; `BluetoothScreen.qml` (opened by a small
+Canvas-drawn glyph — the real Bluetooth rune's outline, not a
+hand-approximated one; a first attempt at hand-eyeballing the zigzag
+rendered as a plain bowtie of two diamonds instead, caught by actually
+looking at a render rather than just reasoning about the path — in
+`main.qml`'s bottom-right corner) shows "Discoverable as ‘Ultima RS’",
+whichever device is currently connected (if any), and the same
+pairing-confirmation panel as before for numeric-comparison/PIN flows.
+
+Both the local device and peripheral controller are constructed lazily
+(`ensureLocalDevice()`/`ensurePeripheralController()`, only from
+`startAdvertising()`, not the constructor) — merely *constructing*
+`QBluetoothLocalDevice`/`QLowEnergyController` at app startup was enough to
+pop macOS's CoreBluetooth permission prompt on the dev build, confirmed
+live (it fired before anything ever touched the icon, and blocked in a way
+that hung two different `osascript` dismiss attempts — screenshotting past
+it needed `cliclick` instead). Target hardware (BlueZ) has no such gate,
+but staying lazy either way means a drive that never opens this screen
+never touches the radio.
+
+`QBluetoothLocalDevice::pairingDisplayConfirmation`/`pairingDisplayPinCode`/
+`pairingConfirmation()` don't exist in Qt6 (removed; Qt6's backend handles
+pairing confirmation implicitly) — `#if QT_VERSION < QT_VERSION_CHECK(6,0,0)`
+gates that half of `bluetoothmanager.cpp`, same general shape as the
+existing `greaterThan(QT_MAJOR_VERSION, 5)` split in `ultima-app.pro` for
+`QtOpenGL`. Only the Qt5 (target) path is reachable on real hardware
+anyway. Dev-build-verified end to end on macOS (Homebrew Qt6): icon
+renders correctly in the corner, tapping it opens the screen, adapter
+reports available, advertising starts (`"Discoverable as ‘Ultima RS’"`),
+disconnected state renders (`"Waiting for a connection..."`) — a real
+phone connecting is untestable without target hardware carrying real
+Bluetooth, per this project's own standing rule not to trust dev-build
+behavior as a stand-in for target hardware.
+
+**Yocto build-verified twice** — once for the initial (central/scan)
+shape, once more after the peripheral rewrite — both times a full
+`./build.sh tisdk-base-image` succeeding with `ultima-app` and
+`qtconnectivity` compiling clean against the real Qt5/BlueZ target
+toolchain, not just the macOS Qt6 dev build. Rootfs inspected directly
+after the first build (this project's own standing lesson: a successful
+`bitbake` run has repeatedly proven nothing about whether things actually
+landed — see the WiFi AP work's `include=`/regdb mistakes above) —
+confirmed present: `bluetooth.service` enabled via
+`/etc/systemd/system/bluetooth.target.wants/`, `ultima-bluetooth-hci.service`
+enabled via `/etc/systemd/system/multi-user.target.wants/`, its
+`bluetooth.service.d/ultima.conf` ordering drop-in, and the `btattach`
+binary itself, all exactly where `ultima_enable_bluetooth()` puts them.
+(`ultima_enable_bluetooth()` and the unit files it installed no longer
+exist — see below.)
+
+### `host_test` is a dead end — network processor firmware can't feed BlueZ, at any baud rate or framing
+
+Got the SDK (`simplelink_cc13xx_cc26xx_sdk_5_30_01_01.run`, TI login
+cleared, extracted via a `--platform linux/amd64` Docker container since
+it's an x86-64 Linux InstallAnywhere installer) and went to pin down the
+one thing flagged as unconfirmed above: what protocol `host_test_app.hex`
+actually speaks over UART, since the existing systemd unit's `-P h4` flag
+to `btattach` was a placeholder guess.
+
+**It's not H4.** Reading the shipped source
+(`examples/rtos/LP_CC1352P7_1/ble5stack/host_test/.../host_test_app.c`,
+`npi_frame_mt.c`, `npi_tl_uart.h`) shows host_test speaks TI's own
+"NPI/MT" framing — `SOF(0xFE) | LEN | CMD0 | CMD1 | Data | FCS`, a
+completely different byte layout from HCI H4's `packet-type-byte + raw HCI
+packet`. Baud is confirmed 115200 (`NPI_UART_BR`), so at least that half
+of the old placeholder was right.
+
+That alone would just mean writing a translation layer — annoying but
+tractable. **The real problem is one level up and kills the whole
+approach:** `host_test` is what TI calls a "network processor" build, and
+by TI's own documentation that configuration is architecturally
+incompatible with an external host stack like BlueZ, full stop:
+
+- BLE5-Stack User's Guide, *Software Architecture > BLE5-Stack Protocol
+  Stack and Application Configurations*: "The BLE controller and host
+  reside on the wireless MCU... It is important to note that the network
+  processor is not a pure HCI LE controller-only implementation and the
+  application must use TI Vendor Specific HCI commands for BLE Host
+  operations."
+- Vendor Specific HCI Guide, *HCI Interface*: "...not all events will be
+  returned as they will be trapped and possibly discarded by the Host
+  layer of the BLE Stack. Therefore, it is not possible to support an
+  external BLE Host in the Network Processor configuration."
+
+In plain terms: `host_test` runs its own GAP/GATT/SM Host on the CC1352P7,
+same as every other example in this SDK for this board
+(`simple_central`, `simple_peripheral`, `multi_role`, `project_zero`,
+`persistent_app`, `simple_mesh_node*` — checked the whole
+`examples/rtos/LP_CC1352P7_1/ble5stack/` directory, none of them is a bare
+controller). BlueZ is *also* a full Host stack, expecting a bare HCI LE
+controller underneath it with nothing already consuming its own events.
+Two Hosts can't stack. No NPI-to-HCI framing bridge fixes this — it would
+faithfully unwrap real HCI-shaped bytes and still be missing the events
+BlueZ needs, because `host_test` never sends them in the first place; they
+never leave the chip. This was checked directly against TI's docs, not
+inferred from the framing difference alone (worth being explicit about,
+since the framing finding alone could look like "just write a bridge" —
+it isn't).
+
+Consequence: `ultima_enable_bluetooth()` and the
+`ultima-bluetooth-hci.service` / `bluetooth.service.d/ultima.conf` unit
+files it installed have been **removed** from
+`tisdk-base-image.bbappend` (replaced with a comment recording this
+finding, so the next person doesn't re-derive it from scratch). `bluez5`
+stays installed — still needed regardless of what ends up feeding
+`hci0`. The `/dev/ttyS1` = main_uart6 wiring confirmed above (dmesg +
+AM625 TRM, no DT changes needed) also stays true and reusable for
+whatever comes next.
+
+**Two ways forward — decided: USB BLE dongle.** Presented to the user as a
+real choice (not pushed through silently) once the CC1352P7 dead end was
+confirmed:
+1. **USB BLE dongle (chosen)** — `btusb` gives Linux a real `hci0` with zero
+   custom software; the entire app-side stack built for this (`bluez5`,
+   `qtconnectivity` + `DISTRO_FEATURES:append = " bluetooth"`,
+   `BluetoothManager`, `BluetoothScreen.qml`) sits on top of `hci0` and
+   doesn't care how it got created, so none of that work was lost. Fast,
+   cheap, low-risk; the CC1352P7 goes back to being unused (as it was
+   before this spike).
+2. **Build a controller-only CC1352P7 firmware from source (not pursued)** —
+   TI's SDK supports this in principle (that's what "not a pure HCI LE
+   controller-only implementation" implies exists as a category), but no
+   such build ships as a ready-made example for this board in this SDK
+   version; it would mean configuring and building one from the BLE5-Stack
+   source, an open-ended firmware effort with its own unknowns.
+
+### Hardware-verified working (2026-08-19): CSR USB dongle, real HCI trace, seen from Windows
+
+User plugged a generic USB BLE dongle (`0a12:0001`, Cambridge Silicon
+Radio, HCI ver 6/rev 22bb — the common CSR8510 signature) into the board's
+USB hub. **Zero custom code needed at the kernel level** — confirmed live
+via SSH before any image rebuild: `btusb` bound it automatically,
+`hci0` came up (`dmesg`: "CSR: Setting up dongle with HCI ver=6 rev=22bb"),
+`rfkill list` showed it unblocked. This is the payoff of the whole
+"switch to a dongle" decision above — no devicetree, no kernel config, no
+custom driver, unlike everything the CC1352P7 path would have needed.
+
+Rebuilt `tisdk-base-image` with the `bluez5`/`qtconnectivity`/
+`BluetoothManager` work (already built and dev-build-verified earlier, but
+never exercised against a real controller until now) and validated on real
+hardware via the SD-card path rather than eMMC directly, so a broken image
+wouldn't strand the persisted boot medium — see "Flashing" above for
+`flash.sh`, and the `deploy-ti/images/...` note in "Build environment" for
+where `build.sh`'s pull-the-image step actually reads from (its own
+trailing echo message, and an earlier revision of this section, pointed at
+`arago-tmp-default-glibc/deploy/images/...`, which no longer exists; wasted
+one round-trip re-discovering the already-fixed correct path documented
+there instead of just reading it first).
+
+**`bluetoothd` came up clean against the new controller** — `bluetooth.service`
+active, `bluetoothctl show` reported `Roles: central` / `Roles: peripheral`
+and `Advertising Features: SupportedInstances: 0x05`, confirming this
+specific dongle genuinely supports the peripheral/advertising role the
+whole app design depends on (not a given — CSR8510-badged dongles include
+counterfeits with flaky LE support; worth checking on any dongle used here
+in the future, not just assuming the badge is enough).
+
+**The debugging trap worth flagging for next time: `bluetoothctl`'s
+`ActiveInstances` counter does not reflect Qt5's own advertising state, at
+all.** Tapping the Bluetooth icon set `hci0` `UP RUNNING` and logged
+`qt.bluetooth: Using BlueZ kernel ATT interface`, but `bluetoothctl show`
+kept reporting `ActiveInstances: 0x00 (0)` the entire time the screen was
+open — looked exactly like advertising silently failing (unsurprising,
+since `BluetoothManager::startAdvertising()` never wired up
+`QLowEnergyController::error()`, so a real failure would also have looked
+like this). **Root cause, found by reading Qt's own source** (pulled
+straight out of the Yocto build's work directory —
+`qtconnectivity/.../src/bluetooth/qleadvertiser_bluez.cpp` +
+`hcimanager.cpp`): Qt5's BlueZ peripheral backend does not use
+`bluetoothd`'s D-Bus `org.bluez.LEAdvertisingManager1` at all. It opens its
+own `SOCK_RAW`/`BTPROTO_HCI` socket bound directly to the `hci0` device
+(`HciManager`, coexists fine alongside `bluetoothd`'s own MGMT channel —
+confirmed via `btmon`: `RAW Open: ultima-app ... [hci0]` right next to
+`MGMT Open: bluetoothd ...`) and sends raw HCI commands
+(`LE Set Advertising Parameters` / `LE Set Advertising Data` /
+`LE Set Advertise Enable`) straight to the controller, bypassing
+`bluetoothd`'s own advertising-instance bookkeeping entirely. So
+`ActiveInstances` only ever reflects advertisements `bluetoothd` itself
+registered on its own D-Bus API — it was never going to move for this app,
+working or not. **Don't trust it as a signal for this codebase's
+Bluetooth feature; check with `btmon` or an external scanner instead.**
+
+**Confirmed genuinely working via a full `btmon -w` HCI trace**, captured
+while toggling the screen closed then open again: `LE Set Advertising
+Parameters` → Success, `LE Set Advertising Data` (name "Ultima RS", flags
+`LE General Discoverable Mode` + `BR/EDR Not Supported`) → Success,
+`LE Set Advertise Enable: Enabled` → Success. (One harmless wrinkle in that
+trace: the internal "stop advertising first, in case it's active" step that
+`queueAdvertisingCommands()` always runs came back `Command Disallowed`
+because it was already stopped — Qt's own `handleCommandCompleted()`
+explicitly special-cases exactly this status/command combination and
+continues rather than erroring, so it's a documented non-issue, not a bug.)
+**Independently confirmed over the air**: the user's Windows machine saw
+"Ultima RS" in its Bluetooth device list during this same window — a
+second, fully independent confirmation the advertisement is real,
+spec-correct, and receivable, not just "the HCI command returned success."
+
+**Platform reality check that reverses an earlier assumption in this file:
+tested against a real Android phone, and its built-in Bluetooth Settings
+did *not* show "Ultima RS" either.** Only Windows did. This directly
+contradicts what "App side — peripheral, not central" above assumed
+without testing ("Android's Settings > Bluetooth does list and pair
+generic BLE peripherals directly") — that assumption was wrong, corrected
+now that real hardware and a real phone were both available to check
+against instead of reasoning about it. The actual state of the world: on
+both current iOS and Android, a phone's *built-in* Bluetooth settings UI
+does not pair with a bare BLE peripheral that's advertising nothing but a
+name — both platforms need a dedicated companion app
+(CoreBluetooth on iOS, `BluetoothLeScanner`/GATT APIs on Android) to do
+anything with a peripheral like this one. Windows' plain "Add a Bluetooth
+device" flow is more permissive and shows it directly, which is why it
+worked there and nowhere else tested. No companion app exists for either
+phone platform — out of scope here, a user call whenever/if it's wanted.
+
+**Shipped as-is, with the UI corrected rather than the claim removed.**
+`BluetoothScreen.qml`'s hint text used to read "Connect to it from your
+phone's Bluetooth settings" — demonstrably false on every phone platform
+tested, so it was changed to "Visible to nearby BLE scanners (not your
+phone's Bluetooth settings)" instead of promising a phone-settings flow
+that doesn't exist. The icon, the advertising, and the underlying stack are
+all real and hardware-verified; only the "how a driver would actually use
+this today" story is limited to a BLE scanner app, not a system pairing
+flow — that's a real, known limitation of what's shipped, not a bug.

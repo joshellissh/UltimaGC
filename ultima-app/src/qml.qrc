@@ -4,6 +4,7 @@
         <file>CircularGauge.qml</file>
         <file>SimEngine.qml</file>
         <file>SetTimeScreen.qml</file>
+        <file>BluetoothScreen.qml</file>
         <file>DiagnosticScreen.qml</file>
         <file>Camera360Screen.qml</file>
         <file>RearCameraScreen.qml</file>

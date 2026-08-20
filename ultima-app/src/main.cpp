@@ -23,6 +23,7 @@
 #include "odostore.h"
 #include "canbus.h"
 #include "systemclock.h"
+#include "bluetoothmanager.h"
 #include "camerafeed.h"
 #include "cameraview.h"
 #include "surroundview.h"
@@ -99,6 +100,7 @@ int main(int argc, char *argv[])
     g_canBus = &canBus;
 
     SystemClock systemClock;
+    BluetoothManager bluetoothManager;
 
     // 4 independent feeds, one per /dev/mycam/camN — the mycam004m driver's
     // stable symlinks over whichever backend (fake or real) is currently
@@ -133,6 +135,7 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty("calibrationStore", &calibrationStore);
     engine.rootContext()->setContextProperty("sim", &canBus);
     engine.rootContext()->setContextProperty("systemClock", &systemClock);
+    engine.rootContext()->setContextProperty("bluetooth", &bluetoothManager);
     engine.rootContext()->setContextProperty("cameraFeed1", &cameraFeed1);
     engine.rootContext()->setContextProperty("cameraFeed2", &cameraFeed2);
     engine.rootContext()->setContextProperty("cameraFeed3", &cameraFeed3);

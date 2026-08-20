@@ -1,7 +1,7 @@
 SUMMARY = "Ultima fullscreen Qt5 QML gauge cluster"
 LICENSE = "CLOSED"
 
-DEPENDS = "qtbase qtdeclarative"
+DEPENDS = "qtbase qtdeclarative qtconnectivity"
 # ti-img-rogue-driver explicit here (not just via tisdk-base-image.bbappend's
 # IMAGE_INSTALL) so the GPU module can't silently drop out of the image if
 # that list changes later — same reasoning this project already used once

@@ -1,4 +1,4 @@
-QT += qml quick
+QT += qml quick bluetooth
 # QOpenGLShaderProgram/QOpenGLBuffer/QOpenGLVertexArrayObject/QOpenGLFunctions
 # (warpmesh.cpp, shadermanager.cpp, surroundtexture.cpp, surroundview.cpp)
 # live in QtGui itself on Qt5 (the target build) but moved into a separate
@@ -27,10 +27,10 @@ CONFIG += c++17
 TARGET = ultima-app
 HEADERS += odostore.h canbus.h systemclock.h camerafeed.h cameraview.h \
     cameracalibration.h warpmesh.h shadermanager.h surroundtexture.h surroundview.h \
-    calibrationstore.h
+    calibrationstore.h bluetoothmanager.h
 SOURCES += main.cpp odostore.cpp canbus.cpp systemclock.cpp camerafeed.cpp cameraview.cpp \
     cameracalibration.cpp warpmesh.cpp shadermanager.cpp surroundtexture.cpp surroundview.cpp \
-    calibrationstore.cpp
+    calibrationstore.cpp bluetoothmanager.cpp
 RESOURCES += qml.qrc
 
 # Off by default so the Buildroot/Pi build always uses real SocketCAN.

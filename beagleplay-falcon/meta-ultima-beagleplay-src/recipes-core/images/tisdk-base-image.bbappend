@@ -20,6 +20,24 @@ IMAGE_INSTALL:append:beagleplay-ti = " ultima-app ultima-splash can-utils mmc-ut
 # ultima_enable_wifi's own comment below for the exact mechanism.
 IMAGE_INSTALL:append:beagleplay-ti = " wpa-supplicant wl18xx-firmware"
 
+# Bluetooth (2026-08-19, status: BLOCKED — see NOTES.md "Bluetooth via
+# CC1352P7" for the full story). BeaglePlay's WL1807 is WiFi-only (the
+# WiLink8 "combo" parts with BT are the WL183x line, not WL1807; confirmed
+# against the actual dts, no BT UART node exists for it), so the plan was
+# Bluetooth via the onboard CC1352P7 wireless MCU (normally used for
+# Greybus/BeagleConnect over the same UART) flashed with TI BLE host_test
+# firmware, attached via bluez5 + btattach. That plan is dead: host_test is
+# a "network processor" build with its own Host (GAP/GATT/SMP) on-chip, and
+# TI's own docs say plainly it's "not possible to support an external BLE
+# Host" against it — BlueZ can't drive it no matter how the UART framing is
+# handled (see the comment further down where ultima_enable_bluetooth()
+# used to be for the full explanation). bluez5 is left installed regardless —
+# still needed whatever ends up feeding hci0 (a USB dongle needs it exactly
+# as much as a real controller-only CC1352P7 firmware would), and its
+# default PACKAGECONFIG already includes tools (btattach/hcitool) and
+# systemd (bluetooth.service) with no override needed here.
+IMAGE_INSTALL:append:beagleplay-ti = " bluez5"
+
 # mycam004m (2026-08-17): the quad-camera V4L2 driver's mock/fake backend
 # (mycam004m-fake.ko + its 4 static reference frames + the boot-time
 # select-camera-backend.sh run), enabled by default since no real
@@ -202,6 +220,44 @@ ultima_mask_getty_tty1 () {
 # is exactly why the AP work needed its own 10-wlan-ap.network to sort
 # ahead of it, and exactly why removing that file here is correct, not an
 # oversight).
+# Bluetooth via CC1352P7 reflash: DEAD END, see NOTES.md "Bluetooth via
+# CC1352P7" (2026-08-19 update) for the full story. There used to be an
+# ultima_enable_bluetooth() here installing a systemd unit doing
+# `btattach -B /dev/ttyS1 -P h4 -S 115200` to attach the onboard CC1352P7
+# (flashed with TI's `host_test` example firmware) as hci0. That can never
+# work, and it's not a framing/flag bug:
+#
+#   - Confirmed from host_test's own source that it speaks TI's NPI/MT byte
+#     framing (SOF/LEN/CMD0/CMD1/FCS), not raw HCI H4 — so `-P h4` was
+#     already wrong.
+#   - Worse, fixing the framing wouldn't be enough. TI's own BLE5-Stack
+#     User's Guide (Software Architecture > BLE5-Stack Protocol Stack and
+#     Application Configurations) says of the Network Processor
+#     configuration host_test builds: "the network processor is not a pure
+#     HCI LE controller-only implementation and the application must use TI
+#     Vendor Specific HCI commands for BLE Host operations." The Vendor
+#     Specific HCI Guide's HCI Interface page is more direct still: "it is
+#     not possible to support an external BLE Host in the Network Processor
+#     configuration." host_test runs its own GAP/GATT/SMP Host on the
+#     CC1352P7 and traps the standard HCI events an external Host would
+#     need. BlueZ *is* an external Host expecting a bare controller
+#     underneath it — two Host stacks can't stack, no bridge daemon
+#     translating NPI-framed bytes into HCI-shaped ones fixes an
+#     architecture mismatch. Confirmed by reading TI's docs directly, not
+#     inferred.
+#   - No example under examples/rtos/LP_CC1352P7_1/ble5stack/ in SDK
+#     5.30.01.01 ships a pure controller-only build (host_test,
+#     simple_central, simple_peripheral, multi_role, project_zero,
+#     persistent_app, simple_mesh_node* all bundle a Host). Building one
+#     from source would be a separate, open-ended firmware spike, not a
+#     config change here.
+#
+# main_uart6/ttyS1 wiring (CONFIG_GREYBUS unset + ttyport fallback,
+# confirmed live via dmesg against the AM625 TRM's UART6 MMIO base) is
+# still accurate and would still apply to any future controller-only
+# firmware or a USB BLE dongle — that part of the investigation wasn't
+# wasted, only the btattach/host_test wiring built on top of it.
+
 ultima_enable_wifi () {
     install -d ${IMAGE_ROOTFS}${sysconfdir}/wpa_supplicant
     cat > ${IMAGE_ROOTFS}${sysconfdir}/wpa_supplicant/wpa_supplicant-base.conf <<'EOF'
