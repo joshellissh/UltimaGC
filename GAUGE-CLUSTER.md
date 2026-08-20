@@ -49,7 +49,10 @@ change as the app evolves and a stale copy is worse than no copy.
   highway/spirited legs) directly on `CanBus`'s member state, so the gauges animate
   without real CAN hardware. This is what backs the local macOS dev build (see
   [Local macOS Dev Build](#local-macos-dev-build-with-simulated-can-data) and
-  `scripts/dev-build.sh`).
+  `scripts/dev-build.sh`). Also the only Tx path in the class: `setAux()`/
+  `allAuxOff()` command the MCE18's AUX outputs (see the MCE18 section below
+  and `ANDROID-BLE-INTEGRATION.md`) — everything else `CanBus` does is
+  read-only.
 - **`systemclock.h` / `systemclock.cpp`** — lets the QML time-set screen
   (`SetTimeScreen.qml`) push a new wall-clock time to the kernel via
   `clock_settime()`, with a best-effort write-through to a battery-backed hardware
@@ -70,8 +73,13 @@ change as the app evolves and a stale copy is worse than no copy.
   2026-08-19 — an earlier assumption that Android's Settings would "just work" turned
   out to be wrong) — reaching this from a phone needs a dedicated app; see
   `ANDROID-BLE-INTEGRATION.md` for the GATT service/characteristics an Android
-  companion app would use (none of which are implemented yet — advertising only,
-  today). `QBluetoothLocalDevice`
+  companion app would use — the Ultima AUX Control Service (4 AUX outputs on
+  the MCE18, via `CanBus::setAux()`) is implemented as of 2026-08-20, but not
+  yet hardware-verified: `QLowEnergyController::addService()` was previously
+  unproven on this stack (only advertising + connection were), and this
+  session had no board to test against — see that doc's own repeated caveat
+  and its "Open questions for whoever implements the dash side" list before
+  trusting this beyond compiling. `QBluetoothLocalDevice`
   is still used for pairing confirmation (adapter-level, not role-specific).
   Advertising is started once at boot (Linux target only, from `main.cpp`) and left
   running — it does not track whether `BluetoothScreen` is open, so a companion app
@@ -259,6 +267,15 @@ question (see below) was confirmed 2026-08-18, ahead of the rest of this frame.
 Needs, before trusting this on the road: `candump can0` with the MCE18 powered to
 confirm its actual configured base ID and analog protocol mode, and a known fuel
 level (e.g. empty vs. full tank) to calibrate the AIN0 scaling.
+
+**AUX outputs (Tx, the opposite direction from everything above)**: this car's
+MCE18 is a V4 unit — 4 low-side AUX outputs, 3A each, AUX4 PWM-capable — driven
+by `CanBus::setAux()`/`allAuxOff()` over a separate command frame (datasheet
+default receive ID `0x640`, distinct from the `0x700` read-side base ID above
+and equally unconfirmed against this car). This is the CAN backing for the
+Ultima AUX Control Service; see `ANDROID-BLE-INTEGRATION.md` for the full
+frame layout, the BLE GATT contract, and the failsafe design — not
+duplicated here since that doc is the source of truth for it.
 
 ### Debugging
 

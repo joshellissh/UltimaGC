@@ -163,6 +163,31 @@ public:
     // via decodeFrame(), same as debugToggleLeftIndicator() et al.
     Q_INVOKABLE void debugCycleHeadlights();
 
+    // AUX output control (Ultima AUX Control Service — see
+    // ANDROID-BLE-INTEGRATION.md). Commands the MCE18's low-side AUX
+    // outputs over CAN2. index is 0-3 (AUX1-4); value is clamped to 0/1 for
+    // AUX1-3 (index 0-2) and 0-100 for AUX4 (index 3, the only PWM-capable
+    // output on this car's V4 unit). Every call recomposes and resends the
+    // full 4-byte command frame, since the MCE18 expects all four outputs
+    // together in one frame, not one frame per output. Not Q_INVOKABLE —
+    // only BluetoothManager calls this today, no QML path needs it.
+    // Callers are expected to validate/reject out-of-range BLE writes
+    // themselves before calling this (see BluetoothManager's Status
+    // characteristic) — the clamp here is a defensive backstop, not the
+    // primary validation path.
+    void setAux(int index, int value);
+    // Forces all 4 AUX outputs off in one frame — the dash's own failsafe
+    // on BLE disconnect (see ANDROID-BLE-INTEGRATION.md "Failsafe on BLE
+    // disconnect"). Deliberately not relying on any MCE18-side receive
+    // timeout, since the CANchecked manual doesn't document one for this
+    // frame.
+    void allAuxOff();
+    // Last-commanded AUX1-4 values, mirroring what setAux()/allAuxOff()
+    // last sent — not a readback of actual electrical/load state (see
+    // ANDROID-BLE-INTEGRATION.md's "AUX State" characteristic for why that
+    // distinction matters).
+    int auxState(int index) const { return (index >= 0 && index < 4) ? m_auxState[index] : 0; }
+
 public slots:
     // Flush in-memory odometer to OdoStore and persist.
     void save();
@@ -206,6 +231,11 @@ private:
     void decodeFrame(quint32 id, const quint8 *data, int dlc);
     void accumulateOdometer();
     void closeSocket();
+    void sendAuxFrame();
+    // Starts/stops m_auxRefreshTimer based on whether any AUX output is
+    // currently non-zero — see the timer's own declaration below for why
+    // this resend exists at all.
+    void updateAuxRefreshTimer();
 
     OdoStore *m_odo;
     QString m_iface;
@@ -250,6 +280,22 @@ private:
 
     // Odometer integration
     qint64 m_lastSpeedMs = 0;
+
+    // AUX1-4 last-commanded state — see setAux()/allAuxOff() above. AUX4
+    // (index 3) holds 0-100 (PWM duty); AUX1-3 hold 0 or 1.
+    quint8 m_auxState[4] = {0, 0, 0, 0};
+    // Resends the current AUX frame every 100ms while any output is
+    // non-zero, stopped once every output is off. Exists because the
+    // CANchecked MCE18/CFE18 manual doesn't document whether the AUX
+    // command frame is a one-shot latch or needs periodic refreshing — a
+    // secondary (non-manual) source claims a ~100ms/500ms heartbeat
+    // requirement. If that's true, a one-shot write per change would make
+    // every commanded output silently switch itself back off ~500ms
+    // later — this resend is the harmless superset that works whichever
+    // way the real hardware turns out to behave. See
+    // ANDROID-BLE-INTEGRATION.md "Failsafe on BLE disconnect" for the
+    // separate, unconditional all-zero send this timer doesn't replace.
+    QTimer m_auxRefreshTimer;
 
 
 #if !defined(__linux__) || defined(ULTIMA_SIMULATE)

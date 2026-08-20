@@ -100,7 +100,10 @@ int main(int argc, char *argv[])
     g_canBus = &canBus;
 
     SystemClock systemClock;
-    BluetoothManager bluetoothManager;
+    // canBus backs the Ultima AUX Control Service's actual CAN Tx (see
+    // ANDROID-BLE-INTEGRATION.md) — BluetoothManager doesn't own it,
+    // matching odoStore/canBus's own not-owned relationship above.
+    BluetoothManager bluetoothManager(&canBus);
 #if defined(__linux__)
     // Always-on: the dash should be discoverable/connectable over BLE
     // regardless of whether anyone has opened BluetoothScreen (see

@@ -1,12 +1,21 @@
-# Android BLE Integration — Ultima Configuration Service
+# Android BLE Integration — Ultima AUX Control Service
 
 Spec for an Android companion app to connect to the Ultima gauge cluster over
-BLE and read/write its configuration. Covers both sides: what the dash needs
-to expose (currently doesn't) and exactly what the Android app needs to call.
+BLE and control the AUX (auxiliary) outputs on the MCE18 CAN bus expander
+wired to CAN2. Covers both sides: what the dash needs to expose (currently
+doesn't) and exactly what the Android app needs to call.
+
+**This supersedes an earlier design.** Before 2026-08-20 this document
+specified a *configuration* service (system time, trip odometer reset,
+camera calibration, WiFi provisioning — mirroring what the touchscreen's own
+settings screens already do). That design was never implemented dash-side
+(advertising only, same as today) and has been dropped in favor of AUX
+control, not layered alongside it. If you need the old config-service spec,
+pull this file from git history before this commit.
 
 ## Status: nothing below exists yet except advertising
 
-As of 2026-08-19, `BluetoothManager` (`ultima-app/src/bluetoothmanager.cpp`)
+As of 2026-08-20, `BluetoothManager` (`ultima-app/src/bluetoothmanager.cpp`)
 only advertises the dash as a connectable, discoverable BLE peripheral named
 `"Ultima RS"` — confirmed working on real hardware (HCI trace + seen from
 Windows; see `beagleplay-falcon/NOTES.md` "Bluetooth via CC1352P7" ›
@@ -14,57 +23,64 @@ Windows; see `beagleplay-falcon/NOTES.md` "Bluetooth via CC1352P7" ›
 characteristics.** A central can connect to it today, but there is nothing
 to read or write once connected.
 
-Everything in this document — the service, every characteristic, the WiFi
-live-apply behavior — is a design to implement, not a description of
-working code. Treat the GATT table below as the target for
-`BluetoothManager`'s dash-side implementation and for the Android app both,
-so the two sides are built against the same contract instead of drifting.
+Also new: `CanBus` (`ultima-app/src/canbus.cpp`) has never transmitted a CAN
+frame. It opens `can0` and only ever reads (`onReadable()` off a
+`QSocketNotifier`) — every existing gauge value flows one way, off the wire
+into Qt properties. AUX control needs a write path added to `CanBus` (or a
+small sibling class) that doesn't exist in any form today; this is a
+different, larger piece of new work than the old config design's GATT
+wrappers around already-writable objects (`SystemClock`, `OdoStore`,
+`CalibrationStore`).
+
+Everything in this document — the service, every characteristic, the
+CAN Tx behavior — is a design to implement, not a description of working
+code. Treat the GATT table below as the target for `BluetoothManager`'s
+dash-side implementation and for the Android app both, so the two sides are
+built against the same contract instead of drifting.
 
 Also relevant going in: **a phone's own Bluetooth Settings app cannot do any
 of this.** Neither iOS nor Android's built-in Settings pairs with or talks
 to a bare BLE peripheral like this one — confirmed by testing (see NOTES.md,
 same section). A dedicated app using Android's `BluetoothGatt` APIs — i.e.
 exactly what this document specifies — is the only way to reach this
-service from a phone. That's not a limitation of this design; it's why a
-companion app is necessary at all.
+service from a phone.
 
 ## Scope
 
-Four configuration surfaces, matched to what a human can already edit on
-the dash's own touchscreen (no new capability beyond that — this moves
-existing settings to a phone, it doesn't add new ones):
+The car's MCE18 is a **V4** unit (confirmed 2026-08-20): 4 low-side AUX
+outputs, 3A each, with AUX4 additionally supporting 0-100% PWM duty (PWM is
+a V4-only feature — V3 units only have 3 outputs and no PWM at all). None of
+the four outputs are wired to real loads yet, so this spec treats them
+generically (`AUX1`..`AUX4`) rather than naming them after a function —
+rename the characteristics/labels once real wiring assigns each one to
+something (a light bar, a fan, whatever) in both this doc and the Android
+app.
 
-| Surface | Dash-side screen today | Backing object |
-|---|---|---|
-| System time | `SetTimeScreen.qml` | `SystemClock` |
-| Trip odometer reset | Reset button on `main.qml` | `OdoStore` |
-| 360° camera calibration | `CalibrationSettingsScreen.qml` | `CalibrationStore` |
-| WiFi credentials | SSH-only manual step (`NOTES.md` "WiFi client mode") | `/data/wifi-client.conf` |
+**Explicitly out of scope, on purpose:** system time, trip odometer, camera
+calibration, WiFi provisioning — see "supersedes" note above. This app's
+whole job is now AUX control.
 
 ## Advertising & discovery
 
 Advertising starts once at boot (Linux target — `main.cpp`) and stays on
 continuously; it does not depend on `BluetoothScreen` being open on the
 touchscreen. A companion app can scan and connect at any time the dash is
-powered, e.g. to provision WiFi before ever getting in the car.
+powered.
 
 Dash advertises (confirmed live, `btmon` trace in NOTES.md):
 - Flags: `LE General Discoverable Mode` + `BR/EDR Not Supported`
 - Local name (complete): `Ultima RS`
 - **No service UUID in the advertisement today.** Recommend adding the
-  Ultima Configuration Service UUID (below) to the advertising data or scan
-  response once the GATT service exists — lets the Android app filter scans
-  by service UUID instead of by name string, which is more robust (names
-  aren't guaranteed unique or stable; a phone that's seen the SSID once
-  could also just remember the name, but a service UUID filter is the
-  standard, more reliable pattern). Until then, name-based filtering is the
-  only option.
+  Ultima AUX Control Service UUID (below) to the advertising data or scan
+  response once the GATT service exists, so the Android app can filter scans
+  by service UUID instead of by name string. Until then, name-based
+  filtering is the only option.
 
 ```kotlin
 val scanFilter = ScanFilter.Builder()
     .setDeviceName("Ultima RS")
     // Once the dash advertises the service UUID:
-    // .setServiceUuid(ParcelUuid(ULTIMA_SERVICE_UUID))
+    // .setServiceUuid(ParcelUuid(ULTIMA_AUX_SERVICE_UUID))
     .build()
 
 val scanSettings = ScanSettings.Builder()
@@ -102,39 +118,18 @@ val gatt = device.connectGatt(context, /* autoConnect = */ false, gattCallback,
   tapped a scan result," at the cost of not auto-reconnecting if the link
   drops. Reconnect logic (retry `connectGatt` on `onConnectionStateChange`
   disconnect) is the app's job.
-- **Request a larger MTU before touching the Calibration characteristic** —
-  its JSON payload won't fit in the default 23-byte ATT MTU (20 usable
-  bytes). Do this right after `STATE_CONNECTED`, before
-  `discoverServices()`:
-  ```kotlin
-  override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-      if (newState == BluetoothProfile.STATE_CONNECTED) {
-          gatt.requestMtu(247)   // wait for onMtuChanged before large writes
-      }
-  }
-  override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
-      gatt.discoverServices()
-  }
-  ```
-  247 is a safe, widely-supported target (fits comfortably under BLE's
-  517-byte ceiling and under what most controllers, including the CSR
-  dongle currently in use, negotiate without issue). Treat MTU negotiation
-  as the primary way to fit the calibration JSON, not a fallback — Android
-  *can* split an oversized characteristic write into GATT "long write"
-  Prepare-Write/Execute-Write sequences automatically, but that behavior is
-  stack- and OS-version-dependent in practice, not a guarantee to build on.
-  If a negotiated MTU still ends up smaller than the JSON payload on some
-  device, don't assume long-write will silently handle it — test on the
-  actual OS/stack combination in question before relying on it.
-
-- **Bonding.** Characteristics that write real config (time, trip reset,
-  calibration, WiFi) require an encrypted link — see the per-characteristic
-  table below. Android auto-triggers pairing the first time an app touches
-  an attribute that requires encryption and the link isn't encrypted yet
-  (fires `BluetoothDevice.ACTION_PAIRING_REQUEST`), but that shows up to the
-  app as a failed write that needs a retry once bonding completes, which is
-  a worse UX than doing it upfront. Recommend proactively bonding right
-  after service discovery, before any writes:
+- **No large-MTU negotiation needed.** The old config design's Calibration
+  characteristic carried a JSON blob and needed a 247-byte MTU request
+  before touching it. Every characteristic here is 1-4 bytes — the default
+  23-byte ATT MTU (20 usable) is comfortably enough, so skip that step
+  entirely.
+- **Bonding.** All four AUX write characteristics require an encrypted link
+  — see the per-characteristic table below. Android auto-triggers pairing
+  the first time an app touches an attribute that requires encryption and
+  the link isn't encrypted yet (fires `BluetoothDevice.ACTION_PAIRING_REQUEST`),
+  but that shows up to the app as a failed write that needs a retry once
+  bonding completes, which is a worse UX than doing it upfront. Recommend
+  proactively bonding right after service discovery, before any writes:
   ```kotlin
   if (device.bondState == BluetoothDevice.BOND_NONE) {
       device.createBond()
@@ -143,12 +138,16 @@ val gatt = device.connectGatt(context, /* autoConnect = */ false, gattCallback,
   ```
 - **Pairing method:** the dash's existing `QBluetoothLocalDevice` plumbing
   (`bluetoothmanager.cpp`) already handles "Just Works" and PIN-display
-  pairing callbacks — no numeric-comparison/MITM-protected pairing is
-  wired up dash-side today. That means the encrypted link protects against
-  passive eavesdropping but not an active attacker present at pairing
-  time. Acceptable for time/calibration; worth a second look before
-  shipping the WiFi PSK characteristic (see its own note below) if a wider
-  threat model matters.
+  pairing callbacks — no numeric-comparison/MITM-protected pairing is wired
+  up dash-side today. That means the encrypted link protects against
+  passive eavesdropping but not an active attacker present at pairing time.
+  **This matters more here than it did for the old config design**: a
+  successful write to one of these characteristics directly energizes a
+  physical low-side output in the car, not just a config value. Don't wire
+  anything safety-relevant (fuel, ignition, anything ECU-adjacent) to an
+  AUX output reachable this way — that's a wiring decision outside this
+  app's control, but worth stating plainly given what this service can now
+  actually do.
 - One nuance specific to this dash's Bluetooth stack, worth knowing before
   implementing the GATT server dash-side: the raw-HCI path Qt5's BlueZ
   backend uses for *advertising* bypasses `bluetoothd` entirely (confirmed
@@ -167,189 +166,87 @@ val gatt = device.connectGatt(context, /* autoConnect = */ false, gattCallback,
 
 ## GATT service definition
 
-**Service: Ultima Configuration Service**
-UUID: `debf0001-4f5e-4061-a31c-cd017e5c7fb7`
+**Service: Ultima AUX Control Service**
+UUID: `f6090001-ad4f-48f1-9b7f-a8d8a68b8c0b`
 
 (Freshly generated for this document, not yet used anywhere — fine to keep
 or regenerate before real implementation, just don't reuse a UUID from
-another product.)
+another product. Replaces the old Configuration Service UUID entirely, not
+alongside it.)
 
 **UUID rule:** every characteristic UUID is the service UUID with *only the
 first group* changed to the value shown in the table — the remaining four
-groups (`4f5e-4061-a31c-cd017e5c7fb7`) are identical across all of them.
-So characteristic 1 (`...0002` below) is, in full,
-`debf0002-4f5e-4061-a31c-cd017e5c7fb7`.
+groups (`ad4f-48f1-9b7f-a8d8a68b8c0b`) are identical across all of them. So
+characteristic 1 (`...0002` below) is, in full,
+`f6090002-ad4f-48f1-9b7f-a8d8a68b8c0b`.
 
-| # | Characteristic | UUID (first group; rest is `-4f5e-4061-a31c-cd017e5c7fb7`) | Properties | Security | Payload |
+| # | Characteristic | UUID (first group; rest is `-ad4f-48f1-9b7f-a8d8a68b8c0b`) | Properties | Security | Payload |
 |---|---|---|---|---|---|
-| 1 | Time Set | `debf0002` | Write | Encrypted (bonded) | 2 bytes: `hour` (u8, 0–23), `minute` (u8, 0–59) |
-| 2 | Odometer | `debf0003` | Read, Notify | None | 8 bytes: `totalOdo` (f32 LE), `tripOdo` (f32 LE) |
-| 3 | Trip Reset | `debf0004` | Write | Encrypted (bonded) | 1 byte: must be `0x01` |
-| 4 | Calibration Config | `debf0005` | Read, Write | Encrypted (bonded) | UTF-8 JSON, `CalibrationSet` shape (below) |
-| 5 | WiFi SSID | `debf0006` | Write | Encrypted (bonded) | UTF-8 string, ≤32 bytes |
-| 6 | WiFi PSK | `debf0007` | Write (no read) | Encrypted (bonded) | UTF-8 string, 8–63 bytes |
-| 7 | WiFi Apply | `debf0008` | Write | Encrypted (bonded) | 1 byte: must be `0x01` |
-| 8 | Status | `debf0009` | Read, Notify | None | UTF-8 string (see "Status characteristic" below) |
+| 1 | AUX1 | `f6090002` | Write | Encrypted (bonded) | 1 byte: `0x00`=OFF, `0x01`=ON |
+| 2 | AUX2 | `f6090003` | Write | Encrypted (bonded) | 1 byte: `0x00`=OFF, `0x01`=ON |
+| 3 | AUX3 | `f6090004` | Write | Encrypted (bonded) | 1 byte: `0x00`=OFF, `0x01`=ON |
+| 4 | AUX4 (PWM) | `f6090005` | Write | Encrypted (bonded) | 1 byte: `0`-`100` (PWM duty %) |
+| 5 | AUX State | `f6090006` | Read, Notify | None | 4 bytes: last-commanded `AUX1..AUX4` values, same encoding as above |
+| 6 | Status | `f6090007` | Read, Notify | None | UTF-8 string (see "Status characteristic" below) |
 
-All multi-byte numeric fields are **little-endian**.
+All writes are single bytes — no endianness concern.
 
-Characteristic #8 (Status) isn't something the user asked for by name, but
-is close to required for a usable app: without it, the Android app only
-ever knows a write reached the ATT layer, not whether the dash actually
-applied it (e.g. "trip reset succeeded" vs. "WiFi psk was too short and
-got rejected"). Recommended, not mandatory — flagging it as an addition
-rather than folding it in silently.
+### 1–3. AUX1 / AUX2 / AUX3 (on/off)
 
-### 1. Time Set
+Maps to bytes 0/1/2 of the MCE18's AUX-command CAN frame (see "CAN Tx
+protocol" below). Any byte value other than `0x00`/`0x01` should be rejected
+via the Status characteristic rather than silently clamped — a phone-side
+bug that sends garbage here should be visible, not swallowed, same principle
+the old config spec applied to its Trip Reset characteristic.
 
-Maps directly to `SystemClock::setTime(int hour, int minute)`
-(`systemclock.h`) — same semantics as `SetTimeScreen.qml`: sets *today's*
-date at the given wall-clock hour/minute, no timezone or date component.
-Seconds are zeroed by the existing implementation.
+Because the MCE18 expects all four outputs in a single combined CAN frame,
+not one frame per output, `BluetoothManager` (or whatever owns the CAN Tx
+path) needs to track the current value of all four AUX outputs itself and
+recompose/resend the full 4-byte frame on every single-characteristic write
+— a write to AUX2 must not clobber AUX1/AUX3/AUX4's last-commanded values.
 
 ```kotlin
-val payload = byteArrayOf(hour.toByte(), minute.toByte())
-gatt.writeCharacteristic(timeSetChar, payload, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
-```
-(Android 13+/API 33 signature shown; pre-33 uses the deprecated
-`characteristic.value = payload; gatt.writeCharacteristic(characteristic)`
-pattern — both are common to see in the wild depending on `minSdk`.)
-
-### 2. Odometer
-
-Read-only mirror of `OdoStore::totalOdo`/`tripOdo` (`odostore.h`). Notify
-so the app can show a live value without polling — dash-side, wire this to
-fire on the same 30s autosave tick `main.qml` already runs
-(`sim.save()`), not on every CAN-driven value change (that would be a lot
-of BLE notification traffic for a slowly-changing number).
-
-### 3. Trip Reset
-
-Write `0x01` to reset — maps to `OdoStore::setTripOdo(0.0)` followed by
-`save()`, the same effect as `main.qml`'s existing reset button. Any other
-byte value: reject (respond `GATT_INVALID_ATTRIBUTE_VALUE_LENGTH` or a
-custom application error, dash-side implementer's call), don't silently
-ignore it — a phone-side bug that sends garbage here should be visible,
-not swallowed.
-
-### 4. Calibration Config
-
-Read/write the same JSON shape `CalibrationSet::toJson()` /
-`CalibrationSet::fromJson()` already produce/consume
-(`cameracalibration.h`) — the dash side should be able to implement this
-characteristic as close to "hand the ATT read/write straight to the
-existing (de)serializer" as possible, no new format to invent.
-
-**Scope the writable fields to exactly what `CalibrationSettingsScreen.qml`
-already exposes on the touchscreen** — i.e. `CalibrationCameraModel`'s and
-`CalibrationGeometryModel`'s `Q_PROPERTY` sets, not the full underlying
-structs:
-
-- Per camera (`front`, `rear`, `left`, `right`), each a JSON object:
-  `posXInches`, `posYInches`, `posZInches`, `yawDegrees`, `pitchDegrees`,
-  `fovDegrees` — all `double`.
-- `geometry`: `vehicleLengthInches`, `vehicleWidthInches`,
-  `groundHalfExtentXInches`, `groundHalfExtentYInches`,
-  `wedgeOverlapDegrees`, `carIconScale` — all `double`.
-
-`CameraCalibration`'s other fields (`imageWidth`, `imageHeight`,
-`principalPointX/Y`, `k1`–`k4`) and `SurroundGeometryConfig`'s
-`meshGridResolution` are deliberately **not** user-tunable today (per
-`calibrationstore.h`'s own comments) — a real read will still include them
-(since they're part of the JSON `CalibrationSet::toJson()` shape), but a
-write should either omit them or have the dash ignore changes to them,
-matching the existing touchscreen UI's own restrictions rather than
-quietly granting the phone more control than the dash itself has.
-
-Example JSON shape (values illustrative, not the real defaults — see
-`cameracalibration.h`'s `defaultCalibration()` for those):
-```json
-{
-  "front": { "posXInches": 82.0, "posYInches": 0.0, "posZInches": 20.0,
-             "yawDegrees": 0.0, "pitchDegrees": 52.0, "fovDegrees": 185.0 },
-  "rear":  { "...": "..." },
-  "left":  { "...": "..." },
-  "right": { "...": "..." },
-  "geometry": {
-    "vehicleLengthInches": 164.0, "vehicleWidthInches": 75.0,
-    "groundHalfExtentXInches": 216.5, "groundHalfExtentYInches": 216.5,
-    "wedgeOverlapDegrees": 20.0, "carIconScale": 1.0
-  }
-}
+gatt.writeCharacteristic(aux1Char, byteArrayOf(if (on) 0x01 else 0x00),
+    BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
 ```
 
-Write should call the same path `CalibrationSettingsScreen.qml` triggers on
-edit — apply to the live `CalibrationStore` (so `SurroundView` re-warps
-immediately via `calibrationChanged()`, same as a touchscreen edit) — then
-`save()` to persist to `/data/calibration.json`. Validate before applying:
-this JSON is arriving from a phone over BLE, not a trusted local UI, so
-malformed/missing fields or out-of-range values (e.g. a FOV of -50) should
-be rejected via the Status characteristic rather than fed straight into
-`WarpMesh`.
+### 4. AUX4 (PWM-capable)
 
-### 5–7. WiFi SSID / WiFi PSK / WiFi Apply
+Byte value `0`-`100` (percent duty). Values above `100` should be rejected
+via Status, not clamped. Maps to byte 3 of the same CAN frame, per the
+CANchecked MCE18/CFE18 manual (Rev 2.0), which documents that byte as
+"AUX4 (0|1 or pwm 0-100%)" — `0` is off, `100` is full/continuous on, values
+between are PWM duty. **Unconfirmed against real hardware**: whether a
+mid-range value (e.g. `50`) actually produces ~50% duty on the load side, or
+whether the datasheet's phrasing means something subtly different — bench
+test with a real load before trusting this for anything the driver depends
+on. AUX1-3 on V3 hardware, and any car with a V3 MCE18 instead of V4, don't
+support this at all — this characteristic only makes sense on V4 units.
 
-**This is the one surface that needs genuinely new dash-side behavior, not
-just a GATT wrapper around an existing object.** Today,
-`/data/wifi-client.conf` is provisioned manually over SSH (see NOTES.md
-"WiFi client mode") and is only ever read once, at boot, by
-`ultima-wpa-supplicant-config.service` (a `oneshot` that concatenates a
-static base config with `/data/wifi-client.conf` into
-`/run/wpa_supplicant-wlan0.conf`, which `wpa_supplicant@wlan0.service`
-then uses). Writing the file while the system is already running has no
-effect until the next reboot, as things stand.
+### 5. AUX State (readback)
 
-For BLE provisioning to actually be useful (connect to WiFi without asking
-the driver to power-cycle the board), the WiFi Apply handler needs to:
-1. Assemble a `network={ ssid="..." psk="..." }` block from the two
-   characteristics' current values — standard wpa_supplicant config
-   syntax, matching what a human would have typed by hand over SSH.
-   **Escape `"` and `\` in both fields** before embedding them in the
-   quoted config syntax — an SSID or password containing either character
-   would otherwise break the generated config.
-2. Write it to `/data/wifi-client.conf` (same file, same format the boot
-   path already expects — no schema change).
-3. Re-run the same assembly the boot-time oneshot does (`cat` base +
-   new file → `/run/wpa_supplicant-wlan0.conf`) and
-   `systemctl restart wpa_supplicant@wlan0.service`, so the new
-   credentials take effect immediately. This part doesn't exist anywhere
-   in the codebase yet — it's new work, not a wrapper.
-4. Report success/failure (did wpa_supplicant actually associate, or does
-   it silently keep retrying against an unreachable/wrong-password AP?)
-   via the Status characteristic. wpa_supplicant's own state
-   (`wpa_cli status` / D-Bus `wpa_supplicant1.Interface.State`) is the
-   source of truth for this — polling or subscribing to that after the
-   restart is how the dash would know what to report back, rather than
-   just assuming success once the service restarts cleanly.
+Read/Notify. Mirrors the dash's own last-commanded `AUX1..AUX4` values —
+authoritative because the dash generated them, **not** because the MCE18
+confirmed receipt or because the physical load actually switched. Notify
+fires on every successful write plus once on connect, so a freshly-connected
+app can sync its toggle/slider UI to actual state without guessing (e.g.
+after being killed and relaunched, or after a different device made the
+last change).
 
-**Split into SSID/PSK/Apply as three characteristics (not one combined
-write)** deliberately: it lets the Android app show which specific field
-failed validation (e.g. PSK too short — WPA2-PSK requires 8–63 characters)
-before committing to an apply attempt, and keeps the password itself out
-of any characteristic that also needs read permission for anything else.
+This is deliberately not wired to the MCE18's own outgoing status frame
+(`0x702`, base ID `0x700` + 2), which per the same manual echoes a live
+AUX1-3 bitmask back onto the bus at byte 3 of that frame (byte 0-1 = AIN8,
+byte 2 = DIN0-7 — matching what `canbus.cpp` already decodes there — byte 3
+= AUX1-3, byte 4 = Ethanol Temp, byte 5 = Freq Enabled mask, byte 6 =
+Internal Temp, byte 7 = version) — real electrical-state confirmation, not
+just "the dash thinks it sent this." Cross-checking a write against that
+byte would be a genuine v2 improvement (only covers AUX1-3, not AUX4 — this
+frame predates the V4 4th output). That whole frame is still flagged in
+`GAUGE-CLUSTER.md`'s MCE18 section as "unverified, datasheet default, not
+wire-confirmed" overall, so treat the AUX1-3 byte the same way: plausible
+from the manual, not yet bench-confirmed against this car's actual unit.
 
-**WiFi PSK security note:** the PSK transits the BLE link in plaintext,
-protected only by link-layer encryption (see the pairing-method note under
-"Connection & security model" above — this dash only does "Just Works"
-pairing today, no MITM protection). That's a real, active-attacker-in-range
-threat model, not just theoretical — worth a second look (e.g. requiring
-numeric-comparison pairing instead of Just Works, specifically gating this
-characteristic) before treating this as production-ready for anything more
-sensitive than a home WiFi password the user already typed into the router
-once.
-
-```kotlin
-// After validating locally (SSID non-empty & ≤32 bytes, PSK 8-63 bytes):
-gatt.writeCharacteristic(wifiSsidChar, ssid.toByteArray(Charsets.UTF_8), WRITE_TYPE_DEFAULT)
-gatt.writeCharacteristic(wifiPskChar, psk.toByteArray(Charsets.UTF_8), WRITE_TYPE_DEFAULT)
-gatt.writeCharacteristic(wifiApplyChar, byteArrayOf(0x01), WRITE_TYPE_DEFAULT)
-// Then watch the Status characteristic's notifications for the result.
-```
-(Writes must complete sequentially — wait for each `onCharacteristicWrite`
-callback before issuing the next; `BluetoothGatt` only allows one
-outstanding operation at a time.)
-
-### 8. Status (recommended)
+### 6. Status
 
 Simple text-based command/response, since this isn't a high-throughput
 channel and human-readable strings make dash-side logging and Android-side
@@ -359,9 +256,9 @@ debugging both easier than inventing a binary status-code enum:
 "<char-index>:OK"
 "<char-index>:ERROR:<short message>"
 ```
-e.g. `"7:ERROR:psk too short (min 8 chars)"` after a failed WiFi Apply, or
-`"4:OK"` after a successful calibration write. Enable notifications on
-connect:
+e.g. `"4:ERROR:pwm value 150 out of range (0-100)"` after a rejected AUX4
+write, or `"1:OK"` after AUX1 is successfully applied. Enable notifications
+on connect:
 
 ```kotlin
 gatt.setCharacteristicNotification(statusChar, true)
@@ -369,20 +266,98 @@ val cccd = statusChar.getDescriptor(CCCD_UUID) // 00002902-0000-1000-8000-00805f
 gatt.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
 ```
 
+## CAN Tx protocol (dash → MCE18)
+
+Per the CANchecked MCE18/CFE18 manual (Rev 2.0), "Configuration via CAN bus
+frames": the MCE18 listens for AUX commands on a configurable "receive base
+ID," **default `0x640`** — separate from the `0x700` base ID it *transmits*
+sensor data on (which `canbus.cpp` already reads). This dash's MCE18 hasn't
+been confirmed to actually be configured at the default receive ID any more
+than its transmit ID has (see `GAUGE-CLUSTER.md`'s existing "not
+wire-confirmed" caveat for the input side) — verify via the DSS config tool
+or a candump session before trusting `0x640` in real code.
+
+Frame layout (8 bytes, all others besides AUX1-4 unused):
+
+| Byte | 0 | 1 | 2 | 3 | 4-7 |
+|---|---|---|---|---|---|
+| Meaning | AUX1 | AUX2 | AUX3 | AUX4 (0\|1 or PWM 0-100%) | unused |
+
+`CanBus` needs a write path added to send this frame — nothing in the class
+does this today (see "Status" above). A minimal shape: a
+`setAux(int index, int value)`-style entry point that updates an in-memory
+4-byte state array and writes one CAN frame (`struct can_frame` over the
+existing `can0` socket, ID `0x640` — likely needs to be its own writable fd
+use or reuse of `m_fd`, since the class currently only reads).
+
+### Failsafe on BLE disconnect
+
+This is the most safety-relevant new design decision here, so it gets its
+own section rather than being buried in a characteristic table.
+
+**When the BLE link drops (`QLowEnergyController::disconnected`), or
+advertising is explicitly stopped, the dash must immediately send one CAN
+frame of all zeros (`00 00 00 00`) — force every AUX output OFF — rather
+than just stop sending.** Don't rely on a hypothetical MCE18-side receive
+timeout to do this instead:
+
+- The manual's own "Configuration via CAN bus frames" section documents a
+  transmit rate/frequency setting for the MCE18's *outgoing* sensor data
+  (`0x700` frames) — that's the opposite direction from the AUX command
+  frame this doc is about, and the manual doesn't document any
+  receive-timeout or required refresh rate for the AUX command frame
+  itself.
+- A secondary, non-manual source (a product page, not the datasheet)
+  claims AUX commands must be resent every 100ms and that a 500ms gap
+  triggers a failsafe that deactivates the outputs. Plausible, but
+  unconfirmed against the primary document — worth a bench test (command an
+  output on, stop sending entirely, watch whether the physical output
+  actually drops around 500ms) before this dash-side design leans on it.
+
+Given that uncertainty, treat the explicit all-zero send-on-disconnect as
+the dash's own responsibility and the only failsafe to actually rely on.
+
+**This uncertainty isn't just a safety margin — it decides whether the
+feature works at all.** If the MCE18 really does require that ~100ms
+refresh, a one-shot write per characteristic write means every AUX output
+would silently switch itself back off ~500ms after being commanded, on
+real hardware, the first time anyone tests this end-to-end — that reads as
+a broken feature, not a missing safety net. So `CanBus` resends the current
+4-byte AUX frame every 100ms whenever any output is non-zero (implemented,
+see `sendAuxFrame()`/`updateAuxRefreshTimer()`), stopping once every output
+is back to 0. This is the harmless-superset choice: negligible extra bus
+traffic if the MCE18 turns out to latch, load-bearing if it doesn't. It is
+**not** a substitute for the unconditional all-zero send on disconnect
+above — that still fires immediately and separately, rather than waiting
+for the refresh timer to notice outputs should be off.
+
 ## Open questions for whoever implements the dash side
 
 Not Android-side concerns, but worth surfacing since they affect what the
 Android app should expect:
 
-- Does the dash reject a Calibration write outright on invalid JSON/fields,
-  or clamp to safe ranges? Changes what the Android app should validate
-  client-side vs. rely on the Status characteristic to catch.
+- Confirm the MCE18's actual configured AUX-command receive ID via the DSS
+  tool or `candump can0` (with a known command sent from a bench PC/DSS) —
+  this doc assumes the datasheet default `0x640`.
+- Confirm whether the AUX command frame actually needs periodic refreshing
+  or is a one-shot latch — see "Failsafe on BLE disconnect" above.
+  `CanBus` already resends every 100ms defensively (harmless either way),
+  so this doesn't block anything working; it's just worth knowing for real,
+  since a confirmed one-shot latch would let a future cleanup drop the
+  timer.
+- Bench-test AUX4's PWM duty behavior against a real load before exposing
+  it as more than on/off in the Android UI.
+- AUX4 PWM likely needs to be explicitly enabled in the DSS first (see the
+  manual's §7.16/PWM-output option, §4.1) — a V4 unit may not accept or
+  apply duty values on AUX4 until that's configured, even though the wire
+  protocol accepts 0-100 unconditionally.
+- `QLowEnergyController::addService()` is unproven on this stack (same
+  caveat carried over from the old config-service design) — spike it first,
+  dash-side, before building the full characteristic set against it.
 - Should bonded devices be remembered (whitelist) so the driver doesn't
   re-pair every drive, or should the dash forget bonds on
-  reboot/`stopAdvertising()`? Affects whether the Android app needs its
-  own "forget this dash" UX.
-- WiFi Apply's "did it actually connect" check (state (4) above) needs a
-  concrete timeout — wpa_supplicant can sit in a slow retry loop against a
-  wrong password indefinitely. Recommend the dash bound this (e.g. 15s)
-  and report a timeout as its own Status error rather than leaving the
-  Android app waiting.
+  reboot/`stopAdvertising()`? Affects whether the Android app needs its own
+  "forget this dash" UX.
+- Once real loads are wired to AUX1-4, rename the characteristics/UI labels
+  to match (e.g. "Light Bar", "Aux Fan") instead of the generic `AUX1..4`
+  used throughout this document.
