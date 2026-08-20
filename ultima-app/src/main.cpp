@@ -101,6 +101,35 @@ int main(int argc, char *argv[])
 
     SystemClock systemClock;
     BluetoothManager bluetoothManager;
+#if defined(__linux__)
+    // Always-on: the dash should be discoverable/connectable over BLE
+    // regardless of whether anyone has opened BluetoothScreen (see
+    // ANDROID-BLE-INTEGRATION.md, which assumes a companion app can connect
+    // at any time — e.g. WiFi provisioning before getting in the car — not
+    // only while someone is standing at the touchscreen with that screen
+    // open). Linux-only: merely constructing the Bluetooth objects fires a
+    // CoreBluetooth permission prompt at process launch on the macOS dev
+    // build (see bluetoothmanager.h) — no reason to impose that on every
+    // local QML-iteration run, so that build stays fully lazy.
+    //
+    // Deferred via singleShot(0), not called directly here — hardware-
+    // confirmed 2026-08-19: a direct call at this point runs before
+    // app.exec() ever starts the event loop, and QBluetoothLocalDevice's
+    // BlueZ backend never recovers even long after bluetoothd comes up
+    // afterward (a startAdvertising() retry loop kept reconstructing the
+    // object and re-checking isValid() every 1s for 40+ seconds past
+    // bluetoothd's startup, still failing — vs. the exact same code called
+    // later from a QML slot, well inside a running event loop, which
+    // worked immediately). Most likely cause: QDBusConnection::systemBus()
+    // is a process-wide singleton Qt sets up lazily on first use, and
+    // setting it up with no event loop pumping messages yet appears to
+    // wedge it permanently for the rest of the process — a fresh
+    // QBluetoothLocalDevice still inherits that same broken shared
+    // connection, so reconstructing the object doesn't help. Deferring
+    // this call to fire only once the event loop is already running
+    // avoids ever touching D-Bus in that broken pre-exec() state.
+    QTimer::singleShot(0, &bluetoothManager, &BluetoothManager::startAdvertising);
+#endif
 
     // 4 independent feeds, one per /dev/mycam/camN — the mycam004m driver's
     // stable symlinks over whichever backend (fake or real) is currently

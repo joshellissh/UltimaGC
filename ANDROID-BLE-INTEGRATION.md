@@ -43,6 +43,11 @@ existing settings to a phone, it doesn't add new ones):
 
 ## Advertising & discovery
 
+Advertising starts once at boot (Linux target — `main.cpp`) and stays on
+continuously; it does not depend on `BluetoothScreen` being open on the
+touchscreen. A companion app can scan and connect at any time the dash is
+powered, e.g. to provision WiFi before ever getting in the car.
+
 Dash advertises (confirmed live, `btmon` trace in NOTES.md):
 - Flags: `LE General Discoverable Mode` + `BR/EDR Not Supported`
 - Local name (complete): `Ultima RS`

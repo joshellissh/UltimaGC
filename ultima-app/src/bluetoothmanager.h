@@ -10,17 +10,27 @@
 
 // Backs the QML Bluetooth pairing screen (BluetoothScreen.qml), exposed as
 // the `bluetooth` context property. The dash acts as a BLE *peripheral* —
-// it advertises itself (see kLocalName below) and a phone connects to it
-// from the phone's own Bluetooth settings, the same shape as pairing a
-// fitness tracker — not a central that scans for and pairs with nearby
-// devices. That's a deliberate choice, not the more obvious-sounding one:
-// a phone's OS doesn't advertise itself as a connectable BLE peripheral,
-// so a central-role scan from this dash would never show the driver's own
-// phone in the list. See beagleplay-falcon/NOTES.md "Bluetooth via
-// CC1352P7" for the full reasoning (and the discovered platform wrinkle:
-// iOS's Settings > Bluetooth panel doesn't list generic BLE peripherals at
-// all — only Android's does; iOS needs a companion app using CoreBluetooth
-// for anything past this screen, which isn't built yet).
+// it advertises itself (see kLocalName below) — not a central that scans
+// for and pairs with nearby devices. That's a deliberate choice, not the
+// more obvious-sounding one: a phone's OS doesn't advertise itself as a
+// connectable BLE peripheral, so a central-role scan from this dash would
+// never show the driver's own phone in the list.
+//
+// Confirmed on real hardware (2026-08-19, HCI trace + seen from Windows)
+// that advertising itself genuinely works, but neither iOS's nor Android's
+// *built-in* Bluetooth settings will pair with a bare advertising-only BLE
+// peripheral like this one — both need a dedicated companion app
+// (CoreBluetooth / BluetoothLeScanner) to do anything with it. See
+// ANDROID-BLE-INTEGRATION.md for the GATT service spec that app would need,
+// and beagleplay-falcon/NOTES.md "Bluetooth via CC1352P7" for the fuller
+// history (including the CC1352P7 network-processor dead end this
+// USB-dongle approach replaced).
+//
+// Advertising is started once at boot on Linux (see main.cpp) and left
+// running — it does not track BluetoothScreen being open or closed, so a
+// companion app can connect at any time, not only while someone is
+// standing at the touchscreen. BluetoothScreen just surfaces status and
+// handles pairing-confirmation UI.
 //
 // Pairing-confirmation handling (QBluetoothLocalDevice) is adapter-level,
 // not central/peripheral-specific — kept from the earlier scan-based

@@ -1,5 +1,6 @@
 #include "bluetoothmanager.h"
 
+#include <QTimer>
 #include <cstdio>
 
 namespace {
@@ -90,8 +91,33 @@ QString BluetoothManager::localName() const
 void BluetoothManager::startAdvertising()
 {
     ensureLocalDevice();
-    if (!m_localDevice->isValid())
+    if (!m_localDevice->isValid()) {
+        // Boot-order race, hardware-confirmed 2026-08-19: main.cpp calls
+        // this synchronously early in main(), which can beat bluetoothd
+        // (Type=dbus, only "up" once its D-Bus name is registered — that
+        // measured ~9s in vs. this call landing ~5-6s in on one real boot).
+        // This didn't matter when advertising only started from a screen
+        // tap long after boot had settled; moving it to boot exposed it.
+        //
+        // QBluetoothLocalDevice (Qt5 BlueZ backend) appears to snapshot
+        // adapter presence via a one-shot D-Bus query made at construction
+        // and does NOT notice bluetoothd starting afterward on its own —
+        // confirmed empirically: retrying startAdvertising() while reusing
+        // the same object (ensureLocalDevice()'s `if (m_localDevice)
+        // return;` guard) left it permanently invalid across a full real
+        // boot, `bluetoothctl show` meanwhile listing the controller fine
+        // (`Powered: no` — bluetoothd knew about it, this object just never
+        // asked again). So: delete and let the next ensureLocalDevice()
+        // rebuild it from scratch, forcing a fresh query against a
+        // (by-then, hopefully) running bluetoothd. Same "keep trying" shape
+        // as CanBus::tryConnect() for the same class of startup race.
+        fprintf(stderr, "[bluetooth] no adapter yet, retrying in 1s\n");
+        delete m_localDevice;
+        m_localDevice = nullptr;
+        QTimer::singleShot(1000, this, &BluetoothManager::startAdvertising);
         return;
+    }
+    fprintf(stderr, "[bluetooth] adapter found, powering on and advertising\n");
     m_localDevice->powerOn();
     ensurePeripheralController();
 

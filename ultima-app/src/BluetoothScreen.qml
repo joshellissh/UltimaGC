@@ -22,6 +22,11 @@ import QtQuick 2.15
 // wrong — corrected after testing against a real Android phone, not before.
 // Don't put "connect from your phone's Bluetooth settings" back in the UI
 // text below without re-verifying that's actually true again.
+//
+// Advertising is always on (started once at boot on Linux, see main.cpp) —
+// it does NOT start/stop with this screen. open()/close() below only toggle
+// this status/pairing-confirmation overlay, so a companion app can connect
+// at any time, including while nobody is looking at the touchscreen.
 Item {
     id: root
     anchors.fill: parent
@@ -29,12 +34,10 @@ Item {
     z: 500
 
     function open() {
-        bluetooth.startAdvertising()
         visible = true
     }
 
     function close() {
-        bluetooth.stopAdvertising()
         visible = false
     }
 

@@ -3592,3 +3592,132 @@ that doesn't exist. The icon, the advertising, and the underlying stack are
 all real and hardware-verified; only the "how a driver would actually use
 this today" story is limited to a BLE scanner app, not a system pairing
 flow — that's a real, known limitation of what's shipped, not a bug.
+
+### Made advertising always-on at boot (2026-08-19) — and the boot-order race that broke it the first time
+
+Originally `BluetoothScreen.qml`'s `open()`/`close()` started and stopped
+advertising, so the dash was only discoverable while someone had the
+screen open on the touchscreen — useless for a companion app (see
+`ANDROID-BLE-INTEGRATION.md`) that needs to connect at any time, e.g. WiFi
+provisioning before getting in the car. Fix: `main.cpp` now calls
+`bluetoothManager.startAdvertising()` once at boot, guarded
+`#if defined(__linux__)` so the macOS dev build stays fully lazy (merely
+constructing the Bluetooth objects fires a CoreBluetooth permission prompt
+at launch there — confirmed earlier, no reason to impose that on every
+local QML-iteration run). `BluetoothScreen.qml`'s `open()`/`close()` no
+longer touch advertising at all — the screen is now pure status/pairing UI.
+
+**First hardware test of this exposed a real boot-order race**, not a
+mistake in the change itself: `hci0` came up `DOWN` and stayed that way,
+despite `ultima-app` having started normally. `journalctl` showed exactly
+why — `ultima-app` logged `Cannot find a running Bluez. Please check the
+Bluez installation.` at boot-uptime ~5.7s, but `bluetoothd`'s first log
+line (`Bluetooth daemon 5.72`) didn't land until ~9.1s. `main.cpp` calls
+`startAdvertising()` synchronously, early in `main()` — well before
+`bluetoothd` (`bluetooth.service`, `Type=dbus`) had registered its D-Bus
+name — and the old code treated `QBluetoothLocalDevice::isValid() == false`
+as permanent: it returned early and nothing ever retried, so the dash
+never advertised at all despite the code path executing exactly as
+intended. This never showed up before because advertising used to be
+screen-gated — by the time a human tapped the icon, `bluetoothd` had been
+up for ages.
+
+Deliberately **not** fixed via `ultima-app.service` ordering
+(`After=bluetooth.service`): that would delay the *entire app* — splash,
+gauges, everything — until bluetoothd's D-Bus name is up (~9s on this
+boot), a real regression on a project that has spent multiple rounds
+hardware-measuring boot time down to fractions of a second (see "Boot-time
+optimization" sections above) just to make Bluetooth advertising start a
+few seconds sooner. Fixed instead by making `startAdvertising()` itself
+resilient: if the local device isn't valid yet, retry via
+`QTimer::singleShot(1000, ...)` instead of giving up — the same "keep
+trying" shape this codebase already uses for `CanBus::tryConnect()`
+against the identical class of startup race.
+
+**First attempt at this retry was itself wrong, caught on the next real
+boot** — retried `startAdvertising()` but reused the same
+`QBluetoothLocalDevice` (via `ensureLocalDevice()`'s
+`if (m_localDevice) return;` guard), assuming `isValid()` was a live D-Bus
+query. It isn't, at least not reliably on this Qt5/BlueZ backend:
+`hci0` stayed `DOWN` for the entire boot despite the retry loop
+demonstrably running, and `bluetoothctl show` meanwhile listed the
+controller fine (`Powered: no`) — bluetoothd knew about it the whole time,
+`QBluetoothLocalDevice` just never asked again after its first (too-early)
+query came back empty. Real fix: `delete m_localDevice; m_localDevice =
+nullptr;` before each retry, forcing `ensureLocalDevice()` to fully
+reconstruct the object (and re-run its D-Bus query) rather than reusing a
+possibly-poisoned one. Also added plain `fprintf(stderr, ...)` lines on
+each retry/success so this is visible in the journal without needing a
+`btmon` trace next time. `availableChanged()` no longer needs an explicit
+extra `emit` in the success path — reconstruction now happens inside
+`ensureLocalDevice()` on every real retry, which already emits it.
+
+**Delete+reconstruct still wasn't the real fix either — caught on the boot
+after that, before wasting a third physical SD/USR cycle testing it (see
+"Serial console caveats" above for what that cycle turned into first —
+the CP2102 wedge, an eMMC-vs-SD mixup from an unattended `reboot` never
+having USR held, and a stale hot-deploy binary check, in that order).**
+Hardware evidence: with this retry in place, `hci0` stayed `DOWN` for 40+
+seconds past `bluetoothd`'s startup (`bluetoothd[907]: Bluetooth daemon
+5.72` at boot-uptime ~9.5s; the retry loop logging
+`[bluetooth] no adapter yet, retrying in 1s` every second straight through
+past 49s with no recovery), even though a plain `bluetoothctl show` in a
+separate process saw the controller fine the whole time. A *fresh*
+`QBluetoothLocalDevice` on every retry still couldn't see it — so
+reconstructing the object was never the load-bearing part of that fix.
+
+The actual difference between "works" and "doesn't": `BluetoothScreen.qml`
+calling `startAdvertising()` from a QML slot (well inside a running event
+loop) always worked immediately; the exact same code called directly in
+`main()`, before `app.exec()` starts the event loop, never recovers no
+matter how many times it's retried afterward — confirmed by reproducing
+this entirely over SSH with no reboot needed (`systemctl stop bluetooth`,
+confirm `inactive` + `hci0 DOWN`, `systemctl restart ultima-app`, check the
+journal), which is a much faster loop than a physical USR cycle for this
+class of bug. Likely cause (Qt-internals, can't fully verify from outside):
+`QDBusConnection::systemBus()` is a process-wide singleton Qt sets up
+lazily on first touch; touching it before any event loop is pumping
+messages appears to wedge it permanently for the rest of the process, and
+a fresh `QBluetoothLocalDevice` still rides on that same broken shared
+connection no matter how many times it's reconstructed.
+
+Real fix: defer the *first* call itself, in `main.cpp` —
+`QTimer::singleShot(0, &bluetoothManager, &BluetoothManager::startAdvertising)`
+instead of calling it directly — so the very first D-Bus/HCI touch happens
+only once the event loop is already running. Confirmed via the same
+SSH-only repro: with this in place, a fresh `ultima-app` restart against a
+*genuinely stopped* `bluetooth.service` (`systemctl is-active bluetooth` →
+`inactive`, `hci0 DOWN`, confirmed before restarting the app — not just
+inferred) found the adapter and started advertising on the very first
+attempt, zero retries logged. The delete+reconstruct retry loop from the
+paragraph above is kept as a defensive backstop (a real `bluetoothd` crash
+mid-drive should still self-heal), but it's no longer the thing actually
+carrying boot-time correctness — the `singleShot(0)` deferral is.
+
+Also re-discovered the USR-timing gotcha from "Rules that are easy to get
+wrong" firsthand while testing this: tapping USR after a power cycle was
+already underway silently booted stale eMMC content (`root=PARTUUID=
+076c4a2a-02`, `mmcblk0p2`) instead of the freshly flashed SD card
+(`deadbee5-02`, `mmcblk1p2`) — looked like the new image just didn't have
+the fix, until `findmnt -no SOURCE /` gave it away. Re-confirms the
+existing advice: hold USR *before* power/reset, not after boot's already
+started. A second, related trap surfaced later the same session: an
+**unattended** `reboot` issued over SSH (no one physically present to hold
+USR) falls through to eMMC every time, same as a tap-too-late — USR has to
+be held for every single boot-source-selection event, not just the first
+one after a flash. Cost a long detour chasing a phantom "board unreachable"
+problem before realizing the board just wasn't running the SD image being
+tested. Lesson for next time: hot-deploying a fix onto an already-SD-booted
+system's rootfs (skips `flash.sh` and the physical card shuffle entirely)
+is a genuine time-saver, but the *reboot* to actually re-test it still
+needs a human holding USR — that part doesn't have a software shortcut.
+
+**Final confirmation, genuine cold boot, USR held correctly:** boot
+source `/dev/mmcblk1p2` (SD, correct), `/usr/bin/ultima-app` checksum
+matching the `singleShot(0)`-fixed build, and the boot timeline showing
+`bluetoothd[888]: Bluetooth daemon 5.72` at uptime 9.21s immediately
+followed by `[bluetooth] adapter found, powering on and advertising` at
+9.28s — same boot, zero retries logged, `hci0 UP RUNNING`,
+`bluetoothctl show` reporting `Powered: yes`. The dash is discoverable
+automatically at boot now, with nobody touching `BluetoothScreen` at all —
+the original goal of this whole change.
