@@ -9,7 +9,7 @@ running the dash. For board-specific build/boot/flash instructions, see
 
 ### Source Files
 
-All in `ultima-app/src/`. Don't copy these listings verbatim
+All in `ultima-app/`. Don't copy these listings verbatim
 elsewhere — read `ultima-app.pro` / `qml.qrc` directly for the current file set; they
 change as the app evolves and a stale copy is worse than no copy.
 
@@ -59,7 +59,7 @@ change as the app evolves and a stale copy is worse than no copy.
   `beagleplay-falcon/NOTES.md` "Dash clock doesn't persist a manual set".
 ### QML Files
 
-The app consists of 11 QML files, all in `ultima-app/src/`:
+The app consists of 11 QML files, all in `ultima-app/qml/`:
 
 - **`main.qml`** — Root layout: 4 gauge needles over the Bavarian background layers, boost gauge (trapezoid black overlay with PSI readout), turn signal indicators, top indicator row (oil, check engine, beams, battery, coolant — warn icons flash at 300ms), a separate low-fuel badge (`icon_fuel_low.png`, turns the fuel-pump icon red under 1/4 tank — see `sim.lowFuelWarn`), gear indicator (Bahnschrift SemiBold font, P/R/N/1-7), odometer + trip odometer with reset button, touch feedback dot. Tapping the car (either lights state) opens `Camera360Screen` — this used to be a dedicated `icon_360.png` tap target; that icon and the binding were removed (2026-08-18) in favor of tapping the car itself. While a turn signal is active (and hazards aren't), `leftCamOverlay`/`rightCamOverlay` pop up a bordered `CameraView` fed by `cameraFeed3`/`cameraFeed4` respectively, reprojected through `mirror.frag`'s virtual-mirror view (see `CameraView`'s `mirrorViewSide` property below) — a live blind-spot mirror replacement, gone the instant the signal (a static level, not a blink waveform — see the CAN section) drops or hazards latch on. On startup, a ~1s splash-to-cluster intro (`introFrac`/`introTransitionDone`) shows `splash_screen.png` with `splash_car_start.png` overlaid at the exact offset it occupies in that art (262,167,1104x364 — pixel-matched against the source PNGs, not eyeballed), then fades the splash background out while the car cutout shrinks/moves onto `car_lights_off`'s alpha-bbox rect (627,479,346x128) and fades away, handing off to the real car artwork underneath. This exists so Qt's first frame is pixel-identical to what `beagleplay-falcon`'s pre-Qt `ultima-splash` framebuffer splash already painted (see that project's NOTES.md), keeping the modeset handoff invisible. Only once that finishes does the ~2s self-test (`startupActive`/`startupFrac`/`startupFlash`) sweep every needle to max and back and flash every icon before handing off to live `sim.*` values — real gauge/warning bindings are `startupActive ? <test value> : sim.<prop>`. Includes a periodic (30s) save timer for odometer persistence via `sim.save()`. All gauge values bind to the `sim` context property, which is the `CanBus` C++ object, not this file's `SimEngine.qml`. Hosts `SetTimeScreen`, `DiagnosticScreen`, `CameraGridScreen`, `Camera360Screen`, and `RearCameraScreen` as overlays; a swipe left/right on the main dash opens `DiagnosticScreen`/`CameraGridScreen` respectively — `PageIndicator` (below) shows dots for that 3-screen swipe layout.
 - **`CircularGauge.qml`** — Reusable needle gauge component: rotates `needle.png` over a transparent item positioned at the gauge center. Configurable start/end angles, counter-clockwise mode, needle size/pivot, optional debug arc overlay
@@ -75,7 +75,8 @@ The app consists of 11 QML files, all in `ultima-app/src/`:
 
 ### Asset Files
 
-`main.qml`'s background uses the "Bavarian" theme (source PSDs/exports in
+Images are in `ultima-app/assets/images/`, fonts in
+`ultima-app/assets/fonts/`. `main.qml`'s background uses the "Bavarian" theme (source PSDs/exports in
 `Ultima Gauge Cluster/Bavarian/` outside this repo): 4 stacked full-canvas
 (1600x720) layers instead of one flat image — back to front:
 
@@ -164,27 +165,29 @@ Read from SCal Datastreams → Generic CAN Transmit → Transmit Content. Frame 
 
 **Not on CAN at all:** `driveMode` (no Syvecs channel exists, and no physical selector is known to exist in the car) is a real READ+NOTIFY property, but on real hardware it's only ever set to its default (`"SPORT"`) — nothing decodes it from a CAN frame or an MCE18 input. It's a 3-state QString, which doesn't fit a single digital input the way the MCE18-sourced booleans below do; wiring it (e.g. to a real drive-mode selector switch) is unstarted. The dev-build simulator (`simulateTick()`) is the only thing that ever changes it, for layout review.
 
-### MCE18 CAN Bus Expander (Unverified — Datasheet Default, Not Wire-Confirmed)
+### MCE18 CAN Bus Expander (DSS-Configured 2026-08-21, Wiring Still Unconfirmed)
 
 Fills part of the gap above: `flvlA` (fuel level) and six booleans that have no
 Syvecs channel at all (`leftIndicator`, `rightIndicator`, `hazard`, `axleLift`,
 `lowBeams`, `highBeams`) are read from a CANchecked-protocol MCE18 CAN bus expander
-instead of the ECU. Source: "CAN2 MCE18 Mapping.pdf" (CANchecked MCE18 manual, Rev
-2.0).
+instead of the ECU. Source: `docs/MCE18-manual_V3+V4.pdf` (CANchecked MCE18 manual,
+Rev 2.0).
 `transmissionAuto` and `cruiseControl` are deliberately *not* part of this — both
 come from the Syvecs stream instead (`0x605` slot 3, ManualAuto_U12, and `0x601`
 slot 1, cruiseState — see the frame map above).
 
-**Most of this section is a datasheet default, not verified against this car**
-— no MCE18 unit has been on the bench or candump'd yet. Treat frame IDs, byte order,
-and the analog protocol mode as assumptions to confirm before trusting a real
-reading, the same way `mapMax` above was a documented case of trusting an unverified
-mapping. The one exception: DIN0/DIN1/DIN7's static-level-vs-flasher-waveform
-question (see below) was confirmed 2026-08-18, ahead of the rest of this frame.
+**The unit's own configuration (via DSS) was set 2026-08-21**: protocol
+`CANchecked 0-5000mV`, TX Base ID `0x700` (datasheet default, kept), CAN speed
+1 Mbit/s (matching Syvecs CAN2 and `can0`'s udev-configured bitrate — DSS
+defaults to 500 kbps, which would have silently produced zero traffic). That
+resolves the frame ID and analog-units questions this section used to flag as
+open. Still unconfirmed: DIN bit order and AIN0's empty/full direction — no
+candump against a known switch state or known fuel level has been done yet.
+DIN0/DIN1/DIN7's static-level-vs-flasher-waveform question (see below) was
+confirmed 2026-08-18, ahead of the rest of this frame.
 
-- **TX Base ID**: `0x700` — the unit's datasheet default. Doesn't collide with the
-  Syvecs frames (`0x600`-`0x614`), but this car's MCE18 unit hasn't been confirmed
-  to actually be configured at its default.
+- **TX Base ID**: `0x700` — the unit's datasheet default, confirmed set in DSS
+  2026-08-21. Doesn't collide with the Syvecs frames (`0x600`-`0x614`).
 - **Frame `0x700`** (Base ID): bytes 0-1 = AIN0, assigned to the fuel sender.
   AIN1-3 (bytes 2-7) are unused. AIN0 was picked over AIN1/AIN2/AIN6 specifically
   because those three double as Frequency 2/3/4 inputs per the datasheet — using
@@ -217,19 +220,40 @@ question (see below) was confirmed 2026-08-18, ahead of the rest of this frame.
   | DIN6 | *(unassigned — reserved for Frequency 1)* |
   | DIN7 | `hazard` |
 
-- **Analog scaling**: AIN0 can be configured on the unit as either raw 0-1023 ADC
-  counts or pre-scaled 0-5000mV (the datasheet's own table shows both units without
-  saying which is the power-on default). `CanBus::decodeFrame()` assumes raw
-  0-1023 counts spanning the AIN's own 0-5000mV full scale (`kMce18AinRawMax` /
-  `kMce18AinFullScaleMv` in `canbus.cpp`). The fuel sender itself is 1V empty / 4V
-  full (linear, per sender spec) — narrower than the AIN's 0-5V range — so fuel
-  level is `(mv − kFuelSenderEmptyMv) / (kFuelSenderFullScaleMv − kFuelSenderEmptyMv)`
+- **Analog scaling**: AIN0-8 are configured (protocol `CANchecked 0-5000mV`) to
+  arrive as millivolts directly — the unit does its own ADC-to-voltage conversion
+  internally, so `CanBus::decodeFrame()` reads AIN0 as mV with no raw-counts
+  scaling step. The fuel sender itself is 1V empty / 4V full (linear, per sender
+  spec) — narrower than the AIN's 0-5V range — so fuel level is
+  `(mv − kFuelSenderEmptyMv) / (kFuelSenderFullScaleMv − kFuelSenderEmptyMv)`
   (1000mV/4000mV in `canbus.cpp`), not a plain ratio against full scale. Empty/full
-  direction (low counts = empty) is assumed.
+  direction (low mV = empty) is still assumed, not candump-confirmed.
 
-Needs, before trusting this on the road: `candump can0` with the MCE18 powered to
-confirm its actual configured base ID and analog protocol mode, and a known fuel
-level (e.g. empty vs. full tank) to calibrate the AIN0 scaling.
+- **AUX1-3 outputs (not currently driven by `ultima-app` — `CanBus` is
+  Rx-only, no Tx path)**: bench-tested 2026-08-21 by hand with `cansend` on
+  the RX Base ID (`0x640`, default, confirmed working as-is — byte 0 = AUX1,
+  byte 1 = AUX2, byte 2 = AUX3, `0`=OFF/`1`=ON). Confirmed bit *N* = AUX
+  *N+1* echoed back in `0x702` byte 3 (same bit-order convention as the DIN
+  mask above). **Important for whenever something does drive these: the
+  MCE18's outputs are watchdog-based, not sticky.** A single one-shot
+  `cansend` doesn't hold — the unit reverts to OFF well under a second after
+  the command frame stops arriving (confirmed by repeating the RX frame
+  every 20ms with a shell loop; a single send showed no effect at all in a
+  2s window). Whatever eventually commands these (Syvecs Tx config, a future
+  `CanBus` Tx path, etc.) needs to send the AUX state periodically, not once.
+
+This bench test used the ODrive USB-CAN adapter (`gs_usb`, temporarily
+re-added alongside the MCP2515 SPI click — see `ultima-can.cfg`/
+`70-can.rules` — since the click isn't physically seated on the mikroBUS
+header yet) and confirmed real MCE18 traffic end-to-end: `0x700`/`0x701`/
+`0x702` all present, byte 7 of `0x702` (`version`) read `0x74` (116),
+consistent with a real unit on firmware past the internal-mapper cutoff
+(104) mentioned in the manual.
+
+Needs, before trusting this on the road: `candump can0` with the MCE18 wired
+to real car switches to confirm DIN bit order (toggle one switch at a time
+and watch which bit moves) and a known fuel level (e.g. empty vs. full tank)
+to confirm the AIN0 empty/full direction and calibration.
 
 ### Debugging
 
