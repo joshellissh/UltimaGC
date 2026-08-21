@@ -3352,3 +3352,54 @@ DT/Kconfig chain from scratch next time this symptom shows up). `flash.sh`
 stamping every card it writes with the same `deadbee5` PARTUUID (see
 "Flashing" above) means that signature alone doesn't prove *today's* flash
 took — only that *some* `flash.sh` run wrote that card at some point.
+
+## Two environmental build failures, unrelated to any feature work (2026-08-21)
+
+Hit while building the CAN-SPI change above — both pre-existing, both would
+strike on *any* `build.sh` run in this specific checkout, not something the
+CAN change caused. Fixed since they blocked getting a bootable image at
+all.
+
+**mycam004m sibling repo resolves to nothing on this checkout.**
+`build.sh`'s `MYCAM004M_SRC="$(cd ../../mycam004m ...)"` assumes UltimaGC is
+checked out under `~/code/` alongside its sibling repos (the comment in
+`mycam004m.bb` says as much: "~/code/mycam004m"). This checkout lives on a
+mounted network share (`/Volumes/UltimaBuildCode/UltimaGC`) instead, so the
+relative path resolves to nothing, silently falls back to an empty stub
+dir, and `mycam004m.bb`'s `do_populate_lic` fails on a missing `LICENSE`
+file — a confusing failure mode for what's really just "wrong path,"
+since IMAGE_INSTALL forces mycam004m into every `tisdk-base-image` build
+(same "can't silently drop out" pattern as ti-img-rogue-driver). Confirmed
+the real repo exists at `/Users/jellis/code/mycam004m` with the exact
+`LICENSE` md5 the recipe wants (`eb723b61539feef013de476e68b5c50a`), and
+that OrbStack already shares `/Users` into the build container. Fix:
+`build.sh` now also tries `~/code/mycam004m` before falling back to the
+empty stub. Three separate assignments, not one `A && B || C && D || E`
+one-liner — chaining a second `&& pwd` fallback after an `||` hits real
+`&&`/`||` precedence and `set -e` traps (tested empirically, not assumed):
+the first `pwd` gets *re-run* a second time whenever the first `cd` already
+succeeded (silently duplicating the path with a newline in between), and
+under `set -e` a failed `cd` inside a `$(...)` assignment aborts the whole
+script right there rather than falling through to the next candidate —
+`|| true` after each `cd ... && pwd` is required to neutralize that.
+
+**`ultima-app/src`'s SMB mount has stale, lock-stuck `.smbdeleteAAA*`
+files** that broke `ultima-app.bb`'s `do_unpack` `shutil.copytree`
+(`shutil.Error: [Errno 2] No such file or directory` on files that were
+present moments earlier during `scandir`). These are macOS smbfs's
+rename-based delete-on-network-share artifacts, not real source — one
+checked directly turned out to be a stale pre-edit snapshot of
+`tisdk-base-image.bbappend` still containing the entire Bluetooth feature
+this repo's most recent commit (`fe8b445`) removed. Can't just delete them:
+every `rm` returned `Resource busy` (a real OS-level SMB lock, not a
+permissions problem — `sudo rm` won't help, and unmounting/remounting the
+share to clear it is a non-starter since the repo itself lives on that
+share). Fix instead: `ultima-app.bb`'s `do_unpack:append()` now passes
+`ignore=shutil.ignore_patterns('.smbdelete*')` to `copytree`, filtering them
+at the `scandir` step regardless of their lock state — permanent against
+this SMB quirk rather than racing a retry and hoping the ghost files happen
+to not collide with the copy window that time. Left the ghost files
+themselves in place (this is the user's SMB workflow producing them, not
+something to clear from here); a build hitting a *new* location's ghost
+files would need the same `ignore=` treatment there, not another retry.
+

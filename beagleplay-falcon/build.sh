@@ -31,7 +31,22 @@ ULTIMA_APP_SRC="$(cd ../ultima-app/src && pwd)"
 # build of an unrelated target like ultima-app. Fall back to an empty dir
 # under the volume itself so the bind-mount source always exists.
 AVM_BENCHMARK_SRC="$(cd ../test/avm-benchmark 2>/dev/null && pwd || echo /tmp/ultima-empty-avm-benchmark)"
-MYCAM004M_SRC="$(cd ../../mycam004m 2>/dev/null && pwd || echo /tmp/ultima-empty-mycam004m)"
+# ../../mycam004m assumes this checkout sits under ~/code/ alongside its
+# sibling repos. When UltimaGC lives elsewhere (e.g. a mounted network
+# share), that relative path resolves to nothing and silently falls back to
+# the empty stub — mycam004m.bb's do_populate_lic then fails on a missing
+# LICENSE, not a friendly "source not found" error. Try the relative path
+# first, then the fixed ~/code/mycam004m location, before giving up.
+# (Three separate assignments, not one chained `&&`/`||` one-liner — with a
+# second `&& pwd` fallback appended after an `||`, `&&`/`||` precedence
+# re-runs the first `pwd` a second time whenever the first `cd` already
+# succeeded, duplicating the path. Each `cd ... || true` also matters on its
+# own under `set -e`: without it, a failed `cd` inside the command
+# substitution aborts the whole script right here instead of falling
+# through to the next candidate.)
+MYCAM004M_SRC="$(cd ../../mycam004m 2>/dev/null && pwd || true)"
+MYCAM004M_SRC="${MYCAM004M_SRC:-$(cd ~/code/mycam004m 2>/dev/null && pwd || true)}"
+MYCAM004M_SRC="${MYCAM004M_SRC:-/tmp/ultima-empty-mycam004m}"
 mkdir -p /tmp/ultima-empty-avm-benchmark /tmp/ultima-empty-mycam004m
 TARGET="${1:-tisdk-base-image}"
 

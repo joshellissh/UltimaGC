@@ -34,7 +34,14 @@ python do_unpack:append() {
     s = d.getVar('S')
     if os.path.exists(s):
         shutil.rmtree(s)
-    shutil.copytree(d.getVar('ULTIMA_APP_EXTERNAL_SRC'), s)
+    # ULTIMA_APP_EXTERNAL_SRC is a live bind-mount of the source tree on the
+    # host's SMB-mounted checkout, which accumulates .smbdeleteAAA* files —
+    # stale, sometimes lock-stuck leftovers of macOS smbfs's rename-based
+    # delete-on-network-share dance, not real source. copytree's scandir-
+    # then-copy is a two-phase process, so one going busy/vanishing between
+    # the two phases raises shutil.Error and fails do_unpack outright.
+    shutil.copytree(d.getVar('ULTIMA_APP_EXTERNAL_SRC'), s,
+                     ignore=shutil.ignore_patterns('.smbdelete*'))
 }
 
 # do_unpack's task signature is computed from SRC_URI (just the .service and
