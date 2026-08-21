@@ -5,6 +5,8 @@ beagleplay-falcon/deploy-falcon/
 beagleplay-falcon/boot-logs/
 .DS_Store
 **/.DS_Store
+.smbdelete*
+**/.smbdelete*
 .qtcreator/
 **/.qtcreator/
 .tmp.driveupload/
