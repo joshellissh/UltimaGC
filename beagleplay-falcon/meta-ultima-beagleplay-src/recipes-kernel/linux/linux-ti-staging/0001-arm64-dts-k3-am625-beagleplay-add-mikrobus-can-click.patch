@@ -1,0 +1,27 @@
+--- a/arch/arm64/boot/dts/ti/k3-am625-beagleplay.dts
++++ b/arch/arm64/boot/dts/ti/k3-am625-beagleplay.dts
+@@ -947,5 +947,24 @@
+ &ecap2 {
+ 	status = "okay";
+ 	pinctrl-names = "default";
+ 	pinctrl-0 = <&mikrobus_pwm_pins_default>;
+ };
++
++/ {
++	clk_mcp2515: clock-mcp2515 {
++		compatible = "fixed-clock";
++		#clock-cells = <0>;
++		clock-frequency = <10000000>;
++	};
++};
++
++&main_spi2 {
++	mikrobus_can: can@0 {
++		compatible = "microchip,mcp2515";
++		reg = <0>;
++		spi-max-frequency = <10000000>;
++		clocks = <&clk_mcp2515>;
++		interrupt-parent = <&main_gpio1>;
++		interrupts = <9 IRQ_TYPE_LEVEL_LOW>;
++	};
++};

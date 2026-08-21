@@ -1190,7 +1190,14 @@ binary needs installing, no loose QML/asset files.
 Added via `recipes-kernel/linux/linux-ti-staging_%.bbappend` +
 `ultima-can.cfg` (`CONFIG_CAN=y CONFIG_CAN_RAW=y CONFIG_CAN_GS_USB=y`,
 built-in not module, same reasoning as the Buildroot fragment: avoid a
-module-load race with early CAN access). `CONFIG_DRM_TIDSS`/
+module-load race with early CAN access).
+
+**Superseded (2026-08-20):** the ODrive USB-CAN adapter was retired in favor
+of a mikroBUS-mounted SPI CAN controller — see "CAN interface migrated from
+USB adapter to mikroBUS SPI click" further down. `ultima-can.cfg` no longer
+has `CONFIG_CAN_GS_USB` at all.
+
+`CONFIG_DRM_TIDSS`/
 `CONFIG_DRM_FBDEV_EMULATION` were already on by default here — didn't need
 touching (`CONFIG_DRM_POWERVR` is still `=m` and unlike the Buildroot port
 hasn't been evaluated for its known fb0-probe-race contribution — see
@@ -1258,7 +1265,11 @@ copy for why it's a copy and not a shared file — Yocto recipes need files
 inside the layer's own `files/`) from
 `br2-external/board/ultima-beagleplay/overlay/etc/udev/rules.d/70-can.rules`.
 `iproute2` added to `RDEPENDS` since the rule's `RUN+=` lines need `/sbin/ip`
-and nothing in this image otherwise pulled it in.
+and nothing in this image otherwise pulled it in. **Superseded (2026-08-20)
+— see "CAN interface migrated from USB adapter to mikroBUS SPI click"
+further down**; `br2-external/` (and the Buildroot RPi5 port it belonged to)
+no longer exists in this repo either way, so that mirrored-from path is
+stale regardless of the CAN hardware change.
 
 **Data persistence**: `/data/odometer.json` (written by `OdoStore`/`CanBus`,
 see `main.cpp`) — for now just a plain directory on the normal rootfs,
@@ -3182,3 +3193,162 @@ Wrote `{"totalOdo":0,"tripOdo":0}`, swapped the binary, `systemctl start`,
 confirmed via journal: `OdoStore: saved totalOdo=0.0 tripOdo=0.0` on the
 next 30s autosave, file contents matching.
 
+## CAN interface migrated from USB adapter to mikroBUS SPI click (2026-08-20) — DT/kernel path hardware-verified 2026-08-21, click board not yet physically connected
+
+Replaced the ODrive USB-CAN adapter with a MikroE **CAN SPI 3.3V click**
+(MCP2515 CAN controller + SN65HVD230 transceiver) plugged into BeaglePlay's
+mikroBUS header, wired to the same Syvecs S7+ CAN2 bus. Motivation: get the
+dash off a USB dongle. This is a straight replacement, not an addition —
+`can0` is now the SPI device; nothing in `canbus.cpp` changed (it was already
+generic `PF_CAN`/`SOCK_RAW` against whatever `can0` is).
+
+**Falcon boot forces this to be a compile-time DT change, not a runtime
+overlay.** BeaglePlay's normal path (and the `k3-am625-beagleplay-release-
+mikrobus.dtbo`-style overlays BeagleBoard docs describe) applies `.dtbo`
+overlays inside U-Boot proper via `extlinux.conf`'s `fdtoverlays`. Falcon
+boot skips U-Boot proper entirely (R5 SPL → ATF → OP-TEE → Linux directly,
+see "Falcon boot" above) — there's no stage in this project's boot path that
+ever runs `fdtoverlays`. Confirmed nothing in either custom layer sets
+`KERNEL_DEVICETREE` or references a project-local `.dts`; this project has
+always shipped `meta-ti-bsp`'s stock upstream `k3-am625-beagleplay.dts`
+unmodified until now. So the MCP2515 node has to be baked into the dtb at
+kernel build time, same pattern as the existing U-Boot falcon-boot binman
+dtsi patch (`meta-falcon-beagleplay-src/recipes-bsp/u-boot/u-boot-ti-staging/
+0001-arm-dts-k3-am625-beagleplay-add-falcon-boot-binman-.patch`).
+
+**New patch**:
+`meta-ultima-beagleplay-src/recipes-kernel/linux/linux-ti-staging/
+0001-arm64-dts-k3-am625-beagleplay-add-mikrobus-can-click.patch`, wired into
+`linux-ti-staging_%.bbappend`'s `SRC_URI:append` (plain unified diff, not
+git-style — same quilt gotcha as the U-Boot patch, see "Must be a plain
+unified diff" above). Appends (doesn't edit in place) two label-referenced
+blocks at EOF: a `fixed-clock` node for the MCP2515's crystal, and a
+`can@0` child node under `&main_spi2`. Appending rather than patching the
+existing `&main_spi2 { ... }` block in place was deliberate — DTS allows
+re-opening an already-labeled node anywhere later in the file to add
+children, so the patch only needs a few lines of tail context to apply
+instead of matching deep into upstream's file, and survives minor upstream
+dts drift.
+
+Pin/hardware facts, pinned down rather than guessed (each was a real
+research step, not assumed):
+- **BeaglePlay has exactly one mikroBUS site** (confirmed via BeagleBoard
+  docs/forum search) — no "which socket" ambiguity.
+- **mikroBUS SPI is already stock-enabled**: `&main_spi2` ships
+  `status = "okay"` with `mikrobus_spi_pins_default` (CLK/CS0/D0/D1) in the
+  base dts already — just had no child device. CS is hardware SPI2_CS0
+  (`reg = <0>`), no manual GPIO chip-select needed.
+- **INT → `main_gpio1` line 9.** The stock dts's `gpio-line-names` labels
+  three plain-GPIO mikroBUS pins generically (`MIKROBUS_GPIO1_9/10/12`) —
+  it does *not* say which is INT/AN/RST by name. Cross-referenced against a
+  BeagleBoard forum post that mapped `gpioinfo` output to mikroBUS signal
+  names (GPIO1_9=INT, GPIO1_10=AN, GPIO1_12=RST) and confirmed internally
+  consistent: mikroBUS PWM has its own dedicated pin (`ecap2`/
+  `mikrobus_pwm_pins_default`, a different physical net entirely), which is
+  exactly why the plain-GPIO group has 3 members (INT/AN/RST), not 4.
+  `IRQ_TYPE_LEVEL_LOW` — MCP2515's `/INT` is a level output, held low until
+  the driver clears the interrupt source, not edge.
+- **RST needs no DT property at all.** Pulled the actual MikroE schematic
+  (`can-spi-click-33v-manual-v100.pdf`): the click's `/RESET` pin has its own
+  onboard 100 kΩ pull-up to VCC, and the mainline `microchip,mcp251x`
+  binding has no `reset-gpios` property in the first place (driver
+  soft-resets the chip over SPI on probe). Wiring mikroBUS RST into the DT
+  node would have been actively wrong, not just unnecessary.
+- **10 MHz crystal** (X1 on the click's schematic) → `clock-frequency =
+  <10000000>` on the new `fixed-clock` node, referenced by the MCP2515's
+  `clocks` property, plus `spi-max-frequency = <10000000>` (MCP2515's SPI
+  ceiling). This is the fact most likely to silently break CAN if wrong —
+  SocketCAN's bit-timing calculator derives BRP/PROP_SEG/PS1/PS2 from this
+  value, and a wrong oscillator produces exactly the "bit-timing not yet
+  defined" error a BeagleBoard forum user hit trying this same chip on
+  BeaglePlay's mikroBUS. Pulled from the schematic, not remembered/assumed.
+- Click's termination jumper (J2) takes over the role the ODrive adapter's
+  switchable 120 Ω terminator played — populate it, same reasoning as
+  before (Syvecs CAN2 has no on-board termination of its own).
+
+**Verified locally before touching the real build** (kernel source isn't
+checked into this repo — lives only in the `falcon-yocto-build` docker
+volume — so this was done against a reference copy): fetched
+`k3-am625-beagleplay.dts` and its full include chain from BeagleBoard's
+`BeagleBoard-DeviceTrees` GitHub repo at the `v6.12.x` branch (matches this
+project's `linux-ti-staging` 6.12.57 exactly), applied the patch
+(`patch -p1`, clean), preprocessed with `clang -E -x assembler-with-cpp`,
+compiled with `dtc` (Homebrew) — no errors or warnings — then decompiled the
+resulting `.dtb` and confirmed `can@0` landed as an actual child of the real
+`main_spi2` node with `clocks`/`interrupt-parent` phandles resolving to the
+new fixed-clock and `main_gpio1` respectively, and `interrupts = <9 8>` (8 =
+`IRQ_TYPE_LEVEL_LOW`). This de-risks the DTS syntax/semantics but is not a
+substitute for a real build + boot — TI's actual `linux-ti-staging` tree
+could differ from BeagleBoard's upstream in ways this reference copy
+wouldn't catch.
+
+**Kernel config** (`ultima-can.cfg`, same file, `CONFIG_CAN_GS_USB` removed):
+`CONFIG_CAN_MCP251X=y`, `CONFIG_SPI=y`, `CONFIG_SPI_OMAP24XX=y`, all built-in
+rather than modules. Deliberate, not just "why not `=y`": this is a
+DT-instantiated platform/SPI device rather than a hotplugged USB one, and
+DT-platform-device module coldplug already burned this project once
+(`CONFIG_DRM_TIDSS` — see that section above, never root-caused why coldplug
+didn't fire, fixed by forcing the module via `/etc/modules-load.d/`
+instead). Building the mcp251x driver in sidesteps that whole class of bug
+rather than re-litigating it.
+
+**udev rule** (`70-can.rules`, same file, content replaced): was
+`SUBSYSTEM=="net", ACTION=="add", DEVPATH=="*/usb*", ATTRS{idVendor}=="1d50",
+ATTRS{idProduct}=="606f"`, now `SUBSYSTEM=="net", ACTION=="add",
+SUBSYSTEMS=="spi", DRIVERS=="mcp251x"` — matches the netdev's parent SPI
+device by driver name instead of a USB VID/PID, same `ip link set ... type
+can bitrate 1000000` + `up` `RUN+=` actions. Also dropped the comment
+pointing at `br2-external/board/ultima-beagleplay/overlay/etc/udev/
+rules.d/70-can.rules` as the "keep in sync" source — that whole Buildroot/
+RPi5 tree doesn't exist in this repo anymore (see CLAUDE.md), so the pointer
+was already stale independent of this change.
+
+**Not yet done (as first written above)**: no board access that session, so
+nothing had touched real hardware yet — needs `beagleplay-falcon/build.sh`,
+a flash, and a `candump`/`ip -details link show can0` check with the click
+actually wired to the ECU's CAN2 (B2/CAN_H, B3/CAN_L) before trusting any of
+this end to end. The DTS verification above only proved the tree compiles
+and merges correctly, not that the physical INT/CS/oscillator wiring is
+right on real silicon.
+
+### Hardware verification (2026-08-21) — DT/kernel path confirmed, click board not yet connected
+
+Built (`beagleplay-falcon/build.sh`), flashed to SD (`flash.sh disk4`), and
+booted with USR held. Confirmed over SSH:
+
+- `dmesg`: `mcp251x spi0.0: MCP251x didn't enter in conf mode after reset` /
+  `probe with driver mcp251x failed with error -110` (`-ETIMEDOUT`).
+- `/sys/bus/spi/devices/spi0.0` exists — the DT node instantiated a real SPI
+  child device. (Linux numbers SPI *master* controllers by probe order, not
+  by DT label suffix — `main_spi2` in the dts becomes `spi0` here since
+  it's the only SPI controller enabled on this board; that's expected, not
+  a bug.)
+- `uname -r` reported `6.12.57-ti-01316-g31b07ab8dfbc-dirty` (the `-dirty`
+  suffix is `scripts/setlocalversion` correctly flagging the kernel patch
+  applied via `0001-arm64-dts-...-add-mikrobus-can-click.patch`) — confirms
+  this was genuinely today's build, not a stale cached one.
+
+**This is exactly the outcome you'd expect with an empty mikroBUS socket,
+not a DT/config bug**: the driver got far enough to issue a real SPI reset
+transaction and time out waiting for a response, which only happens if the
+kernel-side plumbing (pinmux, SPI bus routing, chip-select, IRQ GPIO,
+`CONFIG_CAN_MCP251X` actually built) is already correct — an unpowered/
+disconnected chip can't do anything else. Confirmed with the user: the
+click board is not physically plugged into the mikroBUS socket yet. So this
+fully verifies the compile-time/DT/kernel-config side of the CAN-SPI work;
+the only remaining unknown is the physical click board itself (INT/RST/CS
+pin assignment against real silicon, oscillator behavior, CAN2 wiring to
+the ECU) — untestable until the board is seated and wired.
+
+**One real debugging trap hit and resolved along the way, unrelated to the
+CAN-SPI work itself**: the first post-flash SSH check showed the *old*
+gs_usb-era `70-can.rules` and a kernel `.config` with none of this
+project's fragment values — looked exactly like a DT/Kconfig bug, but
+turned out to mean the SD card hadn't actually been reflashed with the
+just-built image (checked `cat /etc/udev/rules.d/70-can.rules`: old
+USB-VID/PID rule ⇒ stale rootfs; new `SUBSYSTEMS=="spi"` rule ⇒ genuinely
+fresh boot — a two-minute check that's cheaper than re-deriving the whole
+DT/Kconfig chain from scratch next time this symptom shows up). `flash.sh`
+stamping every card it writes with the same `deadbee5` PARTUUID (see
+"Flashing" above) means that signature alone doesn't prove *today's* flash
+took — only that *some* `flash.sh` run wrote that card at some point.
