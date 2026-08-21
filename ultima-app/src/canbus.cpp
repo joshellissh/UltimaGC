@@ -59,15 +59,6 @@ static constexpr double kMce18AinFullScaleMv = 5000.0;
 static constexpr double kFuelSenderEmptyMv = 1000.0;
 static constexpr double kFuelSenderFullScaleMv = 4000.0;
 
-// AUX-command receive ID: the CAN ID the MCE18 listens on for AUX output
-// commands (Ultima AUX Control Service — see ANDROID-BLE-INTEGRATION.md).
-// Separate from kMce18Base above, which is the ID the MCE18 *transmits*
-// sensor data on — this is the opposite direction. 0x640 is the CANchecked
-// MCE18/CFE18 manual's (Rev 2.0) datasheet default for this; not confirmed
-// as this car's actual configured value, same "not wire-confirmed" caveat
-// as kMce18Base carries for the read side.
-static constexpr quint32 kMce18AuxRxBase = 0x640;
-
 CanBus::CanBus(OdoStore *odo, const QString &iface, QObject *parent)
     : QObject(parent), m_odo(odo), m_iface(iface)
 {
@@ -78,11 +69,6 @@ CanBus::CanBus(OdoStore *odo, const QString &iface, QObject *parent)
     m_reconnectTimer.setInterval(1000);
     connect(&m_reconnectTimer, &QTimer::timeout, this, &CanBus::tryConnect);
     tryConnect();
-
-    // See m_auxRefreshTimer's declaration in canbus.h for why this resends
-    // rather than relying on a one-shot write per AUX change.
-    m_auxRefreshTimer.setInterval(100);
-    connect(&m_auxRefreshTimer, &QTimer::timeout, this, &CanBus::sendAuxFrame);
 }
 
 CanBus::~CanBus()
@@ -534,79 +520,6 @@ void CanBus::simulateTick()
     if (battWarn != m_batteryWarn) { m_batteryWarn = battWarn; emit batteryWarnChanged(); }
 }
 #endif
-
-void CanBus::setAux(int index, int value)
-{
-    if (index < 0 || index > 3)
-        return;
-    // AUX4 (index 3) is the only PWM-capable output on this car's V4 MCE18
-    // — 0-100 duty. AUX1-3 are plain on/off.
-    quint8 clamped = (index == 3) ? quint8(qBound(0, value, 100)) : quint8(value ? 1 : 0);
-    if (m_auxState[index] == clamped)
-        return;
-    m_auxState[index] = clamped;
-    sendAuxFrame();
-    updateAuxRefreshTimer();
-    emit auxStateChanged();
-}
-
-void CanBus::allAuxOff()
-{
-    // Unconditional — send the all-zero frame even if every output is
-    // already believed to be off, since this is the failsafe path (BLE
-    // disconnect) and m_auxState is only ever what the dash last *told*
-    // the MCE18, not a confirmed readback (see canbus.h's auxState()
-    // comment). Don't skip the send just because local state looks clean.
-    for (quint8 &v : m_auxState)
-        v = 0;
-    sendAuxFrame();
-    updateAuxRefreshTimer();
-    emit auxStateChanged();
-}
-
-QVariantList CanBus::auxStates() const
-{
-    return { m_auxState[0], m_auxState[1], m_auxState[2], m_auxState[3] };
-}
-
-void CanBus::updateAuxRefreshTimer()
-{
-    bool anyOn = m_auxState[0] || m_auxState[1] || m_auxState[2] || m_auxState[3];
-    if (anyOn && !m_auxRefreshTimer.isActive())
-        m_auxRefreshTimer.start();
-    else if (!anyOn && m_auxRefreshTimer.isActive())
-        m_auxRefreshTimer.stop();
-}
-
-void CanBus::sendAuxFrame()
-{
-#ifdef __linux__
-    if (m_fd < 0) {
-        fprintf(stderr, "[canbus] AUX command dropped — not connected to %s\n", qPrintable(m_iface));
-        return;
-    }
-    struct can_frame frame;
-    memset(&frame, 0, sizeof(frame));
-    frame.can_id = kMce18AuxRxBase;
-    frame.can_dlc = 8;
-    frame.data[0] = m_auxState[0];
-    frame.data[1] = m_auxState[1];
-    frame.data[2] = m_auxState[2];
-    frame.data[3] = m_auxState[3];
-    // Rest of the frame (bytes 4-7) stays zeroed — unused per the
-    // CANchecked manual's AUX-command frame layout.
-    ssize_t n = ::write(m_fd, &frame, sizeof(frame));
-    if (n != (ssize_t)sizeof(frame)) {
-        fprintf(stderr, "[canbus] AUX frame write failed: %s\n", strerror(errno));
-    }
-#else
-    // No real CAN on this build (macOS dev build, or a Linux dev-sim
-    // build) — just log so AUX behavior is still visible while iterating
-    // on the BLE/GATT side without hardware.
-    fprintf(stderr, "[canbus] AUX state -> [%d %d %d %d] (no real CAN on this build)\n",
-            m_auxState[0], m_auxState[1], m_auxState[2], m_auxState[3]);
-#endif
-}
 
 // Not simulate-only — see the Q_INVOKABLE declarations in canbus.h for why
 // these must work on every build, real hardware included. Plain level

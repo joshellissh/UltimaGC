@@ -23,9 +23,8 @@ change as the app evolves and a stale copy is worse than no copy.
   simulate unconditionally regardless of this flag (see `canbus.h`/`.cpp`
   below).
 - **`main.cpp`** — creates `OdoStore` for persistent odometer, `CanBus` as the live
-  gauge data source, `SystemClock` for the time-set screen, and `BluetoothManager`
-  for the Bluetooth pairing screen; exposes all four to
-  QML as context properties (`odoStore`, `sim`, `systemClock`, `bluetooth`), plus a `bootTime`
+  gauge data source, and `SystemClock` for the time-set screen; exposes all three to
+  QML as context properties (`odoStore`, `sim`, `systemClock`), plus a `bootTime`
   timestamp used for startup-latency logging (`fprintf(stderr, ...)` at each
   init stage, read from `/proc/uptime`). Saves odometer state on SIGTERM/SIGINT via
   `CanBus::save()` (falls back to `OdoStore::save()` directly if `CanBus` isn't up
@@ -49,14 +48,7 @@ change as the app evolves and a stale copy is worse than no copy.
   highway/spirited legs) directly on `CanBus`'s member state, so the gauges animate
   without real CAN hardware. This is what backs the local macOS dev build (see
   [Local macOS Dev Build](#local-macos-dev-build-with-simulated-can-data) and
-  `scripts/dev-build.sh`). Also the only Tx path in the class: `setAux()`/
-  `allAuxOff()` command the MCE18's AUX outputs (see the MCE18 section below
-  and `ANDROID-BLE-INTEGRATION.md`) — everything else `CanBus` does is
-  read-only. `auxStates` (added 2026-08-20) is the QML-facing readback of
-  that same state — a 4-int `QVariantList`, `NOTIFY`'d on every
-  `setAux()`/`allAuxOff()` call that actually changes something — so
-  `BluetoothScreen.qml` can show AUX1-4 updating live as a connected
-  companion app writes to them, without a scope on the physical output.
+  `scripts/dev-build.sh`). Read-only — `CanBus` has no Tx path.
 - **`systemclock.h` / `systemclock.cpp`** — lets the QML time-set screen
   (`SetTimeScreen.qml`) push a new wall-clock time to the kernel via
   `clock_settime()`, with a best-effort write-through to a battery-backed hardware
@@ -65,64 +57,13 @@ change as the app evolves and a stale copy is worse than no copy.
   (`main.qml`) uses to show `--:--` instead of a stale boot-default time during the
   brief post-boot window before the RTC's real time lands — see
   `beagleplay-falcon/NOTES.md` "Dash clock doesn't persist a manual set".
-- **`bluetoothmanager.h` / `bluetoothmanager.cpp`** — `BluetoothManager` backs the
-  Bluetooth pairing screen (`BluetoothScreen.qml`), exposed to QML as the `bluetooth`
-  context property. The dash acts as a BLE *peripheral* — it advertises itself as
-  `"Ultima RS"` (`QLowEnergyController::createPeripheral()` + `startAdvertising()`),
-  not a central that scans for nearby devices (a phone doesn't advertise itself as a
-  connectable BLE peripheral, so a scan-based design wouldn't find it) — see
-  `beagleplay-falcon/NOTES.md` "Bluetooth via CC1352P7" for the full reasoning.
-  **Neither iOS nor Android's built-in Bluetooth settings actually pairs with a bare
-  peripheral like this** (tested against real hardware and a real Android phone,
-  2026-08-19 — an earlier assumption that Android's Settings would "just work" turned
-  out to be wrong) — reaching this from a phone needs a dedicated app; see
-  `ANDROID-BLE-INTEGRATION.md` for the GATT service/characteristics an Android
-  companion app would use — the Ultima AUX Control Service (4 AUX outputs on
-  the MCE18, via `CanBus::setAux()`) is implemented as of 2026-08-20, but not
-  yet hardware-verified: `QLowEnergyController::addService()` was previously
-  unproven on this stack (only advertising + connection were), and this
-  session had no board to test against — see that doc's own repeated caveat
-  and its "Open questions for whoever implements the dash side" list before
-  trusting this beyond compiling. `QBluetoothLocalDevice`
-  is still used for pairing confirmation (adapter-level, not role-specific).
-  Advertising is started once at boot (Linux target only, from `main.cpp`) and left
-  running — it does not track whether `BluetoothScreen` is open, so a companion app
-  can connect at any time, not only while someone is at the touchscreen. On the
-  macOS dev build this stays fully lazy instead (`main.cpp` guards the boot-time
-  `startAdvertising()` call to `#if defined(__linux__)`): merely constructing
-  `QBluetoothLocalDevice`/`QLowEnergyController` is enough to trigger a CoreBluetooth
-  permission prompt there, which isn't worth imposing on every local QML-iteration run.
-  `#if QT_VERSION < QT_VERSION_CHECK(6,0,0)` gates the pairing-confirmation/PIN-display
-  API (`pairingDisplayConfirmation`, `pairingDisplayPinCode`, `pairingConfirmation()`),
-  which Qt6 removed entirely — only reachable on the Qt5/BlueZ target build anyway.
-  BeaglePlay's Bluetooth controller (the onboard CC1352P7, not the WL1807) has no
-  BR/EDR radio at all. `refreshPairedDevices()`/`forgetDevice()` (added 2026-08-20)
-  back `BluetoothScreen.qml`'s bonded-devices card: the former walks
-  `org.freedesktop.DBus.ObjectManager.GetManagedObjects` by hand (BlueZ has no
-  direct "list bonded devices" call — same approach `bluetoothctl devices
-  Paired` uses) to populate the `pairedDevices` list property, the latter calls
-  `org.bluez.Adapter1.RemoveDevice` to unpair (and, if connected, disconnect —
-  one D-Bus call does both). Same degrade-gracefully-to-empty posture as the
-  rest of this class on any build without QtDBus. Compiles clean on both
-  toolchains like the AUX service above, but the D-Bus parsing in particular
-  has never run against real BlueZ — treat it with the same "unverified" caution
-  as everything else this doc flags as hardware-untested. One more thing worth
-  bench-testing specifically: `clearPendingPair()` calls the synchronous
-  `refreshPairedDevices()` (itself a blocking D-Bus round trip) on every path
-  that closes the pairing prompt, including `onDevicePropertiesChanged()` —
-  itself a D-Bus signal handler. A synchronous call back out to D-Bus from
-  inside a signal callback is usually fine under QtDBus but is the kind of
-  reentrancy that occasionally bites; confirm it doesn't deadlock or drop the
-  Paired-property signal on real hardware before trusting it.
-
 ### QML Files
 
-The app consists of 12 QML files, all in `ultima-app/src/`:
+The app consists of 11 QML files, all in `ultima-app/src/`:
 
-- **`main.qml`** — Root layout: 4 gauge needles over the Bavarian background layers, boost gauge (trapezoid black overlay with PSI readout), turn signal indicators, top indicator row (oil, check engine, beams, battery, coolant — warn icons flash at 300ms), a separate low-fuel badge (`icon_fuel_low.png`, turns the fuel-pump icon red under 1/4 tank — see `sim.lowFuelWarn`), gear indicator (Bahnschrift SemiBold font, P/R/N/1-7), odometer + trip odometer with reset button, touch feedback dot, a small Canvas-drawn Bluetooth glyph tucked in the bottom-right corner (opens `BluetoothScreen`, see below). Tapping the car (either lights state) opens `Camera360Screen` — this used to be a dedicated `icon_360.png` tap target; that icon and the binding were removed (2026-08-18) in favor of tapping the car itself. While a turn signal is active (and hazards aren't), `leftCamOverlay`/`rightCamOverlay` pop up a bordered `CameraView` fed by `cameraFeed3`/`cameraFeed4` respectively, reprojected through `mirror.frag`'s virtual-mirror view (see `CameraView`'s `mirrorViewSide` property below) — a live blind-spot mirror replacement, gone the instant the signal (a static level, not a blink waveform — see the CAN section) drops or hazards latch on. On startup, a ~1s splash-to-cluster intro (`introFrac`/`introTransitionDone`) shows `splash_screen.png` with `splash_car_start.png` overlaid at the exact offset it occupies in that art (262,167,1104x364 — pixel-matched against the source PNGs, not eyeballed), then fades the splash background out while the car cutout shrinks/moves onto `car_lights_off`'s alpha-bbox rect (627,479,346x128) and fades away, handing off to the real car artwork underneath. This exists so Qt's first frame is pixel-identical to what `beagleplay-falcon`'s pre-Qt `ultima-splash` framebuffer splash already painted (see that project's NOTES.md), keeping the modeset handoff invisible. Only once that finishes does the ~2s self-test (`startupActive`/`startupFrac`/`startupFlash`) sweep every needle to max and back and flash every icon before handing off to live `sim.*` values — real gauge/warning bindings are `startupActive ? <test value> : sim.<prop>`. Includes a periodic (30s) save timer for odometer persistence via `sim.save()`. All gauge values bind to the `sim` context property, which is the `CanBus` C++ object, not this file's `SimEngine.qml`. Hosts `SetTimeScreen`, `DiagnosticScreen`, `CameraGridScreen`, `Camera360Screen`, and `RearCameraScreen` as overlays; a swipe left/right on the main dash opens `DiagnosticScreen`/`CameraGridScreen` respectively — `PageIndicator` (below) shows dots for that 3-screen swipe layout.
+- **`main.qml`** — Root layout: 4 gauge needles over the Bavarian background layers, boost gauge (trapezoid black overlay with PSI readout), turn signal indicators, top indicator row (oil, check engine, beams, battery, coolant — warn icons flash at 300ms), a separate low-fuel badge (`icon_fuel_low.png`, turns the fuel-pump icon red under 1/4 tank — see `sim.lowFuelWarn`), gear indicator (Bahnschrift SemiBold font, P/R/N/1-7), odometer + trip odometer with reset button, touch feedback dot. Tapping the car (either lights state) opens `Camera360Screen` — this used to be a dedicated `icon_360.png` tap target; that icon and the binding were removed (2026-08-18) in favor of tapping the car itself. While a turn signal is active (and hazards aren't), `leftCamOverlay`/`rightCamOverlay` pop up a bordered `CameraView` fed by `cameraFeed3`/`cameraFeed4` respectively, reprojected through `mirror.frag`'s virtual-mirror view (see `CameraView`'s `mirrorViewSide` property below) — a live blind-spot mirror replacement, gone the instant the signal (a static level, not a blink waveform — see the CAN section) drops or hazards latch on. On startup, a ~1s splash-to-cluster intro (`introFrac`/`introTransitionDone`) shows `splash_screen.png` with `splash_car_start.png` overlaid at the exact offset it occupies in that art (262,167,1104x364 — pixel-matched against the source PNGs, not eyeballed), then fades the splash background out while the car cutout shrinks/moves onto `car_lights_off`'s alpha-bbox rect (627,479,346x128) and fades away, handing off to the real car artwork underneath. This exists so Qt's first frame is pixel-identical to what `beagleplay-falcon`'s pre-Qt `ultima-splash` framebuffer splash already painted (see that project's NOTES.md), keeping the modeset handoff invisible. Only once that finishes does the ~2s self-test (`startupActive`/`startupFrac`/`startupFlash`) sweep every needle to max and back and flash every icon before handing off to live `sim.*` values — real gauge/warning bindings are `startupActive ? <test value> : sim.<prop>`. Includes a periodic (30s) save timer for odometer persistence via `sim.save()`. All gauge values bind to the `sim` context property, which is the `CanBus` C++ object, not this file's `SimEngine.qml`. Hosts `SetTimeScreen`, `DiagnosticScreen`, `CameraGridScreen`, `Camera360Screen`, and `RearCameraScreen` as overlays; a swipe left/right on the main dash opens `DiagnosticScreen`/`CameraGridScreen` respectively — `PageIndicator` (below) shows dots for that 3-screen swipe layout.
 - **`CircularGauge.qml`** — Reusable needle gauge component: rotates `needle.png` over a transparent item positioned at the gauge center. Configurable start/end angles, counter-clockwise mode, needle size/pivot, optional debug arc overlay
 - **`SetTimeScreen.qml`** — Time-set overlay that calls into `SystemClock` (the `systemClock` context property) to push a new wall-clock time
-- **`BluetoothScreen.qml`** — Bluetooth pairing overlay, opened by the bottom-right glyph on `main.qml`. Advertising itself is always on (started once at boot, see the `bluetoothmanager.h`/`.cpp` bullet above) — this screen doesn't start or stop it, only shows "Discoverable as ..." status, the currently-connected device (if any) or a "Waiting for a connection..." state, and a pairing-confirmation panel (code display + accept/reject, or just a wait state for "Just Works"/PIN-display pairing) when `bluetooth.pendingPairAddress` is set. Still no scan-and-pick device list — a phone connects *to* the dash, not the other way around, but not via the phone's own Bluetooth settings (see the `bluetoothmanager.h`/`.cpp` bullet above — that path doesn't work on current iOS or Android). Two cards added 2026-08-20, reflowed into the screen's previously-empty right side rather than disturbing the centered connection-status layout: a live AUX1-4 status card reading `sim.auxStates` (see `canbus.h`/`.cpp` below) — the only way to confirm a companion app's BLE writes actually reached `CanBus` without a scope on the physical output — and a bonded-devices card (`bluetooth.pairedDevices`, distinct from the single currently-connected device above — a phone can be bonded but not connected) with a per-device "FORGET" button (`bluetooth.forgetDevice()`, `Adapter1.RemoveDevice` over D-Bus — unpairs and disconnects in one call). Same overlay styling as `SetTimeScreen` (full-screen black, bahnschrift/range fonts, `DashButton`-style controls) — including the same gap both screens had until now: neither declared its own `bahnschriftFont`/`rangeFont` `FontLoader`s the way `DiagnosticScreen.qml` does, so every `Text` in them was silently falling back to the default system font. Fixed in `BluetoothScreen.qml` only (adding its own loaders, matching `DiagnosticScreen.qml`'s pattern) since this session's new cards made that worth fixing; `SetTimeScreen.qml` still has the gap, unaddressed.
 - **`DiagnosticScreen.qml`** — Full-screen grid of every CAN2 signal this build actually decodes today (ECU + MCE18 — see below), showing the raw decoded value/enum behind each dash gauge or icon rather than just its needle position or lit/unlit state. Opened by swiping left anywhere on the main dash, closed by swiping right
 - **`Camera360Screen.qml`** — Full-screen camera overlay, toggled open/closed (250ms cross-fade via a `Behavior on opacity`) by tapping the car (`car_lights_off`/`car_lights_on`) on the main dash to open, tapping anywhere on the overlay to close — reverse gear no longer auto-opens this screen (see `RearCameraScreen.qml` below). This used to be a dedicated `icon_360.png` tap target; that icon was removed (2026-08-18) in favor of tapping the car itself. Feeds the 4 raw streams from the mycam004m driver (`cameraFeed1`..`cameraFeed4` context properties set up in `main.cpp`, each a `CameraFeed` opening one of the driver's stable `/dev/mycam/cam1`..`cam4` symlinks — fake or real backend, see `~/code/mycam004m/docs/ultima-app-integration.md`) into `SurroundView` (`surroundview.h`), which stitches them into one top-down birds-eye composite via a precomputed per-camera fisheye/ground-plane warp mesh + feather blend. `car_360.png` (full 1600x720, car pre-centered on transparent background) is drawn on top over the vehicle-mask hole SurroundView's mesh leaves unpainted — not unused art, this is what makes the composite read as a car surrounded by ground rather than a car-shaped hole. Calibration (per-camera position/yaw/pitch/FOV, vehicle dimensions, ground extent, wedge overlap) defaults to a placeholder rig (`cameracalibration.cpp`'s `defaultCalibration()`) but is live-tunable and persisted via the gear-icon settings panel (`CalibrationSettingsScreen.qml`) — seams/ground-plane scale are only exactly right once real measured camera-mount data replaces the placeholder. If every feed has failed or none produce a frame within 2s of opening, `showPlaceholder` just hides `SurroundView` and the car icon, leaving the plain black backdrop — the older `simulated_cameras.png` fallback art was removed (2026-08-18), there's no dedicated placeholder image anymore.
 - **`RearCameraScreen.qml`** — Full-screen single-camera overlay, opened/closed automatically on reverse gear (`main.qml`'s `reverseGear`), like a real backup camera. Shows `cameraFeed2` (the rear feed — see `Camera360Screen.qml`'s `[front, rear, left, right]` feeds-order comment) raw via `CameraView`, no stitching, no calibration UI. Same 250ms opacity cross-fade and 2s live-frame timeout-to-blank pattern as `Camera360Screen`, scoped to just the one feed.
@@ -289,19 +230,10 @@ Needs, before trusting this on the road: `candump can0` with the MCE18 powered t
 confirm its actual configured base ID and analog protocol mode, and a known fuel
 level (e.g. empty vs. full tank) to calibrate the AIN0 scaling.
 
-**AUX outputs (Tx, the opposite direction from everything above)**: this car's
-MCE18 is a V4 unit — 4 low-side AUX outputs, 3A each, AUX4 PWM-capable — driven
-by `CanBus::setAux()`/`allAuxOff()` over a separate command frame (datasheet
-default receive ID `0x640`, distinct from the `0x700` read-side base ID above
-and equally unconfirmed against this car). This is the CAN backing for the
-Ultima AUX Control Service; see `ANDROID-BLE-INTEGRATION.md` for the full
-frame layout, the BLE GATT contract, and the failsafe design — not
-duplicated here since that doc is the source of truth for it.
-
 ### Debugging
 
 - `candump can0` (can-utils is included in the image) to watch raw traffic.
 - `ip -details link show can0` to check bitrate/link state.
 - `CanBus` logs `[canbus] ...` lines to stderr on connect/bind failures and reconnects — check `journalctl -u ultima-app` (BeaglePlay logs to journald, see `ultima-app.service`).
-- `main.cpp` polls for a handful of trigger files under `/tmp` every frame or so (dev/debug only, works over SSH on real hardware too, not just the dev-sim build): `/tmp/ultima-screenshot.request` (optionally containing an output path, default `/tmp/ultima-screenshot.png`) grabs a frame; `/tmp/ultima-camtest.request` containing `open`/`close`/`360open`/... drives the camera overlays without touching CAN; `/tmp/ultima-indicator.request` containing `left`/`right`/`hazard` toggles turn signals the same way the debug L/R/H keys do; `/tmp/ultima-bluetooth.request` containing `open`/`close` opens/closes `BluetoothScreen` (its only other entry point is tapping the bottom-right glyph, with no swipe/key path — this also doubles as a way to exercise the screen's live AUX status card without a real phone connected). Each trigger file is deleted after being read.
+- `main.cpp` polls for a handful of trigger files under `/tmp` every frame or so (dev/debug only, works over SSH on real hardware too, not just the dev-sim build): `/tmp/ultima-screenshot.request` (optionally containing an output path, default `/tmp/ultima-screenshot.png`) grabs a frame; `/tmp/ultima-camtest.request` containing `open`/`close`/`360open`/... drives the camera overlays without touching CAN; `/tmp/ultima-indicator.request` containing `left`/`right`/`hazard` toggles turn signals the same way the debug L/R/H keys do. Each trigger file is deleted after being read.
 - `CameraFeed` supports `ULTIMA_CAM_IMAGE_DIR` (env var) to serve real static photos instead of synthetic test bars from the fake mycam004m backend — useful for eyeballing `CameraView`'s mirror-view reprojection (`mirror.frag`) against real-world content instead of a test pattern.

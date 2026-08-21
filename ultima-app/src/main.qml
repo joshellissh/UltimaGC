@@ -82,16 +82,6 @@ Window {
     function debugSetCamera360(open) {
         if (camera360Screen.visible !== open) toggleCamera360()
     }
-    // Same pattern, for BluetoothScreen — needed since it's a direct-tap
-    // overlay (the bottom-right glyph) with no swipe/key path of its own,
-    // so there was no other way to reach it without a touchscreen. Also
-    // doubles as a way to exercise BluetoothScreen's live AUX status card
-    // (see canbus.h's auxStates) over SSH without a real phone connected.
-    function debugSetBluetoothScreen(open) {
-        if (open) bluetoothScreen.open()
-        else bluetoothScreen.close()
-    }
-
     Timer {
         running: !splashDone
         interval: 2100
@@ -812,58 +802,6 @@ Window {
         }
     }
 
-    // Bluetooth pairing icon — small and deliberately inconspicuous, tucked
-    // in the bottom-right corner rather than given a labeled button like the
-    // clock. Drawn on a Canvas rather than a bundled-font glyph or a new PNG
-    // asset, same reasoning as tripReset's circular-arrow icon above —
-    // neither bahnschrift nor range contains a bluetooth glyph, and Canvas
-    // is already proven to render here. See the onPaint comment below for
-    // why it's a filled point list rather than a hand-drawn zigzag.
-    Item {
-        id: bluetoothIcon
-        x: 1600 - 46
-        y: 720 - 46
-        width: 26
-        height: 26
-        z: 200
-
-        Canvas {
-            anchors.fill: parent
-            // Standard bluetooth glyph outline (same points as Material
-            // Design's "bluetooth" icon, normalized from its 24x24 grid) —
-            // a hand-eyeballed zigzag rendered as a bowtie of two diamonds
-            // instead, not the recognizable rune (caught by looking at a
-            // real render, not just reasoning about the path).
-            onPaint: {
-                var ctx = getContext("2d")
-                ctx.reset()
-                var w = width, h = height
-                var pts = [
-                    [17.71, 7.71], [12, 2], [11, 2], [11, 9.59],
-                    [6.41, 5], [5, 6.41], [10.59, 12], [5, 17.59],
-                    [6.41, 19], [11, 14.41], [11, 22], [12, 22],
-                    [17.71, 16.29], [13.41, 12]
-                ]
-                ctx.fillStyle = "#aaaaaa"
-                ctx.beginPath()
-                for (var i = 0; i < pts.length; i++) {
-                    var x = pts[i][0] / 24 * w
-                    var y = pts[i][1] / 24 * h
-                    if (i === 0) ctx.moveTo(x, y)
-                    else ctx.lineTo(x, y)
-                }
-                ctx.closePath()
-                ctx.fill()
-            }
-        }
-
-        MouseArea {
-            anchors.fill: parent
-            anchors.margins: -14
-            onClicked: bluetoothScreen.open()
-        }
-    }
-
     // Odometer — "ODO  x mi", right-aligned with top-right corner pinned
     // at (788, 646) (x recomputed from width on every text change) so the
     // right edge stays put as the digit count grows.
@@ -1018,13 +956,6 @@ Window {
     // everything else (including the touch feedback dot at z=100).
     SetTimeScreen {
         id: setTimeScreen
-    }
-
-    // Bluetooth pairing overlay — opened by tapping the small glyph in the
-    // bottom-right corner above. Same z-tier as setTimeScreen: both are
-    // directly-tapped overlays, not part of the swipe layout.
-    BluetoothScreen {
-        id: bluetoothScreen
     }
 
     // Diagnostic screen — opened by swiping left anywhere on the dash (see

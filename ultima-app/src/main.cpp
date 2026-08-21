@@ -23,7 +23,6 @@
 #include "odostore.h"
 #include "canbus.h"
 #include "systemclock.h"
-#include "bluetoothmanager.h"
 #include "camerafeed.h"
 #include "cameraview.h"
 #include "surroundview.h"
@@ -100,39 +99,6 @@ int main(int argc, char *argv[])
     g_canBus = &canBus;
 
     SystemClock systemClock;
-    // canBus backs the Ultima AUX Control Service's actual CAN Tx (see
-    // ANDROID-BLE-INTEGRATION.md) — BluetoothManager doesn't own it,
-    // matching odoStore/canBus's own not-owned relationship above.
-    BluetoothManager bluetoothManager(&canBus);
-#if defined(__linux__)
-    // Always-on: the dash should be discoverable/connectable over BLE
-    // regardless of whether anyone has opened BluetoothScreen (see
-    // ANDROID-BLE-INTEGRATION.md, which assumes a companion app can connect
-    // at any time — e.g. WiFi provisioning before getting in the car — not
-    // only while someone is standing at the touchscreen with that screen
-    // open). Linux-only: merely constructing the Bluetooth objects fires a
-    // CoreBluetooth permission prompt at process launch on the macOS dev
-    // build (see bluetoothmanager.h) — no reason to impose that on every
-    // local QML-iteration run, so that build stays fully lazy.
-    //
-    // Deferred via singleShot(0), not called directly here — hardware-
-    // confirmed 2026-08-19: a direct call at this point runs before
-    // app.exec() ever starts the event loop, and QBluetoothLocalDevice's
-    // BlueZ backend never recovers even long after bluetoothd comes up
-    // afterward (a startAdvertising() retry loop kept reconstructing the
-    // object and re-checking isValid() every 1s for 40+ seconds past
-    // bluetoothd's startup, still failing — vs. the exact same code called
-    // later from a QML slot, well inside a running event loop, which
-    // worked immediately). Most likely cause: QDBusConnection::systemBus()
-    // is a process-wide singleton Qt sets up lazily on first use, and
-    // setting it up with no event loop pumping messages yet appears to
-    // wedge it permanently for the rest of the process — a fresh
-    // QBluetoothLocalDevice still inherits that same broken shared
-    // connection, so reconstructing the object doesn't help. Deferring
-    // this call to fire only once the event loop is already running
-    // avoids ever touching D-Bus in that broken pre-exec() state.
-    QTimer::singleShot(0, &bluetoothManager, &BluetoothManager::startAdvertising);
-#endif
 
     // 4 independent feeds, one per /dev/mycam/camN — the mycam004m driver's
     // stable symlinks over whichever backend (fake or real) is currently
@@ -167,7 +133,6 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty("calibrationStore", &calibrationStore);
     engine.rootContext()->setContextProperty("sim", &canBus);
     engine.rootContext()->setContextProperty("systemClock", &systemClock);
-    engine.rootContext()->setContextProperty("bluetooth", &bluetoothManager);
     engine.rootContext()->setContextProperty("cameraFeed1", &cameraFeed1);
     engine.rootContext()->setContextProperty("cameraFeed2", &cameraFeed2);
     engine.rootContext()->setContextProperty("cameraFeed3", &cameraFeed3);
@@ -295,27 +260,6 @@ int main(int argc, char *argv[])
                 canBus.debugToggleHazard();
         });
         indicatorTestTimer->start(250);
-
-        // Debug-only: opens/closes BluetoothScreen from
-        // /tmp/ultima-bluetooth.request ("open"/"close") — same polled-file
-        // pattern as the triggers above, needed because BluetoothScreen is
-        // reached only by tapping the bottom-right glyph, with no swipe/key
-        // path of its own to drive from SSH otherwise.
-        auto *bluetoothTestTimer = new QTimer(&app);
-        QObject::connect(bluetoothTestTimer, &QTimer::timeout, rootWindow, [rootWindow]() {
-            QFile trigger(QStringLiteral("/tmp/ultima-bluetooth.request"));
-            if (!trigger.exists())
-                return;
-            QString cmd;
-            if (trigger.open(QIODevice::ReadOnly)) {
-                cmd = QString::fromUtf8(trigger.readAll()).trimmed();
-                trigger.close();
-            }
-            QFile::remove(QStringLiteral("/tmp/ultima-bluetooth.request"));
-            QMetaObject::invokeMethod(rootWindow, "debugSetBluetoothScreen",
-                                       Q_ARG(QVariant, cmd == QStringLiteral("open")));
-        });
-        bluetoothTestTimer->start(250);
     }
 
     return app.exec();
