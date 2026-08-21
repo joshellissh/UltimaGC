@@ -4,7 +4,7 @@
 # (see run.sh/NOTES.md for how that volume was first populated).
 #
 # Bind-mounts the shared, board-agnostic Qt app source
-# (../ultima-app/src) read-only into the container —
+# (../ultima-app) read-only into the container —
 # see meta-ultima-beagleplay-src/recipes-ultima/ultima-app/ultima-app.bb,
 # which copies it into WORKDIR before building rather than building in
 # place, so this mount can stay read-only and the shared source tree is
@@ -23,7 +23,7 @@ cd "$(dirname "$0")"
 
 IMAGE=falcon-yocto:latest
 VOLUME=falcon-yocto-build
-ULTIMA_APP_SRC="$(cd ../ultima-app/src && pwd)"
+ULTIMA_APP_SRC="$(cd ../ultima-app && pwd)"
 # Both optional: only avm-benchmark/mycam004m bitbake targets actually need
 # their source, but the mount args below are unconditional either way, so a
 # checkout without these sibling repos (e.g. one that only has UltimaApp,

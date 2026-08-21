@@ -6,7 +6,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-SRC_DIR="$PROJECT_DIR/ultima-app/src"
+SRC_DIR="$PROJECT_DIR/ultima-app"
 BUILD_DIR="$PROJECT_DIR/build"
 
 QMAKE="/opt/homebrew/opt/qt/bin/qmake6"

@@ -28,7 +28,7 @@ and doesn't belong in the Yocto-specific notes.
 ## Repo layout
 
 - `ultima-app/` — the Qt app source. Board-agnostic; the Yocto build bind-mounts
-  `src/` in read-only and builds it via its own recipe
+  it in read-only and builds it via its own recipe
   (`beagleplay-falcon/meta-ultima-beagleplay-src/`).
 - `scripts/` — `dev-build.sh` and `dev-build-wsl.sh` are local native dev builds of
   the Qt app (macOS/WSL2), don't depend on target hardware.

@@ -410,7 +410,7 @@ Between process start and an actual QML frame hitting the framebuffer there's
 Qt/QML engine init, scene graph setup, and the first paint — unmeasured. This
 closes that gap with a real render-completion signal.
 
-**Instrumentation** (`ultima-app/src/main.cpp`): `main()` already logged
+**Instrumentation** (`ultima-app/main.cpp`): `main()` already logged
 `t0`-`t3` timestamps (via `/proc/uptime`, same clock family as kernel
 monotonic time — no wall-clock conversion needed) up through QML component
 construction, but that happens *before* `app.exec()` even starts the event
@@ -1172,7 +1172,7 @@ the Yocto tree instead.
 
 **ultima-app recipe** (`recipes-ultima/ultima-app/ultima-app.bb`): builds
 the exact same source tree as the Buildroot RPi5/BeaglePlay builds
-(`ultima-app/src`) rather than a duplicated copy —
+(`ultima-app`) rather than a duplicated copy —
 bind-mounted read-only into the container at `/home/builder/yocto/ultima-app-src`
 (`build.sh`), then copied into `${WORKDIR}` by a `do_unpack:append` python
 function before `qmake5`'s `do_configure` runs, so the build never writes
@@ -1455,7 +1455,7 @@ checked whether the new QML had even reached the board — it hadn't:
 (just `ultima-app.service` + `70-can.rules`) — nothing hashes the contents
 of `ULTIMA_APP_EXTERNAL_SRC`, the bind-mounted external source tree the
 `do_unpack:append` python actually copies from.** A source-only edit (QML,
-C++, anything under `ultima-app/src`) leaves every
+C++, anything under `ultima-app`) leaves every
 task's signature unchanged, so bitbake reuses the stale sstate object and
 silently ships the OLD binary. Confirmed directly: two full image builds in
 a row after editing the QML produced zero "ultima-app" task lines in either
@@ -2605,7 +2605,7 @@ stack's proprietary GLSL compiler (`libglslcompiler.so`/`libusc.so`, from
 `powervr.ini`/apphint config file exists anywhere on the rootfs either
 (searched `/`), so there's no discoverable vendor-side caching knob either.
 Also no `ShaderEffect` anywhere in the QML (checked all of
-`ultima-app/src/*.qml`) — only `Canvas` items, which raster on the CPU and
+`ultima-app/qml/*.qml`) — only `Canvas` items, which raster on the CPU and
 upload as a plain texture, so the `QML loaded` delta isn't custom
 per-screen shader compilation; it's more likely Qt Quick's own small,
 fixed set of built-in scenegraph material/glyph shaders, compiled once
@@ -3383,7 +3383,7 @@ under `set -e` a failed `cd` inside a `$(...)` assignment aborts the whole
 script right there rather than falling through to the next candidate —
 `|| true` after each `cd ... && pwd` is required to neutralize that.
 
-**`ultima-app/src`'s SMB mount has stale, lock-stuck `.smbdeleteAAA*`
+**`ultima-app`'s SMB mount has stale, lock-stuck `.smbdeleteAAA*`
 files** that broke `ultima-app.bb`'s `do_unpack` `shutil.copytree`
 (`shutil.Error: [Errno 2] No such file or directory` on files that were
 present moments earlier during `scandir`). These are macOS smbfs's

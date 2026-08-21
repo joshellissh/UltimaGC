@@ -5,7 +5,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-SRC_DIR="$PROJECT_DIR/ultima-app/src"
+SRC_DIR="$PROJECT_DIR/ultima-app"
 
 # Build outside the Windows-mounted drive (/mnt/...) — much faster than
 # compiling through 9p, and avoids file-lock weirdness with Windows tools.

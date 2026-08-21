@@ -1,0 +1,40 @@
+<RCC>
+    <qresource prefix="/">
+        <file alias="main.qml">qml/main.qml</file>
+        <file alias="CircularGauge.qml">qml/CircularGauge.qml</file>
+        <file alias="SimEngine.qml">qml/SimEngine.qml</file>
+        <file alias="SetTimeScreen.qml">qml/SetTimeScreen.qml</file>
+        <file alias="DiagnosticScreen.qml">qml/DiagnosticScreen.qml</file>
+        <file alias="Camera360Screen.qml">qml/Camera360Screen.qml</file>
+        <file alias="RearCameraScreen.qml">qml/RearCameraScreen.qml</file>
+        <file alias="CameraGridScreen.qml">qml/CameraGridScreen.qml</file>
+        <file alias="CalibrationSettingsScreen.qml">qml/CalibrationSettingsScreen.qml</file>
+        <file alias="CalibrationParamRow.qml">qml/CalibrationParamRow.qml</file>
+        <file alias="PageIndicator.qml">qml/PageIndicator.qml</file>
+        <file alias="boost_circle.png">assets/images/boost_circle.png</file>
+        <file alias="background_overlay.png">assets/images/background_overlay.png</file>
+        <file alias="car_lights_off.png">assets/images/car_lights_off.png</file>
+        <file alias="car_lights_on.png">assets/images/car_lights_on.png</file>
+        <file alias="splash_screen.png">assets/images/splash_screen.png</file>
+        <file alias="splash_car_start.png">assets/images/splash_car_start.png</file>
+        <file alias="needle.png">assets/images/needle.png</file>
+        <file alias="left_indicator.png">assets/images/left_indicator.png</file>
+        <file alias="range.regular.ttf">assets/fonts/range.regular.ttf</file>
+        <file alias="bahnschrift._semibold.ttf">assets/fonts/bahnschrift._semibold.ttf</file>
+        <file alias="icon_oil_pressure.png">assets/images/icon_oil_pressure.png</file>
+        <file alias="icon_check_engine.png">assets/images/icon_check_engine.png</file>
+        <file alias="icon_battery.png">assets/images/icon_battery.png</file>
+        <file alias="icon_coolant_warn.png">assets/images/icon_coolant_warn.png</file>
+        <file alias="icon_fuel_low.png">assets/images/icon_fuel_low.png</file>
+        <file alias="icon_low_beam.png">assets/images/icon_low_beam.png</file>
+        <file alias="icon_high_beam.png">assets/images/icon_high_beam.png</file>
+        <file alias="icon_axle_lift.png">assets/images/icon_axle_lift.png</file>
+        <file alias="icon_cruise.png">assets/images/icon_cruise.png</file>
+        <file alias="car_360.png">assets/images/car_360.png</file>
+        <file>shaders/surround.vert</file>
+        <file>shaders/surround.frag</file>
+        <file>shaders/blit.vert</file>
+        <file>shaders/blit.frag</file>
+        <file>shaders/mirror.frag</file>
+    </qresource>
+</RCC>
