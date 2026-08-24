@@ -12,7 +12,7 @@ import Ultima 1.0
 // behavior stays untouched, and this one's slide mechanics match
 // DiagnosticScreen's swipe convention instead.
 //
-// Decoding + converting 4x 1920x1080 YUYV frames every tick is real CPU/GPU
+// Decoding + converting 4x 1920x1080 UYVY frames every tick is real CPU/GPU
 // work (see ~/code/mycam004m/docs/ultima-app-integration.md's GUI-thread
 // conversion cost note) — feeds[i].active only goes true while this screen
 // is actually open, same lazy-open contract CameraFeed already uses for

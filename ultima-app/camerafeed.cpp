@@ -22,7 +22,10 @@
 
 // Requested capture format — mycam004m's contract (both fake and real
 // backends, see ~/code/mycam004m/docs/ultima-app-integration.md) is fixed
-// YUYV 1920x1080@30, answered by coercion rather than negotiation: S_FMT
+// UYVY 1920x1080@30 (UYVY, not YUYV, since 2026-08-24: real hardware
+// proved the N4 decoder emits UYVY byte order — decoding it as YUYV was
+// the green/magenta mess of the first live capture), answered by
+// coercion rather than negotiation: S_FMT
 // hands back this exact format regardless of what's requested. The code
 // below still reads back whatever the driver actually granted
 // (m_frameWidth/m_frameHeight/m_bytesPerLine) rather than assuming these
@@ -168,7 +171,7 @@ void CameraFeed::tryOpen()
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     fmt.fmt.pix.width = kRequestedWidth;
     fmt.fmt.pix.height = kRequestedHeight;
-    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
+    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_UYVY;
     fmt.fmt.pix.field = V4L2_FIELD_ANY;
     if (::ioctl(fd, VIDIOC_S_FMT, &fmt) < 0) {
         fprintf(stderr, "[camerafeed] VIDIOC_S_FMT: %s\n", strerror(errno));
@@ -176,8 +179,8 @@ void CameraFeed::tryOpen()
         m_reconnectTimer.start();
         return;
     }
-    if (fmt.fmt.pix.pixelformat != V4L2_PIX_FMT_YUYV) {
-        fprintf(stderr, "[camerafeed] %s refused YUYV (got fourcc 0x%x) — unsupported\n",
+    if (fmt.fmt.pix.pixelformat != V4L2_PIX_FMT_UYVY) {
+        fprintf(stderr, "[camerafeed] %s refused UYVY (got fourcc 0x%x) — unsupported\n",
                 qPrintable(m_device), fmt.fmt.pix.pixelformat);
         ::close(fd);
         setFailed(true);
@@ -185,7 +188,7 @@ void CameraFeed::tryOpen()
     }
     // Read back what was actually granted — S_FMT is a negotiation in
     // general, though mycam004m answers it by coercion (always hands back
-    // 1920x1080 YUYV regardless of what's requested — see the integration
+    // 1920x1080 UYVY regardless of what's requested — see the integration
     // doc). Notably bytesperline: assuming it always equals width*2
     // (tightly packed, no stride padding) was flagged as a real risk during
     // the original UVC-grabber hardware bring-up (see beagleplay-falcon/
@@ -200,7 +203,7 @@ void CameraFeed::tryOpen()
     // profiling (2026-08-17, see beagleplay-falcon/NOTES.md and
     // test/avm-benchmark/docs/measurement-notes.md) found CameraGridScreen
     // running at 2-3 FPS on the BeaglePlay/PowerVR target, root-caused to
-    // both the GUI-thread scalar YUYV conversion AND the render-thread GPU
+    // both the GUI-thread scalar YUV->RGB conversion AND the render-thread GPU
     // upload cost scaling with full 1920x1080-per-camera pixel volume —
     // the benchmark's own TEST 3 measured ~530-577ms/frame (~2 FPS) for
     // exactly this "4 cameras, full-res, converted+uploaded every frame"
@@ -277,11 +280,11 @@ void CameraFeed::tryOpen()
     m_notifier = new QSocketNotifier(fd, QSocketNotifier::Read, this);
     connect(m_notifier, &QSocketNotifier::activated, this, &CameraFeed::onReadable);
     m_reconnectTimer.stop();
-    fprintf(stderr, "[camerafeed] streaming %s: %dx%d YUYV\n",
+    fprintf(stderr, "[camerafeed] streaming %s: %dx%d UYVY\n",
             qPrintable(m_device), m_frameWidth, m_frameHeight);
 }
 
-// YUYV (YUY2) -> RGB32, standard BT.601 integer coefficients. Runs on the
+// UYVY -> RGB32, standard BT.601 integer coefficients. Runs on the
 // GUI thread (see camerafeed.h's currentFrame() comment) — with 4 instances
 // now converting 1920x1080 each (vs. one 720x480 grabber before), this is
 // the cost flagged as a real risk, not yet measured, in the integration
@@ -296,13 +299,13 @@ static inline quint8 clamp255(int v) { return quint8(v < 0 ? 0 : (v > 255 ? 255 
 //
 // dstWidth/dstHeight are the DECODED size (m_frameWidth/m_frameHeight,
 // capture size / kDecimation — see tryOpen()), not the raw capture size:
-// this reads one source YUYV pixel-pair per kDecimation source pixel-pairs
+// this reads one source UYVY pixel-pair per kDecimation source pixel-pairs
 // (and one source row per kDecimation source rows), a plain nearest-
-// neighbor decimation done inline during the YUYV->RGB conversion rather
+// neighbor decimation done inline during the UYVY->RGB conversion rather
 // than as a separate downscale pass over a full-res intermediate image.
 // Stepping by whole pixel-pairs (never splitting one) keeps every read
-// aligned to YUYV's actual 4-byte/2-pixel chroma grouping.
-static void convertYUYVToRGB32(const uchar *src, QImage &dst, int dstWidth, int dstHeight,
+// aligned to UYVY's actual 4-byte/2-pixel chroma grouping.
+static void convertUYVYToRGB32(const uchar *src, QImage &dst, int dstWidth, int dstHeight,
                                 int bytesPerLine, int decimation)
 {
     for (int y = 0; y < dstHeight; ++y) {
@@ -310,7 +313,7 @@ static void convertYUYVToRGB32(const uchar *src, QImage &dst, int dstWidth, int 
         QRgb *out = reinterpret_cast<QRgb *>(dst.scanLine(y));
         for (int x = 0; x < dstWidth; x += 2) {
             const uchar *px = row + size_t(x / 2) * decimation * 4;
-            int y0 = px[0], u = px[1] - 128, y1 = px[2], v = px[3] - 128;
+            int u = px[0] - 128, y0 = px[1], v = px[2] - 128, y1 = px[3];
 
             int rUV = (359 * v) >> 8;
             int gUV = (88 * u + 183 * v) >> 8;
@@ -365,12 +368,12 @@ void CameraFeed::onReadable()
     // frame's leftover buffer contents instead of being skipped. Checked
     // against the driver's own stride and the actual CAPTURE height
     // (m_captureHeight, not the decoded m_frameHeight) — see
-    // convertYUYVToRGB32's comment for why those differ.
+    // convertUYVYToRGB32's comment for why those differ.
     if (pending.index < quint32(m_numBuffersMapped) && m_frameWidth > 0 && m_frameHeight > 0
         && m_bytesPerLine > 0
         && pending.bytesused >= quint32(m_bytesPerLine) * quint32(m_captureHeight)) {
         QImage frame(m_frameWidth, m_frameHeight, QImage::Format_RGB32);
-        convertYUYVToRGB32(static_cast<const uchar *>(m_buffers[pending.index].start),
+        convertUYVYToRGB32(static_cast<const uchar *>(m_buffers[pending.index].start),
                             frame, m_frameWidth, m_frameHeight, m_bytesPerLine, kDecimation);
         m_frame = frame;
         setStreaming(true);
