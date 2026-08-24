@@ -3403,3 +3403,641 @@ themselves in place (this is the user's SMB workflow producing them, not
 something to clear from here); a build hitting a *new* location's ghost
 files would need the same `ignore=` treatment there, not another retry.
 
+## mycam004m real backend wired up (2026-08-23) — DT patch built and dtc-verified, not yet flashed/hardware-tested
+
+MY-CAM004M hardware is now physically attached (`~/code/mycam004m` is the
+driver source of truth — register tables, device contract, bring-up docs;
+see its README and `docs/testing.md`/`docs/ultima-app-integration.md`).
+This session wired the *real* backend into the Yocto build and made it the
+boot default. `ultima-app` needed zero changes — `camerafeed.cpp`/
+`main.cpp` already target `/dev/mycam/cam1..4` at 1920x1080 (from the
+earlier fake-backend integration, see git log `daec7a9`) and the driver
+repo's device contract is backend-agnostic by design.
+
+**Same Falcon-boot constraint as the mikroBUS CAN click above:** the
+driver repo's own `dts/k3-am625-beagleplay-mycam004m.dtso` is a *runtime*
+overlay (applied via U-Boot's `fdtoverlays`), which this project's boot
+path never runs. Converted it to a compile-time patch instead —
+`meta-ultima-beagleplay-src/recipes-kernel/linux/linux-ti-staging/
+0002-arm64-dts-k3-am625-beagleplay-add-mycam004m-camera.patch`, wired into
+`linux-ti-staging_%.bbappend`'s `SRC_URI:append` alongside the existing
+CAN patch (applies second, appends further down the same file).
+
+**Real physical wiring diverges from the driver repo's overlay: no
+reset-gpios/pwren-gpios.** The user's own pin-mapping doc
+(`docs/MY-CAM to BeaglePlay Pin Mapping.pdf` in the main UltimaGC repo, not
+this one) shows the actual cable carries only the 4 CSI-2 data lanes +
+clock lane + I2C (SCL/SDA) — BeaglePlay's two J17 GPIOs
+(`CSI2_CAMERA_GPIO1`/`GPIO2`, `main_gpio0` pins 11/12) and the camera's
+own `RST_N`/`PWRDN`/`MCLK` are all struck through in that doc, i.e. not
+wired at all. (MCLK not being wired checks out independently too — the
+MY-CAM004M schematic, `~/code/mycam004m/MY-CAM004M/my-cam004m-20230725.pdf`,
+shows an onboard crystal oscillator, `Y1`, feeding the N4 decoder's
+`SYS_CLK` directly, so it never needed an external MCLK from BeaglePlay.)
+The new DT patch's camera node omits `reset-gpios`/`pwren-gpios` entirely
+rather than pointing them at GPIOs the cable doesn't carry —
+`mycam004m.c` requests both as fully optional
+(`devm_gpiod_get_optional`), so this is a clean no-op for the driver, not
+a workaround. **The one real open question this doesn't resolve**:
+whether the N4's `RSTB` pin has an onboard pull (so leaving it
+undriven is fine) or floats (so the chip may never leave reset,
+which would show up as an I2C probe failure). Not resolved by reading the
+schematic — flattened/OCR'd schematic text isn't reliable for tracing
+pull-resistor connectivity, and guessing here risks chasing a phantom
+wiring problem instead of a real one. The correct arbiter is empirical,
+not more schematic-reading: `i2cdetect -y 4` for `0x30` and
+`dmesg | grep mycam004m` for `DEV_ID 0xb0` after flashing — see "Not yet
+done" below. A DT change can't fix a floating reset either way; only a
+physical wire or a populated onboard pull can, so this doesn't block
+shipping the DT/recipe side of the work.
+
+**DT patch verified the same way the CAN patch was, but against this
+project's *actual* kernel source this time** (not a downloaded reference
+copy — the `falcon-yocto-build` Docker volume already has the real,
+already-patched `k3-am625-beagleplay.dts` and the matching `cpp`/`dtc`
+toolchain on disk, so there was no need to approximate against upstream).
+Applied the new patch, preprocessed with `aarch64-oe-linux-cpp` (adding
+`-I .../arch/arm64/boot/dts/ti` beyond what the driver repo's README
+needed, since compiling the *whole* board dts — not a standalone overlay —
+pulls in `#include "k3-am625.dtsi"` and friends), compiled clean with the
+kernel's own `scripts/dtc/dtc` (exit 0), then decompiled the `.dtb` back
+to source and checked byte-for-byte: `camera@30`'s `reg = <0x30>` and
+`link-frequencies` decoding to exactly `1242000000`, `mycam004m_out`'s
+`remote-endpoint` phandle resolving to `csi2rx0_in_mycam004m` and back
+(genuine bidirectional graph link, not just two nodes that happen to
+compile), `port@0`/`dphy0`/`ti_csi2rx0` all landing `status = "okay"`.
+
+One correction to the driver repo's own overlay in the process: reopened
+the *existing* labeled `port@0` (`cdns_csi2rx0`'s SoC-dtsi-level node is
+already `csi0_port0`, one of five pre-declared ports) via `&csi0_port0`
+instead of re-declaring a fresh `ports { #address-cells ... port@0 { ... } }`
+wrapper — the overlay had to declare that structure itself (overlay merge
+matches by node path, not by label), but a same-file compile-time patch
+can and should just reopen the label directly, same philosophy as the CAN
+patch reopening `&main_spi2` rather than rewriting it. Decompiled output
+confirms both approaches land identically either way.
+
+**Kernel config: no fragment needed, confirmed rather than assumed.**
+Grepped the actual built `.config` in the Yocto volume (not the fragment,
+matching the lesson from the `CONFIG_DRM_TIDSS` incident above) for the
+CSI2/D-PHY chain: `CONFIG_VIDEO_CADENCE_CSI2RX=m`,
+`CONFIG_VIDEO_TI_J721E_CSI2RX=m`, `CONFIG_PHY_CADENCE_DPHY_RX=m`,
+`CONFIG_MEDIA_CONTROLLER=y`, `CONFIG_V4L2_FWNODE=m`/`CONFIG_V4L2_ASYNC=m`
+all already present in arago's base defconfig — nothing to add. Deliberately
+did **not** try forcing any of these `=y` the way `ultima-can.cfg` did for
+`CONFIG_CAN_MCP251X` — `CONFIG_MEDIA_SUPPORT=m` in this same `.config`
+means a `=y` request for anything depending on it would hit the exact same
+silent-downgrade trap already root-caused for `CONFIG_DRM_TIDSS`
+(`CONFIG_DRM=m` capping `CONFIG_DRM_TIDSS=y` requests) — a tristate can't
+be built in while its parent is modular. Real fix, matching the fix
+already in place for `tidss`/`mcp251x`: force explicit module load via
+`/etc/modules-load.d/` instead of trusting coldplug for a DT-instantiated
+device (`meta-ultima-beagleplay-src/recipes-kernel/mycam004m/files/
+mycam004m-real.conf`: `j721e-csi2rx`, `cdns-dphy-rx`, `mycam004m` —
+`cdns-csi2rx` and the v4l2 core modules pull in automatically via
+`modprobe`'s own dependency resolution, confirmed via each `.ko`'s
+`modinfo depends=`).
+
+**Packaging gap that would have silently left the real backend
+non-functional even with the DT/Kconfig side correct**: this image's
+`IMAGE_INSTALL` is a curated, trimmed list (see `tisdk-base-image.bbappend`
+and the read-only-rootfs/boot-trim work), not a generic "kernel-modules"
+bundle — `kernel-module-split.bbclass` packages every built `.ko`
+regardless, but nothing pulls `kernel-module-j721e-csi2rx`/
+`kernel-module-cdns-dphy-rx` onto the target rootfs unless something
+`RDEPENDS` on them. Added `RDEPENDS:${PN} += "kernel-module-j721e-csi2rx
+kernel-module-cdns-dphy-rx"` to `mycam004m.bb` (`kernel-module-cdns-csi2rx`
+comes along transitively, same auto-RDEPENDS mechanism module.bbclass
+already uses for `mycam004m`'s own videodev/mc/etc. dependencies).
+
+**`select-camera-backend.service` now defaults to `real`** (was `fake`).
+Judged safe to default rather than requiring a manual post-flash SSH step:
+if the camera never probes (the RSTB question above), `mycam004m`'s async
+notifier never completes and no `/dev/videoN` context nodes get created
+for *any* of the 4 streams — `select-camera-backend.sh` finds 0 matching
+nodes, logs a warning, and exits 1 without touching `/dev/mycam/cam1..4`
+(the script's own `rm -f "$LINKDIR"/cam[1-4]` at the top means the symlinks
+just don't exist rather than pointing at something broken) — a clean,
+diagnosable failure, not a hang or a silent bad-frame stream. `mycam004m-fake`
+stays built and force-loaded alongside it either way, so
+`ssh root@beagleplay-ti.local select-camera-backend.sh fake` is a one-line
+fallback if `real` doesn't come up clean on first boot.
+
+### First real hardware boot (2026-08-23, same session) — CSI2/D-PHY side confirmed working, wrong I2C address found and fixed
+
+Built (`build.sh`), pulled the image (the `docker cp`-equivalent step above
+— skipping it would silently reflash a stale image, see "Two forgotten
+steps" further up this file), flashed to SD (`flash.sh disk4`), booted
+with USR held. `uname -r` confirmed `6.12.57-ti-01316-g31b07ab8dfbc-dirty`
+— genuinely today's build, not stale.
+
+**The CSI2/D-PHY/kernel-module side of this work is fully verified
+correct**, not just dtc-clean: `dmesg` shows `cdns-csi2rx 30101000.csi-bridge:
+Probed CSI2RX with 4/4 lanes, 4 streams, external D-PHY` — the bridge
+itself came up clean on real hardware. `lsmod` confirms every module from
+`mycam004m-real.conf` force-loaded correctly (`mycam004m`, `cdns_dphy_rx`,
+`j721e_csi2rx`, `cdns_csi2rx`, plus the auto-pulled v4l2 core modules) —
+the modules-load.d fix and the `RDEPENDS` packaging fix (the modules
+actually being *on* the rootfs) both did their job. The
+"Fixed dependency cycle(s)" lines in `dmesg` are normal fwnode-graph
+resolution chatter for a bidirectional endpoint link, not an error.
+
+**The camera itself didn't probe — but not for the reason anticipated.**
+`mycam004m 4-0030: error -EREMOTEIO: failed selecting bank 0x00 for
+chip-ID readback` / `probe with driver mycam004m failed with error -121`.
+This actually *resolves* the RSTB-floating question flagged above as the
+one real unknown: `error -EREMOTEIO` (a real I2C bus rejection, not a
+timeout/hang) is only reachable if the chip already came out of reset
+enough to sit on the bus — a permanently-in-reset N4 wouldn't NAK a
+specific bank-select write, it just wouldn't be there at all. `i2cdetect
+-y 4` confirmed exactly that shape: nothing at `0x30`, but a real device
+answering at **`0x31`**. The driver repo's own overlay/README (and this
+project's first cut of the DT patch, above) used `0x30`, sourced from the
+MY-CAM004M schematic's "I2C add 0x61" label and N4's own
+SA0/SA1-strap address formula — hardware disagrees with that documentation
+on this actual board, whatever the real strap turns out to be. Fixed by
+changing the DT patch's camera node from `camera@30`/`reg = <0x30>` to
+`camera@31`/`reg = <0x31>` (regenerated cleanly from the pristine base
+file rather than `sed`-ing the applied one in place — a first attempt at
+a quick in-place `sed 's/reg = <0x30>/reg = <0x31>/'` silently also
+rewrote the unrelated `tps65219` PMIC node's own legitimate `reg = <0x30>`
+elsewhere in the same file; caught by grepping the result before reusing
+it, not by luck). Re-verified with the same `cpp`+`dtc` compile/decompile
+check as before — `camera@31`/`reg = <0x31>` lands correctly and
+`pmic@30`/`reg = <0x30>` is untouched.
+
+Not yet re-flashed/re-tested with the corrected address — that's the
+immediate next step, same verification sequence: `dmesg | grep
+mycam004m` for `DEV_ID 0xb0`, `media-ctl -d /dev/media0 -p` for the
+4-entity graph, then a real streaming test per `~/code/mycam004m/docs/
+testing.md`. Worth feeding this address correction back into
+`~/code/mycam004m` itself (the driver repo, separate git repo/source of
+truth) once confirmed working, since its README's Status table and the
+`dts/k3-am625-beagleplay-mycam004m.dtso` overlay both still say `0x30`.
+
+### Media pipeline bring-up + hardware signal-lock check (2026-08-23, same session) — VIDIOC_STREAMON fixed; remaining blocker is upstream of the SoC entirely
+
+With the I2C address fixed, `VIDIOC_STREAMON` on `/dev/mycam/cam1` still
+failed: `Broken pipe` (EPIPE). Root cause, found live over SSH with a
+`media-ctl` binary + `libmediactl.so.0`/`libv4l2subdev.so.0` copied to
+`/tmp` from this session's own Yocto build output (no rebuild needed to
+iterate) — `media-ctl -d /dev/media0 -p` showed `mycam004m`'s own pads
+correctly self-initialized to `YUYV8_1X16/1920x1080`, but
+`cdns_csi2rx...csi-bridge` and `...ticsi2rx` both sat on an unrelated
+uninitialized default (`UYVY8_1X16/640x480`) that never auto-propagated
+from the camera's pads — a real, unconfigured media-controller pipeline,
+not a driver bug. Setting the active format explicitly on both
+(`media-ctl -V "\"cdns_csi2rx...csi-bridge\":0 [fmt:YUYV8_1X16/1920x1080]"`,
+same for `"...ticsi2rx":0`) fixed it immediately — confirmed via
+`journalctl -u ultima-app`: `[camerafeed] streaming /dev/mycam/cam1:
+960x540 YUYV`, sustained (no drop) for 25+ seconds on a fresh post-reboot
+boot with **no route changes**, just the two format calls. This is now
+baked in permanently as `mycam004m-configure-pipeline.service` (a oneshot,
+`After=systemd-modules-load.service`, same pattern as
+`select-camera-backend.service`) + `media-ctl` added to `mycam004m.bb`'s
+`RDEPENDS` (the split, libv4l/Qt-free package — this minimal rootfs had
+no v4l-utils at all before this).
+
+**Scoped to stream 0 only, deliberately — routes for streams 1-3 were
+tried and are NOT baked in.** Only one physical camera is attached to the
+board as of this writing. A first pass also added the 3 additional
+`media-ctl -R` routes (`cdns_csi2rx`'s `0/1->1/1` etc., `ticsi2rx`'s
+`0/1->2/0` etc.) so all 4 `/dev/mycam/camN` would resolve — this visibly
+changed behavior (`dmesg` went from only ever logging `enabling AHD input
+0` to logging inputs 0-3 together) but was never verified *not* to
+regress the one input that matters, because the investigation moved on to
+the signal-lock check below before that could be confirmed. Concretely:
+cam2-4's already-expected-to-fail `STREAMON` attempts touch more of the
+shared bridge/decoder state with 4 routes active than with the default
+single route, where they fail early (no route → immediate `ENODEV`)
+without reaching it. Revisit once more cameras are physically connected:
+re-add the routes, and specifically re-confirm input 0 still streams
+cleanly with all 4 active before keeping the change — don't just assume
+it composes.
+
+**`VIDIOC_STREAMON` succeeding is not the same as a real picture — caught
+by an on-device screenshot, not a log line.** `main.cpp`'s existing debug
+hooks (`/tmp/ultima-camtest.request` = `open` opens `CameraGridScreen`,
+`/tmp/ultima-screenshot.request` grabs a frame to
+`/tmp/ultima-screenshot.png`, both already in `ultima-app`, no rebuild
+needed) showed all 4 quadrants reading "NO SIGNAL" even immediately after
+confirming cam1's sustained sillicon-level stream via `journalctl`/
+`dmesg`. `CameraGridScreen.qml`'s label ties directly to `CameraFeed`'s
+`streaming` property, which per `camerafeed.h`'s own comment only goes
+true once a first real frame has actually been read back (`onReadable()`
+firing) — not once `VIDIOC_STREAMON` returns success. So "the ioctl
+succeeded" and "a frame arrived" are genuinely different claims, and only
+the second one is the actual acceptance test for this whole feature.
+
+**Discriminator: read the N4 decoder's own signal-lock status registers
+directly over I2C** (Bank 0, `NOVID_1..4` at `0xA4-0xA7`, `H_LOCK_1..4` at
+`0xD8-0xDB`, `AGC_LOCK_1..4` at `0xD0-0xD3` — all documented in
+`Datasheet-N4.pdf`, "Registers to Show Locking Status"; bank-select
+mechanism, register `0xff` written with the bank number as the value,
+confirmed against `mycam004m.h`'s own `MYCAM004M_REG_BANK_SEL`/
+`mycam004m.c`'s bank-switch logic, i.e. read with the exact same
+convention the driver itself already uses successfully for `DEV_ID`).
+`i2cget`/`i2cset` need `-f` (force) since the kernel driver already has
+the I2C client claimed (`Device or resource busy` without it). Result,
+sanity-checked against `DEV_ID` reading back `0xb0` correctly in the same
+sweep: **all 4 channels — `NOVID_1..4 = 0x01` (no video), `H_LOCK_1..4 =
+0x00` (not locked), `AGC_LOCK_1..4 = 0x00` (not locked).** This is the N4
+chip's own analog-frontend status, read directly, independent of
+`mycam004m.c`/the CSI-2/MIPI/media-graph stack entirely — it cleanly rules
+out everything upstream-of-this-point in this session's own work (I2C
+address, DT, kernel modules, CSI2 bridge, media pipeline formats/routes,
+MIPI PLL/lane-rate table) as the remaining cause. The decoder itself
+never sees a valid signal on *any* input, including whichever one the one
+physical camera is on.
+
+**Most likely explanation, not yet confirmed**: the camera itself has no
+power. The one camera currently attached is a "QJD-SONY 225"
+(`索尼225摄像头规格书.pdf` in `~/code/mycam004m/MY-CAM004M/`) — 1/3" Sony
+2MP CMOS, AHD 1080p, and per its own spec sheet a **3-wire module: GND,
+VIDEO, and a separate DC power input (3.5-6.5V, 50mA)**, visibly a
+distinct wire in the spec sheet's own product photo, not something
+carried on the video/coax wire. Confirmed with the user: the MY-CAM004M
+*board's* own separate 5V/GND lead (the one this session's own DT-mapping
+investigation established falls outside BeaglePlay's J17 ribbon — see
+above) is connected, but there's no separate power lead run to the
+camera's own DC wire. A board that's fully powered and I2C-alive (matches
+everything confirmed working this session) while the one physically-wired
+camera has no power of its own reaching its sensor produces exactly this
+symptom: zero signal, uniformly, no matter which input it's plugged into.
+**Not yet physically confirmed** — the next step is wiring the camera's
+DC lead to a 3.5-6.5V supply and re-reading the same lock-status
+registers live (cheap, no rebuild) to check for a real transition to
+`NOVID=0`/`H_LOCK=1`.
+
+**State to leave this in for next session**: the DT/kernel/I2C-address/
+media-pipeline work above is real, hardware-verified, and done — don't
+re-derive or doubt it without new evidence. What's unverified is purely
+downstream of this repo: whether the one attached camera actually has
+power. If the lock-status check comes back positive after fixing that,
+the natural next check is the same debug-hook screenshot trick above
+(confirm `CAM 1` actually shows a picture, not just `H_LOCK=1`) — then,
+only once 3 more cameras are physically attached, revisit the 4-route
+pipeline change flagged above as not yet safe to bake in.
+
+
+## mycam004m MIPI output fixed — link-freq 2x error + missing PLL latch/arbiter (2026-08-23, hardware-verified end-to-end)
+
+Follow-up to the entry above, same day. The "most likely explanation:
+camera power" hypothesis there is **dead — refuted twice over**: the user
+confirmed with a multimeter that 5V does reach the camera connector, and
+the MY-CAM product manual (`MY-CAM004M-20240207-产品手册-V1.0.pdf` §3.2.1)
+shows each camera socket (CJ-BM4-M11 4-pin: pin1 GND, pin2 VIDEO in,
+pin3 VDD_CAM_5V out, pin4 NC) feeds the camera's DC wire from the board's
+own 5V rail through the same plug — no separate camera power lead exists
+or is needed. The AHD_MD 30fps→25fps register change from the previous
+entry also did **not** produce lock (built, flashed, verified active on
+real hardware — `NOVID` stayed 1 on all channels), and neither did a
+live-I2C sweep of every AHD_MD mode (1080p25/30, 720p25/30/50/60, SD),
+nor a full replay of the vendor NVP6324 driver's ~180-register-per-channel
+AHD bring-up (AFE banks 5-8, format, EQ stage 0, coax — extracted from
+`MY-CAM004M/MYD-LT527/bsp/.../nvp6324/` by an agent, replayed over
+`i2cset -f`, values read back and confirmed landed).
+
+What DID come out of this session — the entire **digital output side was
+broken, is now fixed, and is verified down to the app's camera view**:
+
+1. **Link frequency was 2x too high — the root cause of a
+   zero-frames-after-STREAMON hang.** V4L2's `link-frequencies` /
+   `V4L2_CID_LINK_FREQ` is the D-PHY *symbol clock*, which for DDR
+   signalling is **half** the per-lane bit rate. The sibling drivers'
+   "1242MHz" mode name is the per-lane *bit rate*, so the right
+   link-frequency is 621000000, not the 1242000000 the DT carries. TI's
+   j721e-csi2rx doubles the advertised value back into an hs_clk_rate
+   for the cdns-dphy-rx, so the SoC's D-PHY was banded for 2484 Mbps and
+   received nothing. The trap: **LP-11 stop-state detection is
+   rate-independent, so `VIDIOC_STREAMON` succeeds** (the RX PHY sees the
+   N4's lanes idle correctly) and the failure is a silent
+   zero-frames-forever hang — `poll()` just never fires. Fixed in
+   `mycam004m.c` by halving the DT value at parse time (comment in the
+   code explains why the DT keeps carrying the physically-meaningful bit
+   rate). The "sustained streaming for 25+ seconds" claim in the entry
+   above did NOT survive re-testing on a clean boot: a minimal
+   REQBUFS/QBUF/STREAMON/poll tester (`camgrab.c`, cross-compiled
+   statically with the Yocto toolchain, kept on `/data/camgrab`)
+   showed STREAMON-ok + zero frames on every attempt until this fix.
+
+2. **N4's MIPI TX needs a PLL/PHY latch pulse and the BANK20 output
+   arbiter initialized — both absent from N4's own datasheet and from
+   this driver.** The sibling Allwinner driver's `mipi_tx_init()` does
+   `0x44=0x00, 0x49=0xF3, 0x49=0xF0, 0x44=0x02, 0x08=0x40` (bank 0x21)
+   right after the PLL block — N4's datasheet register table skips
+   0x44/0x49 entirely (it's a preliminary Rev 0.0). And its `arb_init()`
+   programs the bank-0x20 arbiter that funnels the 4 decoded channels
+   into the TX: disable (0x00=0x00), latch config (0x40=0x01,
+   0x0F=<dtype 0x00 for YUV422>, 0x0D=0x01, 0x40=0x00), enable
+   (0x00=0xFF = vendor's 0x11<<ch for all 4). Verified live over i2cset:
+   without these, zero frames; with them, frames flow. A bare re-enable
+   write after disabling the arbiter is NOT enough — the full
+   disable/latch/enable sequence is required (verified by switching it
+   off and on). Both blocks are now appended to
+   `mycam004m_csi_output_regs[]` in `mycam004m-regs.h`, module rebuilt
+   and installed onto the SD rootfs (takes effect next boot; the current
+   boot runs the equivalent via `/data/mycam-tx-arb.sh`).
+
+3. **End-to-end proof**: with (1)+(2), `camgrab` captures full 1920x1080
+   YUYV frames with incrementing sequence numbers, the frame content is
+   the N4's no-video test pattern (green bars — pulled to the Mac,
+   YUYV→PNG via ffmpeg, visually confirmed), and the app's CAMERAS
+   screen shows **CAM 1 rendering that pattern live** (debug-hook
+   screenshot) with CAM 2-4 correctly showing NO SIGNAL (their streams
+   aren't routed — still the deliberately-deferred 4-route work).
+   The N4 free-runs its timing generator on no-video, so frames flow
+   even with zero locked inputs — the forced-pattern bit (bank5+ch
+   0x69 bit5) is NOT required for this and isn't baked in anywhere.
+
+Hard-won operational lessons from the same session:
+
+- **`mycam004m`'s teardown path is broken on real hardware: `unbind`
+  hangs forever and `rmmod` oopses the kernel** (refcount ends up -1,
+  stack trace, tainted kernel — power-cycle required). The refcount
+  itself behaves (drops to 0 after `rmmod j721e_csi2rx` releases the
+  subdev), but the remove path then crashes. Until root-caused: to swap
+  the module, replace the file under
+  `/lib/modules/.../updates/mycam004m.ko` + `depmod -a` + reboot. Never
+  `rmmod`/`unbind` it on a board you can't power-cycle.
+- The N4's real BANK0 status map (datasheet p.32-33): `0xA0` =
+  4-bit video-loss bitmask (vendor driver reads only this), `0xA4-A7`
+  bit0 = NOVID per channel, `0xD0-D3` = AGC_LOCK, **`0xD4-D7` =
+  CMP_LOCK**, `0xD8-DB` = H_LOCK, `0xDC-DF` = BW (b/w = no color
+  burst). Useful discriminator this session: **CMP_LOCK=1 on all
+  channels while H_LOCK=0 and NOVID=1** = the analog clamp locks onto a
+  flat/DC line, i.e. the AFE is alive but there is *no video waveform
+  on the pin* — config-side causes exhausted, physical-side confirmed
+  by the user measuring **0V flat between socket pin1 (GND) and pin2
+  (VIDEO) with a camera attached**.
+
+**Where this leaves the camera bring-up**: digital path done and
+verified; analog input is the sole remaining problem and it is
+physical — the camera(s) put no signal on the VIDEO pin. Next checks
+(user, multimeter): pin3→pin1 at the socket **with camera attached**
+(is 5V actually flowing through the mated contacts under load), and
+the camera plug's own wiring order (3 wires GND/VIDEO/DC in a
+4-position plug — mirrored or offset insertion leaves the camera
+unpowered while the socket still measures 5V). If those pass on
+multiple sockets/cameras, suspect the cameras themselves.
+
+### Addendum: analog investigation concluded — cameras are powered but mute (2026-08-23)
+
+Continued from the entry above, same day. The camera-side current check
+came back: **each AHD camera draws ~35mA when plugged in** (in-spec, the
+Sony 225 sheet says 50mA working) — so the cameras power up, killing the
+"plug wiring leaves the camera unpowered" theory. The camera's video
+wire surfaces on socket pin 4 (NC on the board) at a stiff ~2.6-2.85V DC
+that sustains ~10mA when bridged into the board's 75R termination — an
+alive output *stage*. But three independent probes all say there is no
+video modulation on it:
+
+- ~0.08V AC on a DMM (ambiguous alone — DMM bandwidth is far below video
+  line rate, so real video and dead bias can both read this),
+- the N4, fully vendor-configured, with the bridge's contact *verified
+  live by the meter reading ~10mA in series the whole time*, swept
+  through every AHD_MD mode: NOVID/H_LOCK/AGC/BW never moved once, and
+- **the killer: the wire's DC level does not respond to light at all**
+  (lens covered vs phone flashlight straight in — a real video signal's
+  DC average tracks scene brightness; this one is rock solid). Also
+  reproduced identically on a second bench supply (5.1V under load), so
+  supply marginality is out.
+
+A TVI-labeled camera was also tried (voltage rating unknown — possibly
+a 12V unit that never started); zero reaction from the chip.
+
+**Verdict: these cameras' imaging pipelines are dead/mute — powered,
+biased, producing no video. All units behave identically, so it reads
+as a bad batch or harness-family problem, not one dud.** Caveat recorded
+for honesty: with the output dead, the earlier "video lands on NC pin 4"
+deduction is no longer certain — a dead output correctly wired to pin 2
+would also read 0V flat there. The pinout question only becomes
+answerable with a camera that actually modulates.
+
+**Next step when hardware allows**: one known-good AHD 1080p camera with
+transparent (non-sealed) wiring — video+GND to socket pins 2/1, power
+separate. Everything downstream is verified waiting: the driver alone
+(fresh boot, zero manual scripts) brings up the full
+N4→MIPI→CSI2RX→V4L2→app chain and streams the N4's free-run frames to
+the CAMERAS screen, and the chip-side lock registers plus the on-device
+screenshot hook give an instant verdict the moment a real signal
+arrives. If the cameras came bundled with the MY-CAM from MYIR, this is
+a supplier-support claim.
+
+Chip-register knowledge bank gained (bank5+ch reg 0x69, from live
+experiments): bit7 = "emit nothing on no-video" (setting it stopped the
+free-run frames entirely); bits 5/4 (pattern force / mem enable) are NOT
+needed for free-run frames; and zeroing bank0 0x1C+ch does *not* expose
+raw ADC content — the unlocked channel's output stays fully synthetic,
+so the "use the capture path as a scope" idea is a dead end on N4.
+
+## First real picture through the MY-CAM004M path (2026-08-24) — camera works; three driver bugs found, all reproduced/fixed live over I2C, none baked in yet
+
+A known-good 1080p AHD source was attached to input 0 (it turned out to be a
+"BY-J" 360°/surround-view box's composite output — car top-view + three
+fisheye tiles + Chinese OSD — a real, stable 1080p30 AHD signal either
+way). Session was entirely live over SSH with `i2cset -f`/`i2cget -f` and a
+new grabber; **nothing here is in the driver/image yet** — see "What to
+change" at the end.
+
+**Gotcha first: the board had booted from eMMC** (no USR held), which still
+has the pre-08-23 image (fake backend, no `camera@31` DT node, no
+`/dev/i2c-4`). Everything below is on the SD build. Check
+`mount | grep " / "` says `mmcblk1p2` before trusting any camera result.
+
+### Result
+
+- Driver probes as before (`DEV_ID 0xb0`, `link-freq 621000000`), pipeline
+  oneshot runs, `/dev/mycam/cam1` → `/dev/video4`. **But with the driver's
+  own init alone the N4 never locks**: bank0 `NOVID=1 CMP_LOCK=1 H_LOCK=0`
+  on all 4 channels — the exact "AFE alive, no waveform" signature the
+  08-23 session attributed to dead cameras. Replaying the vendor AHD
+  bring-up (`/data/mycam-vendor-replay.sh`, banks 0/1/5-8/9/10/11/13, ~180
+  regs/ch) **immediately** gives `VLOSS 0x0f→0x0e`, ch0 `NOVID=0`. So the
+  08-23 "cameras are mute" verdict was reached on a config that can't lock
+  anything; those cameras may still be dead, but that evidence is void.
+- With `AHD_MD=0x03` (1080p25, the driver's default) ch0 gets `NOVID=0`
+  but `H_LOCK=0`; with **`AHD_MD=0x02` (1080p30)** ch0 reads
+  `NOVID=0 H_LOCK=1 AGC_LOCK=1 BW=0` — full colour lock. This source is
+  30p (NTSC-land); the driver must not hard-code 25p.
+- **Byte order is UYVY, not YUYV.** Raw frames start `80 xx 80 xx` = U/V at
+  0x80 with luma in the odd bytes; decoded as UYVY on the Mac (`ffmpeg -f
+  rawvideo -pix_fmt uyvy422`) the frame is a perfect picture, decoded as
+  YUYV it's the green/magenta mess the app shows. The vendor Allwinner
+  driver declares `MEDIA_BUS_FMT_UYVY8_2X8` too. Driver advertises
+  `YUYV8_1X16` (3 places in `mycam004m.c`), the pipeline script sets
+  `YUYV8_1X16` on both SoC entities, and `camerafeed.cpp` requests/decodes
+  `V4L2_PIX_FMT_YUYV` — all three need to change together.
+- **The arbiter enable `0x00=0xFF` (all 4 channels) interleaves the 3 idle
+  channels' frames into stream 0.** Symptom: V4L2 buffers complete at
+  ~90-100/s, each with only 30-550 of 1080 lines DMA-written (the rest
+  is untouched buffer memory = `Y=0,U=0,V=0` = the dark-green band in the
+  app), consecutive buffers alternating between real video, black and
+  colour bars (`5a 51 f0 51` = the vendor bring-up's `EX_CBAR_ON`
+  pattern on no-video channels). The RX is not filtering by VC — or the
+  N4 isn't putting the channels on distinct VCs; not yet determined which
+  (see open question). Latching the arbiter for **ch0 only** (`0x00=0x00,
+  0x40=0x01, 0x0f=0x00, 0x0d=0x01, 0x40=0x00, 0x00=0x11` — the full vendor
+  `arb_init` sequence; a bare `0x00=0x11` write kills output entirely)
+  gives a rock-solid **30 buffers/s, every one exactly 1080 lines**, for
+  as long as it was left running. The saved frame from that run is the
+  proof image (`scratchpad/frame6-uyvy.png` in the session; a copy was
+  handed to the user).
+- Frame-rate/line-count measurements above come from a new tool,
+  **`/data/camgrab2`** (Rust, static aarch64-musl — see "Tooling" below):
+  zero-fills each buffer before queueing and reports how many lines the
+  DMA wrote, per-frame `dt`, and saves the *last* frame instead of the
+  first (the original `camgrab` saves frame 0, which is always pre-lock
+  because the driver re-runs its init at STREAMON — see next point).
+  Usage: `camgrab2 /dev/mycam/cam1 <nframes> <out|-> [yuyv|uyvy]
+  [save_index]`. First attempt scanned the whole 4 MB buffer for the last
+  non-zero byte — on this SoC the vb2-dma-contig mmap is uncached and
+  that took ~700 ms/frame, starving the DMA and producing bogus
+  "every buffer partial at 1.3 fps" numbers; it now samples only the last
+  8 bytes of each line. Don't byte-scan DMA buffers on this board.
+- **The driver re-applies `init_regs` + `csi_output_regs` on every
+  first-stream enable** (`mycam004m_enable_streams()`, `!stream_enable_mask`)
+  — i.e. every STREAMON resets `AHD_MD` to 25p and the arbiter to 0xFF.
+  Any live fix therefore has to be poked *after* STREAMON, and the arbiter
+  re-latch briefly stops the TX, which makes `camerafeed`'s stall
+  reconnect kick in → reopen → STREAMON → init again. So the app cannot be
+  shown the good config live; the on-device screenshot with the good
+  config applied under a running app was still striped/green. `camgrab2`
+  tolerates the restart fine (full frames resume within ~1 s).
+
+### Open question (matters once 4 cameras are attached)
+
+Whether stream 0 received all four channels because (a) the N4 puts all
+channels on VC0 with `MIPI_CH_ID_AUTO`, or (b) the TI cdns-csi2rx stream
+isn't VC-filtering (mainline's `CSI2RX_STREAM_DATA_CFG_VC_SELECT` vs TI's
+multistream routing via `get_frame_desc`). Partial evidence, late in the session: the Cadence driver copy in the
+Yocto volume (`linux-libc-headers/6.6/.../cdns-csi2rx.c`, NOT the 6.12
+linux-ti-staging tree — that one still needs checking) programs
+`CSI2RX_STREAM_DATA_CFG_EN_VC_SELECT | VC_SELECT(i)` per stream, i.e.
+stream i accepts only VC i. If 6.12 does the same, the RX *is* filtering
+and the interleaving means the N4 emits all four channels on VC0 —
+case (a), an N4 register problem (`MYCAM004M_REG_MIPI_CH_ID_TYPE` /
+`MIPI_CH_ID_AUTO` may not mean what the driver comment says). If
+(a), the fix is N4-side VC assignment; if (b), the per-input arbiter
+enable is the *only* isolation and the 4-route pipeline work is blocked
+on it. Either way the arbiter mask should track enabled inputs, not be
+`0xFF`.
+
+**Resolved (same day):** the 6.12 linux-ti-staging `cdns-csi2rx.c`
+(work-shared kernel-source in the build volume) programs per-stream VC
+filters from the source's frame descriptors
+(`csi2rx_update_vc_select()`), same as the 6.6 copy — the RX *is*
+filtering, so this is case (a): the N4 emits all arbiter-enabled
+channels on VC0. The arbiter-mask fix below is what isolates
+single-camera capture; simultaneous multi-camera needs N4-side VC
+work.
+
+### What to change (IMPLEMENTED and hardware-verified the same day —
+see the matching section below; list kept for the reasoning)
+
+1. `mycam004m-regs.h` `init_regs`: add the vendor AHD bring-up (the
+   contents of `/data/mycam-vendor-replay.sh`, minus its 30p/25p arg) and
+   set `AHD_MD` to `0x02` (1080p30) — or better, make fps a DT/module
+   parameter. Delete the "25P kept because…cameras are mute" comment;
+   its premise is refuted.
+2. Arbiter: drop the trailing `{ ARB, 0x00, 0xff }` from
+   `csi_output_regs`; do the full disable/latch/enable sequence in
+   `mycam004m_enable_camera_input()`/`disable_camera_input()` with
+   `en = 0x11 << input` OR'd over enabled inputs (vendor `en_param`).
+3. `MEDIA_BUS_FMT_YUYV8_1X16` → `MEDIA_BUS_FMT_UYVY8_1X16` in
+   `mycam004m.c` (3 sites), `mycam004m-configure-pipeline.sh` (both
+   `-V` calls), and `camerafeed.cpp` requesting/decoding
+   `V4L2_PIX_FMT_UYVY` (its YUYV→RGB loop needs the byte offsets
+   swapped; the fake backend's `.bin` frames were captured as YUYV and
+   would need re-capturing or a swap).
+4. Re-verify with `camgrab2` (30/s, 1080 lines, `NOVID=0 H_LOCK=1`) and the
+   app screenshot hook — the two are different claims (see 08-23).
+
+### Tooling notes from this session
+
+- Docker/OrbStack wedged mid-session (every `docker`/`orbctl` call hung,
+  even `orbctl restart docker`); `osascript quit` + `pkill -9 OrbStack` +
+  `open -a OrbStack` brought it back in ~5 s. Kill any backgrounded
+  shells that are stuck on a docker call first.
+- The board's `python3` is trimmed (no `fcntl`, `mmap`, `ctypes`) — useless
+  for V4L2. Board tools can be cross-built **without Docker**: `rustup
+  target add aarch64-unknown-linux-musl`, then `RUSTFLAGS="-C
+  linker=<toolchain>/lib/rustlib/aarch64-apple-darwin/bin/rust-lld -C
+  linker-flavor=ld.lld -C link-self-contained=yes -C
+  target-feature=+crt-static" cargo build --release --target
+  aarch64-unknown-linux-musl` (plain `cargo build` picks macOS `cc` as
+  the linker and fails). Source for `camgrab2` lived in the session
+  scratchpad; worth moving into `~/code/mycam004m/tools/` next time.
+
+## Camera driver fixes implemented + verified end-to-end (2026-08-24, later the same day)
+
+All three fixes from the previous section's "What to change" list are
+implemented, built, deployed, and hardware-verified. The app's CAMERAS
+screen now renders the live camera correctly.
+
+### What changed
+
+- **Driver (`~/code/mycam004m`, separate repo):**
+  - The bank-0-only `mycam004m_init_regs[]` table is gone. The full
+    vendor AHD/AFE bring-up (the contents of `/data/mycam-vendor-replay.sh`,
+    ~140 writes/channel plus chip-wide init) now lives as code in
+    `mycam004m.c` (`mycam004m_init_video_inputs()` /
+    `mycam004m_init_video_channel()`) -- code, not a table, because it's
+    parameterized by channel and needs read-modify-write. It runs **once
+    at probe**, not at STREAMON: re-running it drops signal lock (~1s to
+    re-acquire) and STREAMON is `camerafeed`'s routine reconnect path.
+    Verified: after a cold boot, ch0 reads `NOVID=0 H_LOCK=1 AGC=1`
+    before anything ever streams.
+  - Frame rate is a module parameter (`fps=30` default / `fps=25`),
+    resolved to `AHD_MD` 0x02/0x03 at probe. `MYCAM004M_FPS` back to 30.
+  - The arbiter enable-all (`0x00=0xFF`) at the tail of
+    `csi_output_regs[]` is gone; `mycam004m_arb_sync()` runs the full
+    vendor disable/latch/enable sequence with a mask of exactly the
+    streaming inputs at every stream start/stop. Verified: `ARB_EN`
+    reads 0x11 after cam1 streams.
+  - `MEDIA_BUS_FMT_YUYV8_1X16` -> `UYVY8_1X16` everywhere (3 sites).
+  - Stream disable no longer powers down the AFE channel (`PD_VCH`) --
+    isolation comes from the arbiter mask + TX off; powering down would
+    black out every app reconnect while lock re-acquires.
+  - `mycam004m-fake` follows the UYVY move: fourcc, comments, and the 4
+    committed `cam*.bin` reference frames byte-swapped in place;
+    `gen_fake_frames.py` emits UYVY now. Driver docs/README status
+    sections rewritten (they claimed "never tested on hardware").
+- **This repo:** `mycam004m-configure-pipeline.sh` sets `UYVY8_1X16` on
+  both SoC entities; `camerafeed.cpp` requests/validates
+  `V4L2_PIX_FMT_UYVY` and `convertUYVYToRGB32()` reads U/Y/V/Y byte
+  order (renamed from convertYUYVToRGB32).
+
+### Verification numbers (SD boot, cold)
+
+- Probe: `found N4 decoder: DEV_ID 0xb0`, AFE init adds ~200ms,
+  `link-freq 621000000 Hz`.
+- `camgrab2 /dev/mycam/cam1 90 ... uyvy`: **90/90 frames, dt=33.3ms
+  (exact 30fps), every frame bytesused=4147200 with all 1080 lines
+  DMA-written**, no sequence gaps. Frame decodes to a clean picture
+  with correct colors as UYVY.
+- App end-to-end: `/tmp/ultima-camtest.request open` + screenshot hook
+  -> CAM 1 tile renders the live picture (correct colors), CAM 2-4
+  "NO SIGNAL" as expected with nothing attached.
+
+### Two operational gotchas hit while deploying (worth remembering)
+
+- **Don't try to live-reload the camera module stack.** `mycam004m`'s
+  refcount is pinned while bound (v4l2 cross-module ref held by the
+  `j721e_csi2rx` v4l2_device), and unloading consumer-first didn't work
+  either: `rmmod j721e_csi2rx` hung in-kernel and left `mycam004m` at
+  refcount **-1** (same family as the earlier "STREAMON hang + rmmod
+  oops" note above). Files on disk were already updated, so the
+  recovery was just a USR power-cycle. Deploy files -> power-cycle;
+  skip module gymnastics.
+- **The SD image regenerates its SSH host key every boot** (host keys
+  live on volatile storage), so `ssh` fails strict host-key checking
+  after every reboot. `ssh-keygen -R beagleplay-ti.local` +
+  `-o StrictHostKeyChecking=accept-new` and move on.
+
+### Still open (unchanged)
+
+4 simultaneous cameras: the N4 emits everything on VC0 (case (a) above,
+now confirmed since the 6.12 RX does VC-filter) -- expect N4-side VC
+work (manual CH_ID mode?) plus the 4-route pipeline config before
+multi-camera capture separates. Single-camera is solid.
