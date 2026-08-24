@@ -3849,13 +3849,28 @@ has the pre-08-23 image (fake backend, no `camera@31` DT node, no
 
 - Driver probes as before (`DEV_ID 0xb0`, `link-freq 621000000`), pipeline
   oneshot runs, `/dev/mycam/cam1` → `/dev/video4`. **But with the driver's
-  own init alone the N4 never locks**: bank0 `NOVID=1 CMP_LOCK=1 H_LOCK=0`
-  on all 4 channels — the exact "AFE alive, no waveform" signature the
-  08-23 session attributed to dead cameras. Replaying the vendor AHD
+  own baked-in init alone the N4 never locks**: bank0
+  `NOVID=1 CMP_LOCK=1 H_LOCK=0` on all 4 channels — the exact "AFE alive,
+  no waveform" signature the 08-23 session saw. Replaying the vendor AHD
   bring-up (`/data/mycam-vendor-replay.sh`, banks 0/1/5-8/9/10/11/13, ~180
-  regs/ch) **immediately** gives `VLOSS 0x0f→0x0e`, ch0 `NOVID=0`. So the
-  08-23 "cameras are mute" verdict was reached on a config that can't lock
-  anything; those cameras may still be dead, but that evidence is void.
+  regs/ch) **immediately** gives `VLOSS 0x0f→0x0e`, ch0 `NOVID=0` — proving
+  the shipped `mycam004m_init_regs[]` (bank-0 AHD_MD writes only, no AFE
+  bring-up) was a real bug that would make *any* camera, dead or alive,
+  read as mute.
+  **Correction (2026-08-24, later): this does NOT reopen the 08-23
+  "cameras are mute" verdict.** That session already replayed this exact
+  same ~180-reg/ch AFE sequence live over i2cset (not baked into the
+  driver, but tried) and still got no lock on the actual camera units —
+  and, independent of any register config, measured the camera's video
+  line holding a static DC bias that did not move at all between a
+  covered lens and a flashlight straight into it, across every unit
+  tested. That's driver-independent physical evidence, not an artifact of
+  this config gap. The source used in *this* session (below) is a
+  different, known-good device (a "BY-J" surround-view box), not the
+  original camera modules — so this proves the driver/pipeline path is
+  correct, not that the 08-23 cameras are alive. See NOTES.md's `## First
+  real picture...` closing note and the 08-23 entries above for the full
+  case; those units are still presumed dead until retested.
 - With `AHD_MD=0x03` (1080p25, the driver's default) ch0 gets `NOVID=0`
   but `H_LOCK=0`; with **`AHD_MD=0x02` (1080p30)** ch0 reads
   `NOVID=0 H_LOCK=1 AGC_LOCK=1 BW=0` — full colour lock. This source is
