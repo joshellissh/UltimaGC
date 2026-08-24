@@ -1,0 +1,16 @@
+[Unit]
+Description=Configure the mycam004m real-backend CSI2 media pipeline (subdev formats)
+# Same reasoning as select-camera-backend.service: needs the modules-load.d
+# -forced j721e-csi2rx/cdns-dphy-rx/mycam004m modules already bound (so
+# /dev/media0 and its entities exist) before media-ctl has anything to
+# configure.
+After=systemd-modules-load.service
+Requires=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/mycam004m-configure-pipeline.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

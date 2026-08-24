@@ -1,15 +1,23 @@
 [Unit]
-Description=Resolve /dev/mycam/cam1..4 to the active mycam004m backend (fake)
-# mycam004m-fake is out-of-tree (see mycam004m-fake.conf, loaded via
-# systemd-modules-load.service rather than udev coldplug — same reasoning
-# as pvrsrvkm.conf in ultima-app.bb) — its 4 /dev/videoX nodes only exist
-# once that unit has actually finished.
+Description=Resolve /dev/mycam/cam1..4 to the active mycam004m backend (real)
+# Both mycam004m (real) and mycam004m-fake are out-of-tree, and the real
+# backend also needs TI/Cadence's in-tree j721e-csi2rx/cdns-csi2rx/
+# cdns-dphy-rx modules, none of which reliably coldplug via udev for a
+# DT-instantiated platform device (same class of bug as CONFIG_DRM_TIDSS —
+# see NOTES.md) — all forced via mycam004m-real.conf/mycam004m-fake.conf,
+# loaded by systemd-modules-load.service, same reasoning as pvrsrvkm.conf
+# in ultima-app.bb. The 4 /dev/videoX nodes only exist once that unit has
+# actually finished.
 After=systemd-modules-load.service
 Requires=systemd-modules-load.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/select-camera-backend.sh fake
+# MY-CAM004M hardware attached as of 2026-08-23 (see NOTES.md) — real is
+# now the boot default. If the camera doesn't ACK on I2C or the media
+# graph doesn't come up clean, fall back over SSH:
+#   select-camera-backend.sh fake
+ExecStart=/usr/bin/select-camera-backend.sh real
 RemainAfterExit=yes
 
 [Install]

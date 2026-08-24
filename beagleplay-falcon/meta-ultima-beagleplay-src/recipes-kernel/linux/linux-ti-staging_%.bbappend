@@ -1,6 +1,7 @@
 FILESEXTRAPATHS:prepend := "${THISDIR}/linux-ti-staging:"
 SRC_URI:append = " file://ultima-can.cfg file://ultima-display.cfg file://ultima-wifi.cfg"
 SRC_URI:append = " file://0001-arm64-dts-k3-am625-beagleplay-add-mikrobus-can-click.patch"
+SRC_URI:append = " file://0002-arm64-dts-k3-am625-beagleplay-add-mycam004m-camera.patch"
 
 # This recipe's do_configure comes from setup-defconfig.inc, not the
 # generic kernel-yocto class — it does NOT auto-merge every *.cfg in

@@ -20,13 +20,16 @@ IMAGE_INSTALL:append:beagleplay-ti = " ultima-app ultima-splash can-utils mmc-ut
 # ultima_enable_wifi's own comment below for the exact mechanism.
 IMAGE_INSTALL:append:beagleplay-ti = " wpa-supplicant wl18xx-firmware"
 
-# mycam004m (2026-08-17): the quad-camera V4L2 driver's mock/fake backend
-# (mycam004m-fake.ko + its 4 static reference frames + the boot-time
-# select-camera-backend.sh run), enabled by default since no real
-# MY-CAM004M hardware is attached yet — see
-# recipes-kernel/mycam004m/mycam004m.bb. The real backend's .ko is built
-# by the same recipe but its devicetree overlay is deliberately not
-# applied here, so it stays inert.
+# mycam004m (2026-08-17, real backend wired up 2026-08-23): the
+# quad-camera V4L2 driver, both backends built. Real (mycam004m.ko +
+# TI/Cadence's in-tree CSI2/D-PHY modules, camera devicetree node applied
+# via a compile-time patch to k3-am625-beagleplay.dts — see
+# recipes-kernel/linux/linux-ti-staging/0002-...-add-mycam004m-camera.patch)
+# is now the boot default now that MY-CAM004M hardware is actually
+# attached; mycam004m-fake stays built and force-loaded alongside it as a
+# live fallback (select-camera-backend.sh fake) and the thing to keep
+# developing app logic against regardless of real's hardware-verification
+# status. See recipes-kernel/mycam004m/mycam004m.bb and NOTES.md.
 IMAGE_INSTALL:append:beagleplay-ti = " mycam004m"
 
 # GPU enablement spike (2026-08-12): explicit rather than relying on the
