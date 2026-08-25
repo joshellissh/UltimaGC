@@ -4056,3 +4056,44 @@ screen now renders the live camera correctly.
 now confirmed since the 6.12 RX does VC-filter) -- expect N4-side VC
 work (manual CH_ID mode?) plus the 4-route pipeline config before
 multi-camera capture separates. Single-camera is solid.
+
+## Flashed the built image; found + worked around a cold-boot I2C probe race (2026-08-24, later)
+
+`flash.sh disk4` wrote the freshly-built `tisdk-base-image` (with all the
+camera driver fixes from the sections above) to the SD card, boot
+confirmed on `mmcblk1p2`.
+
+**First true cold boot of this image hit a new failure**: `mycam004m`
+probe failed with `-EREMOTEIO` reading the chip ID (`error -121`), so the
+system fell back to nothing bound on `4-0031` (camera stayed on the fake
+backend; `select-camera-backend.service`/`mycam004m-configure-pipeline.service`
+both reported `failed`, having run before the real capture nodes existed).
+`i2cdetect -y -r 4` moments later showed the N4 responding at 0x31
+normally, and a manual re-probe (`echo 4-0031 >
+/sys/bus/i2c/drivers/mycam004m/bind` -- safe here specifically because
+probe had failed, so nothing was bound; this is NOT the documented
+unbind-hangs/rmmod-oopses hazard, which is about tearing down an
+already-*working* binding) succeeded immediately: chip ID read, full AFE
+bring-up ran, ch0 locked (`NOVID=0 H_LOCK=1 AGC=1`). Restarting the two
+services and re-running `camgrab2` + the app screenshot hook then
+reproduced the exact same clean 30fps/1080-line capture and CAMERAS
+screenshot as the live-patched test earlier the same day.
+
+**Diagnosis**: every previous verification (this session and 08-23) was a
+*warm* module reload/insmod on a board whose power rails, GPIOs, and I2C
+bus had already been up and settled for a while. This was the first time
+`mycam004m` probed during an actual cold power-on, where `omap_i2c` bus 4
+comes up at t=0.275s but the probe (chip-ID readback) ran at t=2.582s and
+still got a NAK -- i.e. the driver's own power-on delays
+(`mycam004m_power_on()`: 5-10ms PWREN/LDO settle, 10-20ms RESET_N release,
+both commented as "conservative margins" against datasheet minimums) were
+apparently not enough margin on a genuine 0V-start cold boot, unlike a
+warm reload where the rail was already at steady-state. One data point,
+not yet reproduced a second time -- could also be probe-ordering/deferred-
+probe timing unrelated to the LDO/RESET_N delays themselves.
+
+**Not fixed yet** (driver still probes once, no retry) -- if this
+reproduces on a future cold boot: either widen `mycam004m_power_on()`'s
+delays, or add a bounded retry around the chip-ID readback in
+`mycam004m_check_chip_id()`/`mycam004m_probe()` before failing hard. Filed
+here rather than fixed blind since it's one occurrence.
