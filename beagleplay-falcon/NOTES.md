@@ -3193,7 +3193,7 @@ Wrote `{"totalOdo":0,"tripOdo":0}`, swapped the binary, `systemctl start`,
 confirmed via journal: `OdoStore: saved totalOdo=0.0 tripOdo=0.0` on the
 next 30s autosave, file contents matching.
 
-## CAN interface migrated from USB adapter to mikroBUS SPI click (2026-08-20) — DT/kernel path hardware-verified 2026-08-21, click board not yet physically connected
+## CAN interface migrated from USB adapter to mikroBUS SPI click (2026-08-20) — DT/kernel path hardware-verified 2026-08-21; click board seated and SPI-verified 2026-08-26, CAN2 wiring still pending
 
 Replaced the ODrive USB-CAN adapter with a MikroE **CAN SPI 3.3V click**
 (MCP2515 CAN controller + SN65HVD230 transceiver) plugged into BeaglePlay's
@@ -3352,6 +3352,79 @@ DT/Kconfig chain from scratch next time this symptom shows up). `flash.sh`
 stamping every card it writes with the same `deadbee5` PARTUUID (see
 "Flashing" above) means that signature alone doesn't prove *today's* flash
 took — only that *some* `flash.sh` run wrote that card at some point.
+
+### Hardware verification (2026-08-26) — click board seated, SPI/chip init confirmed, CAN2 wiring still pending
+
+User physically seated the MikroE CAN SPI 3.3V click into BeaglePlay's
+mikroBUS socket (no CAN2 wiring to the ECU yet — just the click board
+itself, powered from the mikroBUS rail). First check against the board's
+then-current eMMC image showed nothing at all: no `/sys/bus/spi/devices/`
+entries, no `can0`, no `mcp251x` in `dmesg`. Not a wiring problem — the
+running eMMC image simply predated this project's history ever adding the
+DT patch to a build that got flashed. (Blind alley worth noting: the
+kernel's `Linux version` banner date — `Thu Dec 4 13:07:37 UTC 2025` — is
+*not* a useful staleness signal here. OE's reproducible-build timestamping
+pins it regardless of when `bitbake` actually runs, confirmed by grepping
+strings out of a freshly built `.wic.xz` that already contained
+`microchip,mcp2515`/`mikrobus_can` and reported the exact same banner date.
+The only real signal is checking the DT/sysfs/dmesg state directly.)
+
+Rebuilt and reflashed to get a current image onto eMMC:
+
+- Working tree had unrelated uncommitted WIP (a dashcam-recording
+  libjpeg-turbo encode spike touching `camerafeed.cpp`/`ultima-app.pro`/
+  `ultima-app.bb`) — `build.sh` bind-mounts the live source tree, so this
+  would have been baked into the image too. Stashed it for the duration of
+  the build, popped it back after — the built image reflects clean `HEAD`
+  only (CAN patch + that morning's camera-fps-fix and SetTimeScreen
+  commits), not the in-progress spike.
+- `build.sh` (incremental — 8988/9030 tasks reused from sstate, only the
+  kernel/rootfs actually rebuilt) produced a `.wic.xz` confirmed via string
+  search to contain the CAN DT node.
+- `deploy-falcon/tiboot3-falcon-emmc.bin` didn't exist yet at all — this is
+  the first time anything actually pushed an image to this board's eMMC
+  since the click was added to the DT, so `build-emmc-spl.sh` had to be run
+  for the first time, not just re-run.
+- `flash.sh` to SD (run by the user directly — see "Must be run
+  interactively" under "Flashing" above), booted with USR held, confirmed
+  root on `/dev/mmcblk1p2` before touching anything.
+- `emmc-push.sh` over SSH from the SD-booted board installed the new image
+  + eMMC SPL onto `/dev/mmcblk0`. Its pre-install backup step logged "no
+  readable /data on the current eMMC (first flash, or partition not yet
+  formatted) — proceeding without a backup"; whatever was in `/data` before
+  (e.g. a provisioned `/data/wifi-client.conf`, if this board had one) did
+  not survive and would need re-provisioning. Disk signatures came out
+  distinct as designed (`emmc=2a4a6c07` vs the SD's `deadbee5`).
+- Powered off, pulled the SD card, powered back on with no button held.
+  Confirmed root on `/dev/mmcblk0p2`, hostname `ultimagc` (this image also
+  carries the 2026-08-25 hostname-rename commit).
+
+**Result — real progress over the 2026-08-21 check, not just a repeat**:
+
+```
+mcp251x spi0.0 can0: MCP2515 successfully initialized.
+```
+
+`/sys/bus/spi/devices/` now shows `spi0.0`, `can0` exists as a netdev
+(`DOWN`), and `lsmod` shows `mcp251x`/`can_dev` loaded. This is qualitatively
+different from the 2026-08-21 result (`-110`/`ETIMEDOUT`, empty-socket
+behavior) — the chip is seated correctly, powered, and actually answering
+SPI transactions now. The two lines right after —
+
+```
+mcp251x spi0.0 can0: bit-timing not yet defined
+mcp251x spi0.0: unable to set initial baudrate!
+```
+
+— are expected/benign, not a fault: SocketCAN logs these until a bitrate is
+set (`ip link set can0 type can bitrate <rate>`) and the interface brought
+up, and nothing is wired to CAN2 yet for there to be a bitrate to derive.
+
+**Still not done**: physical CAN2 wiring to the Syvecs S7+ (B2/CAN_H,
+B3/CAN_L), populating the click's termination jumper (J2), setting the
+correct bitrate, and a real `candump`/`ip -details link show can0` check —
+none of the oscillator/bit-timing math from the original DT work has been
+exercised against real bus traffic yet.
 
 ## Two environmental build failures, unrelated to any feature work (2026-08-21)
 
