@@ -1,5 +1,6 @@
 #include "systemclock.h"
 
+#include <QDate>
 #include <QDateTime>
 #include <QTime>
 #include <stdio.h>
@@ -47,11 +48,16 @@ static void writeHardwareRtc(time_t t)
 }
 #endif
 
-bool SystemClock::setTime(int hour, int minute)
+bool SystemClock::setTime(int year, int month, int day, int hour, int minute)
 {
 #ifdef __linux__
-    QDateTime target = QDateTime::currentDateTime();
-    target.setTime(QTime(hour, minute, 0));
+    QDate date(year, month, day);
+    if (!date.isValid()) {
+        fprintf(stderr, "SystemClock::setTime: invalid date %04d-%02d-%02d\n", year, month, day);
+        return false;
+    }
+
+    QDateTime target(date, QTime(hour, minute, 0));
 
     time_t epochSecs = target.toSecsSinceEpoch();
     struct timespec ts;
@@ -67,6 +73,9 @@ bool SystemClock::setTime(int hour, int minute)
     return true;
 #else
     // Dev build on macOS: never touch the host machine's clock.
+    Q_UNUSED(year);
+    Q_UNUSED(month);
+    Q_UNUSED(day);
     Q_UNUSED(hour);
     Q_UNUSED(minute);
     fprintf(stderr, "SystemClock::setTime: no-op on non-Linux dev build\n");

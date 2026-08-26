@@ -18,11 +18,12 @@ class SystemClock : public QObject
 public:
     explicit SystemClock(QObject *parent = nullptr);
 
-    // Sets today's date at the given wall-clock time (seconds zeroed).
-    // Returns false if the underlying clock_settime() call fails (e.g. no
-    // permission) or, on non-Linux dev builds, always — the host machine's
-    // clock is never touched.
-    Q_INVOKABLE bool setTime(int hour, int minute);
+    // Sets the given calendar date and wall-clock time (seconds zeroed).
+    // month is 1-12. Returns false if the date is invalid (e.g. Feb 30),
+    // the underlying clock_settime() call fails (e.g. no permission), or,
+    // on non-Linux dev builds, always — the host machine's clock is never
+    // touched.
+    Q_INVOKABLE bool setTime(int year, int month, int day, int hour, int minute);
 
     // False during the brief post-boot window where the system clock still
     // holds its stale boot-default value rather than the BQ32002 RTC's real
