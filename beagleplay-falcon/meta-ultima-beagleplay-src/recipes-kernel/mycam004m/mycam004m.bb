@@ -31,7 +31,7 @@ inherit module systemd
 # sources (see those recipes' comments for the full reasoning).
 MYCAM004M_EXTERNAL_SRC = "/home/builder/yocto/mycam004m-src"
 
-SRC_URI = "file://mycam004m-fake.conf file://mycam004m-real.conf file://select-camera-backend.service file://mycam004m-configure-pipeline.sh file://mycam004m-configure-pipeline.service"
+SRC_URI = "file://mycam004m-fake.conf file://mycam004m-real.conf file://mycam004m-options.conf file://select-camera-backend.service file://mycam004m-configure-pipeline.sh file://mycam004m-configure-pipeline.service"
 S = "${WORKDIR}/mycam004m-src"
 
 python do_unpack:append() {
@@ -93,6 +93,12 @@ do_install:append() {
     # only the three leaf modules need listing.
     install -m 0644 ${WORKDIR}/mycam004m-real.conf ${D}${sysconfdir}/modules-load.d/mycam004m-real.conf
 
+    # modprobe options for the real backend — fps=25 for the attached
+    # 25fps AHD cameras (see the file's own comment + NOTES.md). Read by
+    # modprobe when systemd-modules-load autoloads mycam004m above.
+    install -d ${D}${sysconfdir}/modprobe.d
+    install -m 0644 ${WORKDIR}/mycam004m-options.conf ${D}${sysconfdir}/modprobe.d/mycam004m-options.conf
+
     install -d ${D}${systemd_unitdir}/system
     install -m 0644 ${WORKDIR}/select-camera-backend.service ${D}${systemd_unitdir}/system/select-camera-backend.service
 
@@ -113,7 +119,7 @@ do_install:append() {
 # to FILES:${PN} here (not replacing it) keeps that wiring and just attaches
 # the non-module bits (firmware, script, boot-time units) to the same package,
 # so a single "mycam004m" in IMAGE_INSTALL pulls in everything needed.
-FILES:${PN} += "${nonarch_base_libdir}/firmware/mycam004m-fake ${bindir}/select-camera-backend.sh ${bindir}/mycam004m-configure-pipeline.sh ${sysconfdir}/modules-load.d/mycam004m-fake.conf ${sysconfdir}/modules-load.d/mycam004m-real.conf ${systemd_unitdir}/system/select-camera-backend.service ${systemd_unitdir}/system/mycam004m-configure-pipeline.service"
+FILES:${PN} += "${nonarch_base_libdir}/firmware/mycam004m-fake ${bindir}/select-camera-backend.sh ${bindir}/mycam004m-configure-pipeline.sh ${sysconfdir}/modules-load.d/mycam004m-fake.conf ${sysconfdir}/modules-load.d/mycam004m-real.conf ${sysconfdir}/modprobe.d/mycam004m-options.conf ${systemd_unitdir}/system/select-camera-backend.service ${systemd_unitdir}/system/mycam004m-configure-pipeline.service"
 
 SYSTEMD_SERVICE:${PN} = "select-camera-backend.service mycam004m-configure-pipeline.service"
 SYSTEMD_AUTO_ENABLE:${PN} = "enable"

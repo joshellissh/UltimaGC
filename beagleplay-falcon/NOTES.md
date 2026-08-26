@@ -4097,3 +4097,60 @@ reproduces on a future cold boot: either widen `mycam004m_power_on()`'s
 delays, or add a bounded retry around the chip-ID readback in
 `mycam004m_check_chip_id()`/`mycam004m_probe()` before failing hard. Filed
 here rather than fixed blind since it's one occurrence.
+
+## New "SZ-2053/3077S" surround-view cameras — pinout mismatch, not the driver (2026-08-25)
+
+User switched to 4 new AHD cameras from an Amazon 360-kit ("SZ-2053/3077S 2K"
+on the cable; Amazon B0FBFLSTB7, "BY-J 360-Degree Panoramic Camera System").
+None locked: all 4 inputs `NOVID=1 CMP_LOCK=1 H_LOCK=0` across every AHD_MD
+value — the "AFE alive, no waveform" signature again. Driver, services, and
+single-route pipeline were all confirmed healthy (a known-good source still
+produced a clean capture), so the fault was upstream of the board.
+
+**Camera research.** These are the commodity 360-kit head: GalaxyCore **GC2053**
+2MP sensor ("2053"), "3077" is the *lens* board (2053+3077 / 2053+6048 /
+2053+1005 are interchangeable lens options), AHD encoder is a Fullhan-8536-class
+part. Format is **AHD 1080p25** (PAL). MYIR's own recommended head (QJD 6048-2053)
+is the same family at 5V. Every marketplace listing's spec table says "12V" — this
+was **wrong for the actual hardware** and nearly sent us down a 12V-supply path;
+see the memory note `verify-hardware-specs-not-seller-listings`.
+
+**Root cause: connector pin-order mismatch.** User disassembled a camera — PCB
+silkscreen `N/P · VO · G · 5V`, a **5V** camera (exactly what the MY-CAM jack
+supplies). But the camera's moulded 4-pin barrel and the MY-CAM CJ-BM4-M11 jack
+disagree on pin order. Camera plug, looking into the pins, key notch up:
+`NC(top-left) 5V(top-right) / VID(bottom-left) GND(bottom-right)`. MY-CAM socket,
+looking into the holes, key notch up: `GND(top-left) 5V(top-right) /
+—(bottom-left, this is NC/pos-4) VID(bottom-right)`. Mated, every contact lands
+on the wrong function; notably the camera's GND pin has no corresponding wire to
+reach the socket's ground position. Signature while mis-mated: **0.7V across the
+camera's G–5V pads** = 5V pushed through the camera's reverse-polarity clamp
+diode (one forward drop) because GND and 5V are swapped — a clean diagnostic, and
+a reason to unplug rather than leave it powered. Powered-but-unloaded VO floats
+to ~1.1V DC (vs ~0.3–0.5V into the board's 75Ω termination) = video driving but
+the yellow VID wire not landing on the socket VID pin.
+
+**Fix.** Re-pin the camera barrel (or make a short cross-wired adapter) so
+red→5V, black→GND, yellow→VID per the socket layout above. User moved the wires;
+input 0 (jack **J1** → `/dev/video4` → `cam1`) then **fully locked**:
+`NOVID=0 H_LOCK=1 CMP_LOCK=1 AGC_LOCK=1`, VLOSS `0x0f→0x0e`. `camgrab2` pulled
+40/40 frames at a measured **40.0ms/frame (25.0fps)**, 1080 lines, real picture
+content (fisheye view of the bench, not the 0x80/0x80 red fill). End-to-end
+camera→N4→CSI2→ticsi2rx→V4L2 confirmed with a saved PNG.
+
+**These cameras are 25fps — the driver default (fps=30, AHD_MD=0x02) does NOT
+lock them.** At 0x02 they half-lock (NOVID=0 but H_LOCK=0, no usable video); only
+AHD_MD=0x03 (1080p25) gives full lock. The live capture above required manually
+poking `AHD_MD=0x03`; on a normal boot the driver programs 0x02 and the picture
+is absent. **Persistent fix needed: load `mycam004m` with `fps=25`** — add
+`options mycam004m fps=25` via a `modprobe.d` file in the Yocto layer (module is
+listed in `modules-load.d/mycam004m-real.conf` today with no params). Not yet
+committed; requires an image rebuild + reflash.
+
+**Other observations.** The unpopulated `N/P` pad on the camera PCB is almost
+certainly the AHD encoder's NTSC/PAL (30/25) select. Also worth doing on the
+driver: at STREAMON, check a sentinel init register (e.g. bank1 0xCC==0x64) and
+re-run the AFE bring-up if it was lost — an earlier attempt this session showed
+the N4 reverting to power-on state (likely the 3 mis-wired cameras loading the
+5V rail through their clamp diodes), which a reboot cleared; a self-heal check
+would avoid the reboot.
