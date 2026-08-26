@@ -66,8 +66,9 @@ QString ShaderManager::loadSource(const QString &resourcePath) {
     return QString::fromUtf8(f.readAll());
 }
 
-QOpenGLShaderProgram *ShaderManager::program(const QString &vertPath, const QString &fragPath) {
-    std::string key = (vertPath + "|" + fragPath).toStdString();
+QOpenGLShaderProgram *ShaderManager::program(const QString &vertPath, const QString &fragPath,
+                                             Variant variant) {
+    std::string key = (vertPath + "|" + fragPath + (variant == ExternalSampler ? "|ext" : "")).toStdString();
     auto it = m_cache.find(key);
     if (it != m_cache.end()) return it->second.get();
 
@@ -76,6 +77,11 @@ QOpenGLShaderProgram *ShaderManager::program(const QString &vertPath, const QStr
     if (vertBody.isEmpty() || fragBody.isEmpty()) return nullptr;
 
     QString fragExtensionLines = takeLeadingExtensionLines(fragBody);
+    if (variant == ExternalSampler) {
+        fragBody.replace(QLatin1String("uniform sampler2D uTexture;"),
+                         QLatin1String("uniform samplerExternalOES uTexture;"));
+        fragExtensionLines += QStringLiteral("#extension GL_OES_EGL_image_external_essl3 : require\n");
+    }
 
     auto prog = std::make_unique<QOpenGLShaderProgram>();
     QString vertSrc = versionHeader(QOpenGLShader::Vertex) + vertBody;

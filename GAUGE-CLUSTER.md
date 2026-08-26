@@ -17,7 +17,7 @@ change as the app evolves and a stale copy is worse than no copy.
   beyond the original `odostore`/`canbus`/`systemclock` trio to include the
   camera + 360 surround-view + calibration stack (`camerafeed`, `cameraview`,
   `cameracalibration`, `warpmesh`, `shadermanager`, `surroundtexture`,
-  `surroundview`, `calibrationstore`); `RESOURCES += qml.qrc`. A `ultima_dev_sim`
+  `surroundview`, `calibrationstore`, `dmabuftexture`); `RESOURCES += qml.qrc`. A `ultima_dev_sim`
   CONFIG flag (set by `scripts/dev-build-wsl.sh`) defines `ULTIMA_SIMULATE` to
   force simulated gauge data on a Linux dev build too — macOS dev builds
   simulate unconditionally regardless of this flag (see `canbus.h`/`.cpp`
@@ -262,3 +262,8 @@ to confirm the AIN0 empty/full direction and calibration.
 - `CanBus` logs `[canbus] ...` lines to stderr on connect/bind failures and reconnects — check `journalctl -u ultima-app` (BeaglePlay logs to journald, see `ultima-app.service`).
 - `main.cpp` polls for a handful of trigger files under `/tmp` every frame or so (dev/debug only, works over SSH on real hardware too, not just the dev-sim build): `/tmp/ultima-screenshot.request` (optionally containing an output path, default `/tmp/ultima-screenshot.png`) grabs a frame; `/tmp/ultima-camtest.request` containing `open`/`close`/`360open`/... drives the camera overlays without touching CAN; `/tmp/ultima-indicator.request` containing `left`/`right`/`hazard` toggles turn signals the same way the debug L/R/H keys do. Each trigger file is deleted after being read.
 - `CameraFeed` supports `ULTIMA_CAM_IMAGE_DIR` (env var) to serve real static photos instead of synthetic test bars from the fake mycam004m backend — useful for eyeballing `CameraView`'s mirror-view reprojection (`mirror.frag`) against real-world content instead of a test pattern.
+- Camera performance env vars (all real-hardware; see `beagleplay-falcon/NOTES.md` "Camera framerate" for the 2026-08-26 investigation that added them): `ULTIMA_CAM_FPS_LOG=1` prints per-feed arrived/published/decoded rates + convert times and per-`CameraView` render stats every ~2s; `ULTIMA_CAM_ZEROCOPY=0` disables the default zero-copy dma-buf display path (`dmabuftexture.h`) and forces the converted-QImage path everywhere; `ULTIMA_CAM_FANOUT=1` points `cameraFeed2..4` at `cameraFeed1`'s object so every camera surface renders the one attached camera — a 4-camera load proxy for a single-camera bench.
+
+### Camera frame paths (zero-copy vs converted)
+
+Two parallel paths carry frames out of `CameraFeed` (full rationale + measured numbers in `beagleplay-falcon/NOTES.md` "Camera framerate: root cause found"): the **zero-copy path** (default on target) exports each V4L2 capture buffer as a dma-buf and renderers (`CameraView` — grid tiles, rear screen, mirror overlays) import it as a `GL_TEXTURE_EXTERNAL_OES` via `DmaBufTextureSet`, the GPU sampling UYVY directly — no CPU convert, no upload; and the **converted path** (`SurroundView`'s stitch, plus the whole macOS/sim build) where a per-feed capture thread NEON-decodes UYVY→RGBA8888 at half resolution into `currentFrame()` QImages, but only while a consumer is registered (`CameraFeed::addFrameConsumer()`, driven by `SurroundView`'s visibility). `ShaderManager::ExternalSampler` lets `blit.frag`/`mirror.frag` serve both paths from one source file. The capture buffers themselves are requested CPU-cacheable (`V4L2_MEMORY_FLAG_NON_COHERENT`) — reading the default uncached mapping is what made the original 2026-08-25 "3fps grid" bug.

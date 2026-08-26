@@ -156,6 +156,34 @@ public:
 
 SurroundView::SurroundView(QQuickItem *parent) : QQuickFramebufferObject(parent) {}
 
+SurroundView::~SurroundView() {
+    // Feeds outlive this item (created in main() before the QML engine) —
+    // leave their consumer counts balanced.
+    if (m_consumersRegistered) {
+        for (CameraFeed *feed : m_feeds)
+            if (feed) feed->removeFrameConsumer();
+        m_consumersRegistered = false;
+    }
+}
+
+void SurroundView::updateFrameConsumers() {
+    const bool want = isVisible();
+    if (want == m_consumersRegistered)
+        return;
+    for (CameraFeed *feed : m_feeds) {
+        if (!feed) continue;
+        if (want) feed->addFrameConsumer();
+        else feed->removeFrameConsumer();
+    }
+    m_consumersRegistered = want;
+}
+
+void SurroundView::itemChange(ItemChange change, const ItemChangeData &value) {
+    if (change == ItemVisibleHasChanged)
+        updateFrameConsumers();
+    QQuickFramebufferObject::itemChange(change, value);
+}
+
 QVariantList SurroundView::feeds() const {
     QVariantList list;
     for (CameraFeed *feed : m_feeds) list.append(QVariant::fromValue(static_cast<QObject *>(feed)));
@@ -163,14 +191,26 @@ QVariantList SurroundView::feeds() const {
 }
 
 void SurroundView::setFeeds(const QVariantList &feeds) {
+    // Deregister from the outgoing set first so counts stay balanced when
+    // feeds are swapped while visible.
+    const bool wasRegistered = m_consumersRegistered;
+    if (wasRegistered) {
+        for (CameraFeed *feed : m_feeds)
+            if (feed) feed->removeFrameConsumer();
+        m_consumersRegistered = false;
+    }
     for (int i = 0; i < 4; ++i) {
         QObject::disconnect(m_frameConnections[i]);
         m_feeds[i] = (i < feeds.size()) ? qobject_cast<CameraFeed *>(feeds.at(i).value<QObject *>()) : nullptr;
         if (m_feeds[i]) {
+            // Same isVisible() guard as CameraView::setFeed (see there):
+            // QQuickFramebufferObject::update() re-renders the FBO even
+            // for a hidden item, and this view is hidden most of the time.
             m_frameConnections[i] = connect(m_feeds[i], &CameraFeed::frameReady, this,
-                                             [this]() { update(); });
+                                             [this]() { if (isVisible()) update(); });
         }
     }
+    updateFrameConsumers();
     emit feedsChanged();
 }
 

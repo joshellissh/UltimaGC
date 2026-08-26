@@ -43,6 +43,7 @@ class SurroundView : public QQuickFramebufferObject {
 
 public:
     explicit SurroundView(QQuickItem *parent = nullptr);
+    ~SurroundView() override;
 
     QVariantList feeds() const;
     void setFeeds(const QVariantList &feeds);
@@ -61,6 +62,11 @@ public:
 
     Renderer *createRenderer() const override;
 
+protected:
+    // Registers/deregisters this view as a converted-frame consumer on its
+    // feeds as it becomes visible/hidden — see updateFrameConsumers().
+    void itemChange(ItemChange change, const ItemChangeData &value) override;
+
 signals:
     void feedsChanged();
     void calibrationSourceChanged();
@@ -71,6 +77,14 @@ private:
     CalibrationStore *m_calibrationSource = nullptr;
     QMetaObject::Connection m_calibrationConnection;
     bool m_calibrationDirty = false;
+    // This view renders CameraFeed::currentFrame() QImages (the CPU-
+    // converted path — see camerafeed.h's class comment; the per-camera
+    // warp meshes sample plain RGBA textures). The feeds skip that
+    // conversion entirely while nobody is registered, so registration
+    // tracks this item's effective visibility: a drive that never opens
+    // the 360 view never pays for UYVY->RGBA at all.
+    bool m_consumersRegistered = false;
+    void updateFrameConsumers();
 };
 
 #endif

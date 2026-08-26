@@ -67,6 +67,11 @@ signals:
 private:
     CameraFeed *m_feed = nullptr;
     QMetaObject::Connection m_frameConnection;
+    // Also update() on streamingChanged: a stream ending must still run one
+    // sync so the renderer's DmaBufTextureSet can drop its EGLImages (see
+    // dmabuftexture.h's session note) — frameReady alone stops firing
+    // exactly when that matters.
+    QMetaObject::Connection m_streamConnection;
     QString m_mirrorViewSide;
 };
 

@@ -1,6 +1,7 @@
 #include "cameraview.h"
 #include "shadermanager.h"
 #include "surroundtexture.h"
+#include "dmabuftexture.h"
 
 #include <QOpenGLContext>
 #include <QOpenGLFunctions>
@@ -10,8 +11,10 @@
 #include <QOpenGLBuffer>
 #include <QVector3D>
 #include <QDebug>
+#include <QElapsedTimer>
 #include <cmath>
 #include <algorithm>
+#include <stdio.h>
 
 namespace {
 
@@ -110,9 +113,13 @@ class CameraViewRenderer : public QQuickFramebufferObject::Renderer {
 public:
     ~CameraViewRenderer() override {
         // Same conservative guard SurroundViewRenderer uses — Qt does not
-        // guarantee a current context at Renderer destruction.
+        // guarantee a current context at Renderer destruction. m_dmabuf's
+        // own destructor still releases its borrowed capture buffers even
+        // when the GL objects can't be freed here.
         if (!m_initialized || !QOpenGLContext::currentContext()) return;
-        m_texture.destroy(QOpenGLContext::currentContext()->functions());
+        auto *f = QOpenGLContext::currentContext()->functions();
+        m_dmabuf.destroy(f);
+        m_texture.destroy(f);
         m_vbo.destroy();
         m_vao.destroy();
     }
@@ -125,6 +132,15 @@ public:
         m_mirrorSide = item->mirrorViewSide();
         CameraFeed *feed = item->feed();
         if (!feed) return;
+        // Zero-copy display path (see dmabuftexture.h): borrow the newest
+        // capture buffer instead of copying a converted QImage out. The GL
+        // context is current during sync — DmaBufTextureSet relies on that
+        // to drop stale imports the moment a stream restarts.
+        if (feed->zeroCopy() && DmaBufTextureSet::available()) {
+            QOpenGLContext *ctx = QOpenGLContext::currentContext();
+            m_dmabuf.sync(feed, ctx ? ctx->functions() : nullptr);
+            return;
+        }
         QImage frame = feed->currentFrame();
         if (!frame.isNull()) {
             m_pendingImage = frame;
@@ -173,6 +189,11 @@ public:
         }
         if (!m_initialized) return;
 
+        if (m_dmabuf.hasFrame()) {
+            renderZeroCopy(f);
+            return;
+        }
+
         // Texture allocation is deferred to the first real frame: CameraFeed
         // doesn't know its negotiated size until then (frameWidth/frameHeight
         // start at 0x0 — see camerafeed.h), unlike SurroundView's textures,
@@ -191,9 +212,17 @@ public:
         f->glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
         f->glClear(GL_COLOR_BUFFER_BIT);
 
+        // Perf instrumentation, opt-in via ULTIMA_CAM_FPS_LOG (same flag as
+        // camerafeed.cpp's) — separating "how often does this view render"
+        // from "what does the texture upload cost" was what localized the
+        // 2026-08-26 render-thread bottleneck; cheap enough to keep.
+        static const bool perfLog = qEnvironmentVariableIsSet("ULTIMA_CAM_FPS_LOG");
+        QElapsedTimer t;
+        if (perfLog) t.start();
         if (m_pendingValid) {
             m_texture.upload(f, m_pendingImage);
             m_pendingValid = false;
+            if (perfLog) { m_uploadNsSum += t.nsecsElapsed(); ++m_uploadCount; }
         }
 
         bool useMirror = m_progMirror && (m_mirrorSide == QLatin1String("left") || m_mirrorSide == QLatin1String("right"));
@@ -227,7 +256,103 @@ public:
         f->glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
         activeProg->release();
         m_vao.release();
+        if (perfLog) logRenderStats("upload", t.nsecsElapsed());
     }
+
+    // Zero-copy draw: same quad and (optionally) same mirror reprojection
+    // as the QImage path, but sampling the camera's dma-buf directly
+    // through a samplerExternalOES program (ShaderManager::ExternalSampler
+    // rewrites the identical .frag sources — no duplicate shader files).
+    void renderZeroCopy(QOpenGLFunctions *f) {
+        if (!m_progExt) {
+            m_progExt = m_shaders.program(QStringLiteral(":/shaders/blit.vert"),
+                                          QStringLiteral(":/shaders/blit.frag"),
+                                          ShaderManager::ExternalSampler);
+            m_progExtMirror = m_shaders.program(QStringLiteral(":/shaders/blit.vert"),
+                                                QStringLiteral(":/shaders/mirror.frag"),
+                                                ShaderManager::ExternalSampler);
+            if (!m_progExt) {
+                qWarning() << "CameraView: external-sampler shader failed — zero-copy frames won't display";
+                return;
+            }
+        }
+        static const bool perfLog = qEnvironmentVariableIsSet("ULTIMA_CAM_FPS_LOG");
+        QElapsedTimer t;
+        if (perfLog) t.start();
+
+        QSize sz = framebufferObject()->size();
+        if (perfLog && !m_zcAnnounced) {
+            // One line per renderer so the fps stats below are attributable
+            // to a concrete view (grid quadrant / rear / mirror overlay).
+            fprintf(stderr, "[cameraview %p] zero-copy start: fbo %dx%d mirror='%s'\n",
+                    static_cast<void *>(this), sz.width(), sz.height(), qPrintable(m_mirrorSide));
+            m_zcAnnounced = true;
+        }
+        f->glViewport(0, 0, sz.width(), sz.height());
+        f->glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        f->glClear(GL_COLOR_BUFFER_BIT);
+
+        bool useMirror = m_progExtMirror && (m_mirrorSide == QLatin1String("left") || m_mirrorSide == QLatin1String("right"));
+        QOpenGLShaderProgram *activeProg = useMirror ? m_progExtMirror : m_progExt;
+
+        m_vao.bind();
+        activeProg->bind();
+        activeProg->setUniformValue("uTexture", 0);
+        if (useMirror) {
+            MirrorViewParams p = mirrorViewParams(m_mirrorSide);
+            AxisBasis basis = rotatedBasis(p.yawDeg, p.pitchDeg, p.rollDeg);
+            double thetaMax = (kMirrorInputFovDeg / 2.0) * M_PI / 180.0;
+            // Width in this path is the full capture width (the dma-buf is
+            // the raw 1920-wide frame, not the decimated QImage) — the
+            // shader divides by textureSize() of the same texture, so the
+            // two stay consistent. See the QImage path's focalPx comment
+            // for where the formula itself came from.
+            double focalPx = (m_dmabuf.width() / 2.0) / thetaMax;
+            activeProg->setUniformValue("uRight", basis.right);
+            activeProg->setUniformValue("uUp", basis.up);
+            activeProg->setUniformValue("uForward", basis.forward);
+            activeProg->setUniformValue("uTanHalfHFov", GLfloat(std::tan(p.hFovDeg / 2.0 * M_PI / 180.0)));
+            activeProg->setUniformValue("uTanHalfVFov", GLfloat(std::tan(p.vFovDeg / 2.0 * M_PI / 180.0)));
+            activeProg->setUniformValue("uFocalPx", GLfloat(focalPx));
+            activeProg->setUniformValue("uThetaMaxRad", GLfloat(thetaMax));
+            activeProg->setUniformValue("uPrincipalXFrac", GLfloat(0.5));
+            activeProg->setUniformValue("uPrincipalYFrac", GLfloat(0.5));
+        }
+        if (m_dmabuf.bind(f, 0))
+            f->glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        activeProg->release();
+        m_vao.release();
+        if (perfLog) logRenderStats("zero-copy", t.nsecsElapsed());
+    }
+
+    void logRenderStats(const char *tag, qint64 renderNs) {
+        m_renderNsSum += renderNs;
+        ++m_renderCount;
+        if (!m_perfTimer.isValid()) m_perfTimer.start();
+        if (m_perfTimer.elapsed() < 2000) return;
+        if (m_uploadCount > 0)
+            fprintf(stderr, "[cameraview %p] %s: %d renders (%.1f/s), render() %.2f ms avg, upload %.2f ms avg over %d\n",
+                    static_cast<void *>(this), tag, m_renderCount,
+                    m_renderCount * 1000.0 / m_perfTimer.elapsed(),
+                    m_renderNsSum / double(m_renderCount) / 1e6,
+                    m_uploadNsSum / double(m_uploadCount) / 1e6, m_uploadCount);
+        else
+            fprintf(stderr, "[cameraview %p] %s: %d renders (%.1f/s), render() %.2f ms avg\n",
+                    static_cast<void *>(this), tag, m_renderCount,
+                    m_renderCount * 1000.0 / m_perfTimer.elapsed(),
+                    m_renderNsSum / double(m_renderCount) / 1e6);
+        m_renderNsSum = m_uploadNsSum = 0;
+        m_renderCount = m_uploadCount = 0;
+        m_perfTimer.restart();
+    }
+
+    DmaBufTextureSet m_dmabuf;
+    bool m_zcAnnounced = false;
+    QOpenGLShaderProgram *m_progExt = nullptr;
+    QOpenGLShaderProgram *m_progExtMirror = nullptr;
+    QElapsedTimer m_perfTimer;
+    qint64 m_uploadNsSum = 0, m_renderNsSum = 0;
+    int m_uploadCount = 0, m_renderCount = 0;
 
     ShaderManager m_shaders;
     QOpenGLShaderProgram *m_prog = nullptr;
@@ -253,10 +378,27 @@ void CameraView::setFeed(CameraFeed *feed)
         return;
 
     QObject::disconnect(m_frameConnection);
+    QObject::disconnect(m_streamConnection);
     m_feed = feed;
     if (m_feed) {
+        // isVisible() guard on both: QQuickFramebufferObject::update()
+        // schedules the FBO render pass directly on the scene-graph node,
+        // BYPASSING item visibility — without the guard every CameraView
+        // bound to a streaming feed keeps re-rendering its FBO while
+        // hidden. Measured on hardware (2026-08-26): the two hidden mirror
+        // overlays' per-fragment reprojection alone dragged the whole
+        // window from 25fps to 17fps in the 4-camera fanout bench. A view
+        // that becomes visible again repaints via the visibility change
+        // itself, then follows frames normally from the next frameReady.
         m_frameConnection = connect(m_feed, &CameraFeed::frameReady, this, [this]() {
-            update();
+            if (isVisible())
+                update();
+        });
+        // See cameraview.h's m_streamConnection comment — one extra sync
+        // after a stream ends lets the renderer drop its dma-buf imports.
+        m_streamConnection = connect(m_feed, &CameraFeed::streamingChanged, this, [this]() {
+            if (isVisible())
+                update();
         });
     }
     emit feedChanged();

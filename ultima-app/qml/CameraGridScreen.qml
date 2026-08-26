@@ -41,6 +41,17 @@ Item {
 
     readonly property bool isOpen: x !== -parent.width
 
+    // visible tracks the slide the same way RearCameraScreen/Camera360Screen
+    // track opacity: fully slid away = genuinely invisible (still visible
+    // through the whole 250ms slide, since x has already left/not yet hit
+    // -parent.width). Without this the closed screen sits at x=-width with
+    // visible still true, and CameraView's isVisible()-gated
+    // frameReady->update() (see cameraview.cpp's setFeed()) can't tell it's
+    // off-screen — all 4 tiles kept re-rendering their FBOs at frame rate
+    // whenever any feed happened to stream (e.g. a mirror overlay open with
+    // the grid closed): measured as 4 extra ~25/s renderers on hardware.
+    visible: isOpen
+
     readonly property var feeds: [cameraFeed1, cameraFeed2, cameraFeed3, cameraFeed4]
 
     readonly property bool anyStreaming: cameraFeed1.streaming || cameraFeed2.streaming

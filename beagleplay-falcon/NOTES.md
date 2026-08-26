@@ -4154,3 +4154,244 @@ re-run the AFE bring-up if it was lost — an earlier attempt this session showe
 the N4 reverting to power-on state (likely the 3 mis-wired cameras loading the
 5V rail through their clamp diodes), which a reboot cleared; a self-heal check
 would avoid the reboot.
+
+## CameraGridScreen "3fps" — not a rendering perf bug, real root cause is upstream (2026-08-25)
+
+User reported the 4-camera grid running at ~3fps with the new real cameras and
+asked whether decoding at a smaller resolution would help. It already does
+(`kDecimation=2`, see the 2026-08-17 fix above) — the actual cause turned out
+to be almost entirely upstream of anything app-side resolution touches.
+
+**App-side fixes made and hot-deployed (verified via the loop in "Fast
+iteration loop" above), both real but neither the dominant lever:**
+- `CameraFeed::convertUYVYToRGB32()` (now `...ToRGBA8888()`) writes
+  `QImage::Format_RGBA8888` directly instead of `Format_RGB32` — removes a
+  second full-image scalar `convertToFormat()` pass `SurroundTexture::upload()`
+  used to do on the render thread, on top of the GUI-thread UYVY decode.
+- `CameraFeed`'s reconnect timer now backs off exponentially (1s → 2s → 4s →
+  capped 8s, reset to 1s on the next successful stream) instead of retrying a
+  permanently-failing feed every flat 1s forever.
+
+**Diagnosis, in order, with hardware numbers (all via
+`/tmp/ultima-camtest.request open` + `journalctl -u ultima-app -f`, board at
+`ultimagc.local`):**
+
+1. **Only 1 of 4 feeds actually streams.** `cam2`/`cam3`/`cam4`
+   (`/dev/video5`/`6`/`7`) fail `VIDIOC_STREAMON` with `ENODEV`, retried
+   forever — this is the "Still open" multi-camera limitation two sections
+   up (N4 puts every enabled channel on CSI2 VC0; only one route is isolable
+   right now), not a new bug. `dmesg` shows no `mycam004m: enabling AHD
+   input 1/2/3` lines at all — those three never even reach the driver's
+   arbiter-enable call, they fail earlier in the media pipeline.
+2. **Ruled out: GUI-thread contention from the 3 failing feeds' retry
+   churn.** `strace -f -c -p <pid>` during the retry storm (pre-backoff)
+   showed ~1.2s of `ioctl`/`mmap`/`close` time per 8s window, all on the
+   single GUI thread `CameraFeed` runs on (open+ioctl+mmap+close per failed
+   feed, ~3x/s). Real, and the backoff fix above is worth keeping
+   regardless, but A/B testing it directly (same measurement before/after
+   deploying the backoff fix) showed cam1's fps **unchanged** (~4fps both
+   times) — this wasn't the bottleneck.
+3. **cam1 itself: driver delivers ~12fps, app displays ~4fps of that** — both
+   well under the 25fps `camgrab2` measured in isolation earlier this
+   session (see above). Added a raw-arrival counter alongside the existing
+   decoded-frame counter in `CameraFeed::onReadable()` (`fps arrived` vs
+   `fps decoded` in the `[camerafeed]` log) specifically to split "driver/
+   hardware not delivering frames" from "frames arrive but the app can't
+   keep up converting them" — a single fps number conflates the two.
+   Measured steady state: `~12.3 fps arrived, ~4.1 fps decoded` (added a
+   `ULTIMA_CAM_FPS_LOG=1` opt-in env var to `CameraFeed` for this — silent
+   by default, doesn't ship as a permanent per-2s heartbeat log). With only
+   `kNumBuffers=4` capture buffers, `onReadable()`'s drain-all-take-newest
+   loop is discarding ~2 of every 3 arriving buffers per wake, meaning the
+   GUI thread is only getting scheduled to service this camera's socket
+   notifier ~4x/sec. Caveat: "12.3 fps arrived" is what the app observed
+   dequeuing buffers, not a confirmed driver ceiling — with only 4 buffers
+   and a slow-draining consumer, the driver may itself be stalling/dropping
+   frames waiting for a free buffer, so this could still be downstream of
+   the same GUI-thread-scheduling issue rather than an independent hardware
+   number. Not distinguished from the true DMA-completion rate here.
+4. **Not CPU-bound.** `top` during a streaming window: system 72% idle,
+   `ultima-app` at 26% CPU on a single core. Per-thread jiffies from
+   `/proc/<pid>/task/*/stat` show both the main/GUI thread and
+   `QSGRenderThread` mostly idle, not pegged. Rules out "conversion/QML
+   work is too slow" as the explanation for the 12→4fps drop — something is
+   making the GUI thread wait (render-thread sync barrier? GPU/PowerVR
+   driver stall on the 4 separate `QQuickFramebufferObject` FBOs each doing
+   their own `glTexSubImage2D`+draw?), not spend CPU. Not yet root-caused —
+   would need GPU-side profiling this image doesn't have tooling for
+   (`perf`, `v4l2-ctl`, `camgrab2` are all absent from the deployed rootfs).
+
+**Bottom line:** resizing further wouldn't have moved either of the two real
+bottlenecks (the driver-level single-camera-at-a-time limit, or whatever's
+throttling cam1's own display rate to ~4fps independent of CPU). The
+1920x1080→960x540 decode already in place was the correct lever for the
+2026-08-17 problem (GPU texture-reallocation-per-frame + full-res conversion
+cost) — this is a different problem sitting upstream of it.
+
+**Superseded 2026-08-26:** the ~12→4fps mystery was root-caused (uncached DMA
+buffer reads — nothing GPU-side at all) and fixed the next day; see "Camera
+framerate: root cause found, 4fps → 25fps" below. The "12.3 fps arrived"
+number was indeed downstream of the same cause, exactly as the caveat above
+suspected — with the consumer fixed, arrival is a clean 25.0fps. The N4-side
+VC work for 2-4 simultaneous cameras remains open.
+
+
+## Camera framerate: root cause found, 4fps → 25fps (2026-08-26)
+
+Continuation of the entry above. Systematic experiment pass on real hardware
+(one AHD camera attached, `fps=25` driver config), hot-deploying app builds
+via a `/run/systemd/system/ultima-app.service.d/` `ExecStart=` override
+pointing at `/tmp/exp/` binaries — zero rootfs remounts during the whole
+experiment loop, worth reusing (the drop-in dir is tmpfs; the final install
+is the only remount).
+
+### Root cause of the ~4fps: uncached V4L2 buffer reads
+
+New per-stage timers (gated behind the existing `ULTIMA_CAM_FPS_LOG`) split
+one frame's cost into DQBUF-drain / UYVY→RGBA convert / GPU upload /
+render. The convert alone was **~240ms per frame** — everything else was
+0.05-5ms. The `videobuf2-dma-contig` MMAP buffers are mapped **uncached**
+(dma-coherent, Normal-NC), and the scalar converter does ~1M single-byte
+loads per frame from that mapping; every load is a full DRAM round-trip
+(~240ns). The GUI thread spent ~240ms inside each conversion, so it only
+serviced the socket notifier ~4x/s — which also explains the "12fps
+arrived" from yesterday (3 buffers piled up per 240ms wake = the driver
+dropping the rest on the floor with no free buffer; the true delivery rate
+was always 25fps). "Not CPU-bound, 72% idle" was a misread of busybox `top`
+averages: one core was pegged in stalled loads, the other three idle.
+
+Fix is two independent halves, both applied:
+
+1. **Ask vb2 for CPU-cacheable buffers** — `VIDIOC_REQBUFS` with
+   `V4L2_MEMORY_FLAG_NON_COHERENT` (`req.flags`, kernel ≥5.15). Works with
+   NO driver change: `j721e-csi2rx` already sets `q->allow_cache_hints=1`
+   (few drivers do — check `caps` echo for
+   `V4L2_BUF_CAP_SUPPORTS_MMAP_CACHE_HINTS`, 0x40, and that `flags` echoes
+   back 0x1). vb2 cache-invalidates on DQBUF itself; the CPU never writes
+   the buffers so there is no dirty-line hazard.
+2. **NEON conversion** (`vld4q_u8` — one 64-byte de-interleaving load per
+   16 UYVY pairs) instead of byte-at-a-time scalar.
+
+Measured convert cost per 960x540 frame, same camera, same board:
+
+| variant | convert ms/frame | decoded fps |
+|---|---|---|
+| scalar, uncached buffers (shipping code until today) | 240 | 4.1 |
+| memcpy rows to cached scratch + scalar | 35 | 25 |
+| NEON directly from uncached buffers | 64 | 15 |
+| scalar, **cached (non-coherent) buffers** | 8.9 | 25 |
+| NEON, **cached buffers** | **3.6** | **25** |
+
+(That middle row is why the "never byte-scan DMA buffers" memory note
+existed — wide loads help even uncached, but cached is the real fix.)
+
+### Second bottleneck (4-camera scaling): the render thread — fixed with zero-copy dma-buf import
+
+25fps single-camera achieved, but a 4-camera load proxy (`ULTIMA_CAM_FANOUT=1`
+env: points cameraFeed2..4 at cam1's object so all four grid quadrants
+render real frames — kept in main.cpp as a bench tool) showed the render
+thread saturating at **~9.5fps per quadrant, 104% of a core**: 4x
+`glTexSubImage2D` of 2MB RGBA each + 4 FBO passes. Upload bytes scale it
+(decimation 3 → 15fps, 4 → 19fps) but nothing upload-shaped reaches 25.
+Double/triple-buffering the destination textures did nothing (not an
+in-use stall).
+
+The fix that ends the category: **import the V4L2 buffers into the GPU
+directly** (`VIDIOC_EXPBUF` → dma-buf → `eglCreateImageKHR`
+(`EGL_LINUX_DMA_BUF_EXT`, `DRM_FORMAT_UYVY`, BT.601 narrow-range hints) →
+`GL_TEXTURE_EXTERNAL_OES`), sampler does UYVY→RGB in-GPU. This PowerVR
+stack (Mesa-based DDK 25.2) supports it: `EGL_EXT_image_dma_buf_import` +
+`GL_OES_EGL_image_external_essl3` + UYVY pipe format, all confirmed live
+on-target. Measured, 4 quadrants at 1080p25:
+
+| path | per-quadrant fps | render thread |
+|---|---|---|
+| convert + glTexSubImage2D | 9.5 | 104% (saturated) |
+| **zero-copy external texture** | **25.0** | **22%** |
+
+Single camera: render thread 51% → 13%, `render()` 0.4ms, and the CPU
+convert disappears entirely while nothing needs QImages. Whole app during
+1-cam streaming: ~15% of one core total.
+
+### What shipped (see the code comments for the load-bearing details)
+
+- `camerafeed.{h,cpp}`: capture+convert moved off the GUI thread to a
+  per-feed capture thread (GUI was also `blockedForSync` 10-30ms/frame by
+  the render thread — QSG_RENDER_TIMING showed the threaded-loop handoff);
+  non-coherent (cached) buffers; NEON convert; zero-copy buffer
+  lending mailbox (publish/acquire/release with refcounts, retired buffers
+  QBUF'd back on the capture thread). Converted QImages still exist but
+  only while a consumer registers (`addFrameConsumer`).
+- `dmabuftexture.{h,cpp}` (new): EGLImage/external-texture import,
+  libEGL via dlopen (no link dep, macOS build untouched), session
+  tracking so a stream restart drops stale imports (EGLImages pin CMA
+  until released — 6 buffers x 4MB x 4 cams = 96MB of the 128MB CMA pool;
+  if a hidden view misses the drop window, tryOpen's reconnect retries
+  1s later and self-heals. Raising CONFIG_CMA_SIZE_MBYTES is the
+  follow-up if 4 real cameras ever hit REQBUFS ENOMEM here).
+- `cameraview.cpp`: renders the external texture when available (grid
+  tiles AND the mirror overlays — `mirror.frag` works unchanged via
+  `ShaderManager::ExternalSampler`, which rewrites `sampler2D` →
+  `samplerExternalOES` at load); QImage path kept as fallback + for the
+  macOS sim.
+- `surroundview.cpp`: unchanged rendering (warp mesh samples converted
+  QImage textures — a zero-copy variant is possible later but the 360
+  screen is an overlay, not the steady state); registers/deregisters as a
+  frame consumer with visibility.
+- `ULTIMA_CAM_ZEROCOPY=0` forces everything through the converted path
+  (A/B lever + escape hatch); `ULTIMA_CAM_FPS_LOG=1` prints per-feed
+  arrived/published/decoded rates + convert times, and per-view render
+  stats.
+
+Colors note: the GPU sampler decodes BT.601 **limited-range** (hinted at
+import, matching what the N4 actually emits per the media graph's
+`quantization:lim-range`); the CPU path always treated the data as
+full-range, so zero-copy frames show slightly more contrast — that's the
+*more correct* rendering, not a regression.
+
+### Hidden QQuickFramebufferObjects still render — update() bypasses visibility
+
+First full-app 4-cam fanout runs came in at 17fps, not the prototype's 25.
+Per-renderer identity logging showed **seven** CameraViews rendering, not
+four: the two mirror overlays (hidden, 711x400) and the rear camera screen
+(hidden, 1280x720) were re-rendering every frame alongside the grid.
+`QQuickFramebufferObject::update()` schedules the FBO render pass regardless
+of item visibility — a `frameReady -> update()` connection on a hidden item
+is not free, it's a full FBO pass. The two hidden *mirror* views were the
+expensive part: mirror.frag's per-fragment fisheye reprojection over
+scattered 1080p UYVY external-texture fetches is GPU-heavy (QSG swap time
+44-61ms with them "hidden" — GPU-bound, not CPU). Two fixes, both needed:
+
+- `cameraview.cpp`/`surroundview.cpp`: the `frameReady`/`streamingChanged`
+  handlers now check `isVisible()` before calling `update()`.
+- `CameraGridScreen.qml`: the screen "closes" by sliding to
+  `x: -parent.width`, which leaves `visible: true` — so the `isVisible()`
+  guard alone still let all 4 tiles render off-screen whenever any feed
+  streamed (turn signal on with the grid closed = 4 wasted FBO passes per
+  frame, measured as 4 extra 25/s renderers). It now binds
+  `visible: isOpen` — the same pattern RearCameraScreen/Camera360Screen
+  already used with opacity.
+
+With both: fanout grid open = exactly 4 renderers at 25.0/s; grid closed
+with a mirror overlay up = exactly 1. A *visible* mirror overlay still
+costs real GPU (grid + overlay both up measured ~16fps whole-window;
+overlay over the plain gauge screen runs 28fps) — if that ever matters,
+the mirror views could sample the converted 960x540 QImage path instead of
+raw 1080p UYVY, trading a CPU convert (already paid whenever the 360 view
+is also up) for the scattered GPU fetches. Not done now: the overlay is
+indicator-gated and transient.
+
+Verification on hardware (exp binaries; final installed build verified
+same-day below): grid at 25.0fps displayed with 1 camera and with the
+4-quadrant fanout proxy; 360 stitch + screenshots correct on the converted
+path; no `requeue` errors in the journal across open/close cycles.
+
+Final install (same day): the verified exp binary went to
+`/usr/bin/ultima-app` via the one remount-rw/mv/remount-ro window (no
+"mount busy" hit — the running binary was in `/tmp/exp/`, so `/usr/bin`
+wasn't text-busy), drop-in removed, `daemon-reload` + restart. Confirmed
+on the installed build: md5 matches the verified binary, `/` back to `ro`,
+service active on the stock ExecStart, grid streaming at ~25fps
+(screenshot), fanout checks all green — exactly 1 renderer with only a
+mirror overlay up, exactly 4 with the grid open, 0 after close, 360 view
+decoding at 25fps.

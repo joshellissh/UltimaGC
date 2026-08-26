@@ -26,7 +26,15 @@ public:
     // Returns nullptr (and logs via qWarning) on compile/link failure.
     // Cached by (vertPath, fragPath) pair — repeat calls with the same pair
     // return the same program.
-    QOpenGLShaderProgram *program(const QString &vertPath, const QString &fragPath);
+    // ExternalSampler rewrites the fragment shader's `uniform sampler2D
+    // uTexture;` to a `samplerExternalOES` (plus the GL_OES_EGL_image_external
+    // _essl3 extension line) so the same shader source can sample a
+    // dma-buf-imported camera buffer (see dmabuftexture.h) instead of an
+    // uploaded RGBA texture. GLES-only by construction: nothing ever asks
+    // for it where DmaBufTextureSet::available() is false.
+    enum Variant { Default, ExternalSampler };
+    QOpenGLShaderProgram *program(const QString &vertPath, const QString &fragPath,
+                                  Variant variant = Default);
 
 private:
     QString versionHeader(QOpenGLShader::ShaderType type, const QString &extensionLines = QString()) const;

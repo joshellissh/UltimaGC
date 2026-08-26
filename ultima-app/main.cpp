@@ -134,9 +134,14 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty("sim", &canBus);
     engine.rootContext()->setContextProperty("systemClock", &systemClock);
     engine.rootContext()->setContextProperty("cameraFeed1", &cameraFeed1);
-    engine.rootContext()->setContextProperty("cameraFeed2", &cameraFeed2);
-    engine.rootContext()->setContextProperty("cameraFeed3", &cameraFeed3);
-    engine.rootContext()->setContextProperty("cameraFeed4", &cameraFeed4);
+    // EXPERIMENT (2026-08-26): ULTIMA_CAM_FANOUT=1 points cameraFeed2..4 at
+    // cameraFeed1's object, so every grid quadrant renders the one attached
+    // camera — a 4-camera render-thread/upload load proxy for a bench with a
+    // single camera. Not a shipping mode.
+    const bool camFanout = qEnvironmentVariableIntValue("ULTIMA_CAM_FANOUT") != 0;
+    engine.rootContext()->setContextProperty("cameraFeed2", camFanout ? &cameraFeed1 : &cameraFeed2);
+    engine.rootContext()->setContextProperty("cameraFeed3", camFanout ? &cameraFeed1 : &cameraFeed3);
+    engine.rootContext()->setContextProperty("cameraFeed4", camFanout ? &cameraFeed1 : &cameraFeed4);
     engine.rootContext()->setContextProperty("splashImagePath", splashImageUrl);
     engine.load(QUrl(QStringLiteral("qrc:/main.qml")));
     double t2 = readUptime();
