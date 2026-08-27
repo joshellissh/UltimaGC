@@ -227,6 +227,55 @@ DDR/image differences to shake out.
 
 ---
 
+## CAN bus: no mikroBUS, but the software stack transfers
+
+**Current setup (BeaglePlay):** MikroE CAN SPI 3.3 V click (MCP2515 controller +
+SN65HVD230 transceiver) on BeaglePlay's mikroBUS socket, wired to the Syvecs S7+
+CAN2 bus. Software: mainline `mcp251x` SocketCAN driver (built-in), a compile-time
+DT patch declaring the MCP2515 on `main_spi2` CS0 with a 10 MHz `fixed-clock` +
+INT on `main_gpio1` line 9, `70-can.rules` auto-bringing `can0` up at **1 Mbit
+classical CAN**, and `CanBus` retrying `socket()`/`bind()` until the iface appears.
+
+**BeagleY-AI has no mikroBUS** — it's RPi form-factor with a 40-pin GPIO header,
+so the existing click can't seat. `[BeagleBoard-verified]`
+
+### Two paths
+- **Native AM67A MCAN** (up to 4× CAN-FD controllers) is electrically the "right"
+  way, BUT per the BeagleY-AI forum the **40-pin header does not break out MCAN** —
+  the signals are routed to the **CSI connectors** (multiplexed), needing a custom
+  CSI-connector breakout + external transceiver + fiddly 0.5 mm soldering; community
+  boards were still in development as of early 2026. Also competes with the cameras
+  for a CSI connector. Not turnkey today. `[community-sourced — confirm in schematic]`
+- **RPi 40-pin SPI CAN HAT (MCP2515) — recommended.** Same chipset as the current
+  click, so the `mcp251x` driver, `70-can.rules`, and `CanBus` code carry over
+  **unchanged**; only the DT node is new. Leaves both CSI connectors free for
+  cameras. Classical CAN @ 1 Mbit is all the ECU needs, so no reason to move to
+  CAN-FD. `[inferred — standard RPi SPI CAN path]`
+
+### Recommended part + the gotcha
+**Waveshare 2-Channel Isolated CAN HAT** (Amazon ASIN B087RJ6XGG): MCP2515 +
+SN65HVD230, SPI, RPi 40-pin, **isolated** (an upgrade over the non-isolated click
+— good for automotive), classical CAN. 2 channels (only 1 needed; 2nd is spare).
+
+- **⚠️ Crystal frequency — the real trap.** This HAT ships with an **8 MHz (older)
+  or 12 MHz (newer)** crystal, **NOT** the **10 MHz** the current DT hardcodes
+  (`clock-frequency = <10000000>`). Wrong value → `can0` comes up but the bit-timing
+  is off and it won't communicate. **Read the actual crystal off the board** (silver
+  oval marked `12.000` / `8.000` — don't trust the listing; it comes in both
+  variants) and set `fixed-clock`'s `clock-frequency` to match, plus drop
+  `spi-max-frequency` (Waveshare uses 2 MHz @ 12 MHz, 1 MHz @ 8 MHz). This is a
+  live instance of the `verify-hardware-specs-not-seller-listings` rule. `[verified]`
+- **DT node.** Write the MCP2515 node against the **AM67A's** SPI instance + a GPIO
+  for INT (same shape as the BeaglePlay patch, different pin names), and confirm
+  BeagleY-AI routes SPI + the INT line to the 40-pin pins the HAT uses. `[inferred]`
+
+**CAN verdict:** lowest-risk of the port items — a HAT swap + a DT node you've
+written before, with the crystal-frequency change being the one must-not-miss edit.
+(A mechanical note: an RPi HAT is a full 40-pin board, vs the compact mikroBUS click
+— an enclosure consideration.)
+
+---
+
 ## Cost of the switch (only if validation passes)
 
 A board switch is **not a recording change — it's a platform redo.** Everything
@@ -236,7 +285,9 @@ hardware-verified today is AM625-specific:
 - **`mycam004m` / N4 camera driver** — port to the J722S CSI/capture stack
   (different CSI2RX backend; the hard-won AHD/UYVY/fps-lock knowledge carries, the
   plumbing does not). This is the biggest single item.
-- **CAN (MCP2515 mikroBUS click)** — re-verify SPI + DT on the new board.
+- **CAN** — no mikroBUS on BeagleY-AI; swap to an RPi 40-pin MCP2515 SPI CAN HAT
+  (same chipset → software unchanged, only a new DT node + crystal-freq change).
+  See the "CAN bus" section above. Lowest-risk item.
 - **Enclosure CAD / pin mapping** — different board outline + connector layout.
 
 Mitigant: AM67A uses the **same TI Processor SDK Linux family** (`tisdk`) this
@@ -254,6 +305,11 @@ system and much of the boot/rootfs knowledge transfers.
 - **Boot time:** ~4.5 s-class first frame is **reachable** (J722S shares the
   am62x Falcon-capable bootflow) but requires **self-provisioned Falcon wiring**
   (not productized for J722S) + validation. `[TI-verified status; timing inferred]`
+- **CAN:** **lowest-risk** — no mikroBUS, but an RPi MCP2515 SPI CAN HAT (e.g.
+  Waveshare 2-CH Isolated) keeps the entire CAN software stack; only a new DT node
+  + a crystal-frequency change (HAT is 8/12 MHz, current DT hardcodes 10 MHz). `[verified]`
+- **CSI connector:** same 22-pin RPi standard, **not a blocker / no adapter** — but
+  the N4 board's off-ribbon 5 V harness + DT/driver mapping are redone. `[verified]`
 - **The one real technical unknown to de-risk first:** **4-camera simultaneous
   capture** (CSI-2 VC demux on J722S) — answerable on a ~$70 board via Phases 0–2
   before committing to any port.
@@ -288,3 +344,7 @@ hardware required, and together they decide the switch.
   <https://docs.beagleboard.org/boards/beagleplay/03-design.html>
 - Project — `docs/MY-CAM to BeaglePlay Pin Mapping.pdf` (BeaglePlay J17 = 22-pin
   RPi CSI-2 pinout; MY-CAM004M N4 board 24-pin custom harness)
+- BeagleY-AI CAN support — BeagleBoard forum (MCAN on CSI, not the 40-pin) —
+  <https://forum.beagleboard.org/t/beagley-ai-controller-area-network-can-support/40549>
+- Waveshare 2-CH CAN HAT (MCP2515 + SN65HVD230, 8/12 MHz crystal variants) —
+  <https://www.waveshare.com/wiki/2-CH_CAN_HAT> ; Amazon ASIN B087RJ6XGG
