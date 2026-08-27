@@ -142,6 +142,39 @@ CAN.** The full port happens only if they pass.
 to the J722S capture stack + proving 4-VC capture) — days to ~2 weeks depending
 on how much the CSI2RX driver already does. Phase 2 = days, standard GStreamer.
 
+### CSI connector compatibility — same 22-pin RPi standard, but not plug-and-play
+
+Good news at the connector level, verified from BeagleBoard docs + this project's
+own `docs/MY-CAM to BeaglePlay Pin Mapping.pdf`:
+
+- **BeaglePlay's camera connector (J17) is a 22-pin 0.5 mm CSI-2 connector with the
+  standard Raspberry Pi 22-pin pinout** — 4 data lanes (D0–D3 ±), clock (CK ±),
+  I²C (SCL/SDA on 20/21), IO0/IO1 (17/18), 3.3 V (22). `[verified — project pin map]`
+- **BeagleY-AI uses the same 22-pin RPi-5-style connectors** (two of them; CSI0 is
+  camera-only, CSI1 is muxed with DSI). `[TI/BeagleBoard-verified]`
+- So the **CSI-2 signal core lines up 1:1** — a stock RPi camera FFC would seat and
+  work on either board. No exotic camera-interface adapter needed; this slightly
+  *de-risks* the switch.
+
+**But this project does not use a stock FFC**, so "pin compatible" ≠ "plug and
+play":
+
+- The cameras attach via the **MY-CAM004M (N4/nvp6324 AHD decoder) board**, whose
+  output is a **24-pin** header (adds `MCLK`, `PWRDN`, `RST_N`, `PWREN`, and a
+  **`VDD_5V`** pin). The BeaglePlay hookup is a **custom harness**: the 4 lanes +
+  clock + I²C map 1:1 to J17, but several control pins are struck through/unused,
+  and the **`VDD_5V` + `PWREN` leads run *outside* the CSI ribbon** (the 22-pin
+  connector only offers 3.3 V; the N4 needs 5 V). That off-ribbon 5 V/control
+  wiring is the board-specific part to re-establish on BeagleY-AI. `[verified — project pin map]`
+- **Regardless of the connector**, the CSI-2 RX instance, the I²C controller/bus,
+  and the reset/enable GPIOs land on different SoC pins + DT nodes on the AM67A —
+  so the device-tree/driver mapping is redone either way (this is the Phase-1
+  camera-port work above, not new scope). `[inferred]`
+
+**Connector verdict:** the physical CSI connector is *not* a blocker and needs no
+adapter (same 22-pin RPi standard); what does not transfer for free is the N4
+board's off-ribbon 5 V/control harness and the SoC-side DT/driver plumbing.
+
 ---
 
 ## Boot time: can it match the current ~4.5 s to first Qt frame?
@@ -249,3 +282,9 @@ hardware required, and together they decide the switch.
   <https://patchwork.yoctoproject.org/project/ti/cover/20250417113614.1780603-1-anshuld@ti.com/>
 - TI Processor SDK — U-Boot Falcon Mode (AM62x) —
   <https://software-dl.ti.com/processor-sdk-linux/esd/AM62X/11_01_05_03/exports/docs/linux/Foundational_Components/U-Boot/UG-Falcon-Mode.html>
+- BeagleY-AI — Design & specifications (2× 22-pin RPi-5-style CSI) —
+  <https://docs.beagleboard.org/boards/beagley/ai/03-design.html>
+- BeaglePlay — Design & specifications (one 4-lane CSI) —
+  <https://docs.beagleboard.org/boards/beagleplay/03-design.html>
+- Project — `docs/MY-CAM to BeaglePlay Pin Mapping.pdf` (BeaglePlay J17 = 22-pin
+  RPi CSI-2 pinout; MY-CAM004M N4 board 24-pin custom harness)
