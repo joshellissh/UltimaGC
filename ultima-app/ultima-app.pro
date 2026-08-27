@@ -39,3 +39,18 @@ RESOURCES += qml.qrc
 ultima_dev_sim {
     DEFINES += ULTIMA_SIMULATE
 }
+
+# turbojpeg (dashcam-recording encode spike, camerafeed.cpp's
+# CameraCaptureThread): only linked where that code actually compiles in —
+# same linux:!ultima_dev_sim condition as the C++ side's
+# `#if defined(__linux__) && !defined(ULTIMA_SIMULATE)` guard, so the
+# macOS/Qt6 Homebrew dev build (no libjpeg-turbo dev headers there) and the
+# WSL simulated-CAN dev build both stay unaffected.
+#
+# openh264 (H.264 encode spike) was tried and reverted 2026-08-26: real
+# hardware measured ~233ms/frame at 1080p (vs turbojpeg's ~67ms), ~3.5fps
+# achieved against a 15fps target — software H.264 isn't viable on this
+# SoC's Cortex-A53 cores. See git history for the full spike if revisiting.
+linux:!ultima_dev_sim {
+    LIBS += -lturbojpeg
+}

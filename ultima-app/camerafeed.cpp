@@ -24,6 +24,12 @@
 #include <linux/videodev2.h>
 #endif
 
+#if defined(__linux__) && !defined(ULTIMA_SIMULATE)
+#include <turbojpeg.h>
+#include <QFile>
+#include <QDir>
+#endif
+
 // Requested capture format — mycam004m's contract (both fake and real
 // backends, see ~/code/mycam004m/docs/ultima-app-integration.md) is fixed
 // UYVY 1920x1080 (UYVY, not YUYV, since 2026-08-24: real hardware
@@ -348,6 +354,32 @@ static void convertUYVYToRGBA8888Neon(const uchar *src, QImage &dst, int dstWidt
 #define ULTIMA_HAVE_NEON 1
 #endif
 
+// Dashcam-recording encode spike (2026-08-26): deinterleave packed UYVY into
+// planar 4:2:2 (Y full-res, U/V half-width, same height) for turbojpeg's raw
+// tjCompressFromYUVPlanes(). No resampling step needed — UYVY's own chroma
+// subsampling (horizontal-only, one U/V pair per 2 luma samples) already
+// *is* TJSAMP_422, so this is a pure byte-shuffle, no color math, unlike the
+// RGBA converter above. bytesPerLine is the driver-granted V4L2 stride, same
+// caveat as convertUYVYToRGBA8888 — never assume width*2.
+static void deinterleaveUYVYto422(const uchar *src, int width, int height, int bytesPerLine,
+                                   uchar *yPlane, uchar *uPlane, uchar *vPlane)
+{
+    const int halfW = width / 2;
+    for (int y = 0; y < height; ++y) {
+        const uchar *row = src + size_t(y) * bytesPerLine;
+        uchar *yOut = yPlane + size_t(y) * width;
+        uchar *uOut = uPlane + size_t(y) * halfW;
+        uchar *vOut = vPlane + size_t(y) * halfW;
+        for (int x = 0; x < halfW; ++x) {
+            const uchar *px = row + size_t(x) * 4;
+            uOut[x] = px[0];
+            yOut[x * 2] = px[1];
+            vOut[x] = px[2];
+            yOut[x * 2 + 1] = px[3];
+        }
+    }
+}
+
 // Per-feed capture thread. Owns nothing: the fd and mmap'd buffers stay
 // with CameraFeed (opened/closed on the GUI thread); this thread polls the
 // fd, DQBUFs with a drain-all-take-newest policy (capture can outpace
@@ -363,8 +395,37 @@ static void convertUYVYToRGBA8888Neon(const uchar *src, QImage &dst, int dstWidt
 // here instead of piling up in the event queue as 2MB QImages.
 class CameraCaptureThread : public QThread {
 public:
+    // Real capture rate the mycam004m driver negotiates today (see
+    // beagleplay-falcon NOTES.md "Camera framerate" / this file's
+    // kRequestedWidth comment) — the phase-accumulator decimation below
+    // decimates FROM this, not from whatever wall-clock rate frames happen
+    // to arrive at.
+    static constexpr int kRecordSourceFps = 25;
+
     CameraCaptureThread(CameraFeed *feed, int fd, bool fpsLog)
-        : m_feed(feed), m_fd(fd), m_fpsLog(fpsLog) {}
+        : m_feed(feed), m_fd(fd), m_fpsLog(fpsLog)
+    {
+        // Dashcam-recording encode spike (2026-08-26): opt-in test harness,
+        // gated the same way as ULTIMA_CAM_FPS_LOG/ULTIMA_CAM_ZEROCOPY — see
+        // GAUGE-CLUSTER.md's "Camera performance env vars". 0 (default,
+        // unset) costs nothing beyond one env lookup per stream open.
+        // ULTIMA_CAM_RECORD_DIR is optional — omit it to measure pure
+        // encode cost with no file-write overhead in the mix.
+        m_recordFps = qEnvironmentVariableIntValue("ULTIMA_CAM_RECORD_FPS");
+        if (m_recordFps > kRecordSourceFps)
+            m_recordFps = kRecordSourceFps;
+        m_recordDir = qEnvironmentVariable("ULTIMA_CAM_RECORD_DIR");
+        if (m_recordFps > 0 && !m_recordDir.isEmpty())
+            QDir().mkpath(m_recordDir);
+    }
+
+    ~CameraCaptureThread()
+    {
+        if (m_jpegBuf)
+            tjFree(m_jpegBuf);
+        if (m_tjHandle)
+            tjDestroy(m_tjHandle);
+    }
 
     void requestStop() { m_stop.storeRelease(1); }
 
@@ -381,6 +442,8 @@ protected:
         QElapsedTimer fpsTimer, stage;
         int arrived = 0, published = 0, decoded = 0;
         qint64 convNs = 0, convMax = 0;
+        int recordEncoded = 0;
+        qint64 recordNs = 0, recordMax = 0;
         fpsTimer.start();
         while (!m_stop.loadAcquire()) {
             struct pollfd pfd;
@@ -445,6 +508,62 @@ protected:
                 }
             }
 
+            // Dashcam-recording encode spike (2026-08-26): ULTIMA_CAM_RECORD_FPS
+            // gates this — 0 (default) costs one branch, matching the class's
+            // existing "pay only if enabled" pattern for m_fpsLog/frame
+            // consumers. Deliberately reads m_feed->m_buffers[pending.index]
+            // BEFORE the zeroCopy publish/requeue below: in the zero-copy case
+            // the buffer isn't handed back to the driver until later (retired
+            // via the mailbox), but in the non-zero-copy case it's requeued
+            // immediately after this block, so this has to run first either way.
+            if (complete && m_recordFps > 0) {
+                // Deterministic decimation off the DQBUF cadence (not a mailbox
+                // acquire) — an accumulating phase rather than a hard modulo so
+                // a non-integer ratio (e.g. record 15fps off a 25fps capture)
+                // still lands roughly evenly spaced instead of clustering.
+                m_recordPhase += m_recordFps;
+                if (m_recordPhase >= kRecordSourceFps) {
+                    m_recordPhase -= kRecordSourceFps;
+                    stage.start();
+                    const uchar *src = static_cast<const uchar *>(m_feed->m_buffers[pending.index].start);
+                    const int w = m_feed->m_captureWidth, h = m_feed->m_captureHeight;
+                    const size_t ySize = size_t(w) * size_t(h);
+                    const size_t cSize = size_t(w / 2) * size_t(h);
+                    if (size_t(m_yPlane.size()) < ySize) {
+                        // QByteArray::resize takes int, not size_t — this
+                        // targets Qt5 only (see the linux:!ultima_dev_sim
+                        // qmake guard above), so no Qt6 qsizetype here.
+                        m_yPlane.resize(int(ySize));
+                        m_uPlane.resize(int(cSize));
+                        m_vPlane.resize(int(cSize));
+                    }
+                    deinterleaveUYVYto422(src, w, h, m_feed->m_bytesPerLine,
+                                           reinterpret_cast<uchar *>(m_yPlane.data()),
+                                           reinterpret_cast<uchar *>(m_uPlane.data()),
+                                           reinterpret_cast<uchar *>(m_vPlane.data()));
+                    const unsigned char *planes[3] = {
+                        reinterpret_cast<const unsigned char *>(m_yPlane.constData()),
+                        reinterpret_cast<const unsigned char *>(m_uPlane.constData()),
+                        reinterpret_cast<const unsigned char *>(m_vPlane.constData())
+                    };
+                    const int strides[3] = { w, w / 2, w / 2 };
+                    if (!m_tjHandle)
+                        m_tjHandle = tjInitCompress();
+                    tjCompressFromYUVPlanes(m_tjHandle, planes, w, strides, h, TJSAMP_422,
+                                             &m_jpegBuf, &m_jpegBufSize, 85, TJFLAG_FASTDCT);
+                    const qint64 ns = stage.nsecsElapsed();
+                    recordNs += ns;
+                    if (ns > recordMax) recordMax = ns;
+                    ++recordEncoded;
+                    if (!m_recordDir.isEmpty()) {
+                        const QString camId = m_feed->m_device.section(QLatin1Char('/'), -1);
+                        QFile f(m_recordDir + QLatin1Char('/') + camId + QStringLiteral(".jpg"));
+                        if (f.open(QIODevice::WriteOnly))
+                            f.write(reinterpret_cast<const char *>(m_jpegBuf), qint64(m_jpegBufSize));
+                    }
+                }
+            }
+
             if (complete && zeroCopy) {
                 m_feed->publishBuffer(int(pending.index));
                 ++published;
@@ -473,8 +592,16 @@ protected:
                         qPrintable(m_feed->m_device), arrived * 1000.0 / el,
                         published * 1000.0 / el, decoded * 1000.0 / el,
                         convNs / n / 1e6, convMax / 1e6);
+                if (m_recordFps > 0) {
+                    const double rn = recordEncoded > 0 ? recordEncoded : 1;
+                    fprintf(stderr, "[camerafeed] %s: encode %.1f fps (target %d) | %.2f ms avg / %.2f ms max, last jpeg %lu bytes\n",
+                            qPrintable(m_feed->m_device), recordEncoded * 1000.0 / el, m_recordFps,
+                            recordNs / rn / 1e6, recordMax / 1e6, m_jpegBufSize);
+                }
                 arrived = published = decoded = 0;
                 convNs = convMax = 0;
+                recordEncoded = 0;
+                recordNs = recordMax = 0;
                 fpsTimer.restart();
             }
         }
@@ -488,6 +615,16 @@ private:
     QAtomicInt m_notifyPending{0};
     QMutex m_mutex;
     QImage m_latest;
+
+    // Dashcam-recording encode spike — capture-thread-local, no locking
+    // needed (nothing outside this thread touches these).
+    int m_recordFps = 0;
+    int m_recordPhase = 0;
+    QString m_recordDir;
+    tjhandle m_tjHandle = nullptr;
+    unsigned char *m_jpegBuf = nullptr;
+    unsigned long m_jpegBufSize = 0;
+    QByteArray m_yPlane, m_uPlane, m_vPlane;
 };
 
 void CameraFeed::onWorkerFrame()
