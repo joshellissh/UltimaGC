@@ -4468,3 +4468,215 @@ service active on the stock ExecStart, grid streaming at ~25fps
 (screenshot), fanout checks all green — exactly 1 renderer with only a
 mirror overlay up, exactly 4 with the grid open, 0 after close, 360 view
 decoding at 25fps.
+
+## BeagleY-AI (AM67A/J722S) bring-up — milestone 1: Yocto build/app port
+
+**Status (2026-08-28): milestone 1 done — `beagley-ai` `tisdk-base-image` builds
+clean with `ultima-app` packaged, `.wic` produced with the expected 3-partition
+layout, no board in hand yet to flash/verify.** See `docs/BEAGLEY-AI-EVAL.md` for
+the paper evaluation (why switch boards at all — the AM67A Wave5 hardware
+encoder unblocking 4-camera dashcam recording) and the local plan at
+`/Users/jellis/.claude/plans/nested-floating-wand.md` for the full milestone
+breakdown. This section is the build-log detail for getting there.
+
+**Layer layout note (2026-08-28, same day):** all BeagleY-AI-specific Yocto
+layer content described below lives in a new top-level `beagley-ai/` directory
+(`beagley-ai/meta-ultima-beagley-ai-src/`), a **sibling** of this
+`beagleplay-falcon/` directory — not inside it, since this directory is named
+specifically for BeaglePlay. Same "unrelated concerns" reasoning already used
+to keep `meta-falcon-beagleplay-src` apart from `meta-ultima-beagleplay-src`
+(see "Fix: custom layer `meta-falcon-beagleplay`" above). What stays shared
+in `beagleplay-falcon/`: the Docker/TI-SDK build tooling (`Dockerfile`,
+`run.sh`, `build.sh`, the `falcon-yocto-build` docker volume) — genuinely
+board-agnostic infrastructure both boards already build through, not something
+either board owns. File paths below were written during initial bring-up
+(single-layer) and have been corrected to their final split-layer locations;
+where the split itself surfaced something new, that's called out explicitly.
+
+### The machine already exists — no new Yocto layer needed
+
+`meta-ti/meta-beagle` (already vendored into the `falcon-yocto-build` docker
+volume, already in `bblayers.conf`) ships `beagley-ai.conf` /
+`beagley-ai-k3r5.conf` (`require j722s.inc` + `beagle-bsp.inc`). Unlike the
+original Falcon work, this did **not** need a from-scratch machine layer.
+
+Two things that make it a genuinely different build target from `beagleplay-ti`,
+not just a different `MACHINE=` value:
+
+- **It's locked to the BeagleBoard.org kernel/u-boot, not TI-staging.**
+  `beagle-bsp.inc` only defines `bb_org-6_12` (default) / `bb_org-6_6` BSP
+  variants: kernel `linux-bb.org` 6.12, u-boot `u-boot-bb.org` 2025.x. There is
+  no `ti-*` BSP variant for beagle machines. Consequence: our un-scoped
+  `linux-ti-staging_%.bbappend` (carrying the AM625 CAN/camera DT patches)
+  simply never fires for this machine — no patch-apply failure, it's just
+  absent, since beagley-ai builds a different kernel recipe entirely.
+- **The R5/TIFS boot chain is HS-FS (High-Security Field-Securable), not GP.**
+  Confirmed by the produced artifact name:
+  `tiboot3-j722s-hs-fs-evm-beagley-ai-k3r5-2025.10+git-r0.bin` (also set
+  explicitly: `beagley-ai-k3r5.conf` has `SYSFW_SUFFIX = "hs-fs"`). BeaglePlay's
+  AM625 boots GP. This built and produced a working artifact set with zero
+  extra key-provisioning on our part — meta-beagle must ship default/dev
+  signing for this — but it's new territory this project hasn't exercised, and
+  it directly affects the eventual Falcon-fork work (Falcon needs to rebuild the
+  R5 SPL, which now goes through this signed chain rather than AM625's simple
+  GP build). Falcon is **not** wired for j722s at all yet (meta-ti's
+  `u-boot-ti.inc` only prepends the falcon package for the four `am62*-evm`
+  machines), and even if it were, it would need porting to `u-boot-bb.org`
+  rather than reusing `meta-falcon-beagleplay` (which patches `u-boot-ti-staging`)
+  — a real, separate fork of that work, not attempted here.
+
+### Two build-blocking gaps found and fixed (both real, not speculative)
+
+1. **`tisdk-uenv` recipe gap.** `meta-arago-distro`'s `tisdk-uenv.bb` (pulled
+   into every arago image unconditionally via `arago.conf`, not machine-scoped)
+   ships a `uEnv-sk.txt` template only for TI's own EVM machine name
+   (`j722s-evm`), never extended to BeagleBoard.org's community machine name
+   (`beagley-ai`). Same class of gap as the original Falcon wiring (a TI SDK
+   recipe wired to EVM names only) — see "What was actually wrong upstream"
+   above. Fixed with `beagley-ai/meta-ultima-beagley-ai-src/recipes-tisdk/tisdk-uenv/`:
+   a `tisdk-uenv.bbappend` + `tisdk-uenv/beagley-ai/uEnv-sk.txt`.
+   - **Real gotcha hit along the way**: an empty/comment-only `.bbappend` does
+     **not** get your layer's directory added to `FILESPATH` — `FILESEXTRAPATHS`
+     is not auto-extended just because a `.bbappend` exists for a recipe.
+     `${THISDIR}` in *another* layer's existing bbappend (meta-ti-foundational's,
+     in this case) is immediate-expanded (`:=`) to *that* layer's own directory
+     at parse time and never picks up other layers. Our bbappend has to add its
+     own `FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"` explicitly.
+   - **This same gotcha resurfaced, and mattered more, once the layer was
+     split** (see "Layer layout note" above): `ultima-app.service`'s
+     beagley-ai override originally lived in the *same* layer as
+     `ultima-app.bb` (`recipes-ultima/ultima-app/files/beagley-ai/`), where it
+     needed **no** extra `FILESEXTRAPATHS` line — `FILESPATH`'s default search
+     already includes `${FILE_DIRNAME}/files` from a recipe's *own* directory,
+     auto-suffixed per active override, no bbappend content required beyond
+     the recipe itself. Once split into the separate
+     `beagley-ai/meta-ultima-beagley-ai-src` layer, that stopped being true —
+     it's now a genuinely cross-layer override (a different layer's
+     `.bbappend` contributing a file for a recipe defined elsewhere), so it
+     needs the exact same explicit `FILESEXTRAPATHS:prepend :=
+     "${THISDIR}/${PN}:"` treatment as the tisdk-uenv fix. See
+     `recipes-ultima/ultima-app/ultima-app.bbappend` in the new layer.
+2. **A leaked `local.conf` line.** Seeded the `build-beagley-ai` build directory
+   by copying `beagleplay-ti`'s working `local.conf` verbatim (fast path — same
+   `DISTRO`/`IMAGE_INSTALL` baseline, different `MACHINE`), which brought along
+   `DISTROOVERRIDES:append = ":ti-falcon"`. That line unconditionally requires
+   `u-boot-ti-staging-falcon` (`ti-falcon.inc`'s `IMAGE_INSTALL:append`, itself
+   unscoped) regardless of machine — broke the build with "Nothing RPROVIDES
+   u-boot-ti-staging-falcon" since beagley-ai has neither Falcon wiring nor a
+   `u-boot-ti-staging` recipe at all. Commented out for the beagley-ai build
+   dir only (`beagleplay-ti`'s own `local.conf` untouched).
+
+Also hit and fixed: forgot to bind-mount the real `../ultima-app` host source at
+`/home/builder/yocto/ultima-app-src` in the ad-hoc `docker run` invocations used
+for this bring-up (unlike `build.sh`, which always does). A prior session's
+`build.sh` run had left an empty directory *placeholder* at that exact path
+inside the `falcon-yocto-build` volume (Docker auto-creates bind-mount target
+directories, and they persist in the underlying volume after the container
+exits even though the bind-mounted content doesn't) — so `ultima-app.bb`'s
+`do_unpack` silently "succeeded" copying nothing, and the failure only surfaced
+one task later at `do_configure` ("no `.pro` file found"). Fixed by adding the
+same `-v "$ULTIMA_APP_SRC:/home/builder/yocto/ultima-app-src:ro"` mount
+`build.sh` uses.
+
+### Build setup used (not yet folded into `build.sh`)
+
+A second, independent BitBake build directory, `tisdk/build-beagley-ai/`
+(sibling to the existing `tisdk/build/`), seeded by copying
+`build/conf/{local.conf,bblayers.conf}` then editing `MACHINE` and commenting
+out the `ti-falcon` `DISTROOVERRIDES` line. `bblayers.conf`'s `BBLAYERS` also
+needs `.../tisdk/sources/meta-ultima-beagley-ai` added (alongside the existing
+`meta-ultima-beagleplay` entry — both layers are always synced in, harmless for
+either machine since each only contributes override-scoped content the other
+machine's build never matches). `SSTATE_DIR` pointed at the existing
+`build/sstate-cache` (not the new dir's own) to reuse architecture-common sstate
+(aarch64 toolchain, common non-machine-specific recipes) across both machines —
+worked as intended; a large fraction of the ~8918-task build already existed in
+shared sstate. `DL_DIR` (`${TOPDIR}/../downloads`) was already shared
+automatically since both build dirs are siblings under `tisdk/`. This whole
+setup lives only in the docker volume right now, same caveat as the rest of
+this file's "Build environment" section — not reproducible by `build.sh` alone
+yet. Folding a `beagley-ai` target (and syncing both ultima layers, not just
+one) into `build.sh` is future work, not done this session.
+
+### Ported into the new `beagley-ai/meta-ultima-beagley-ai-src` layer (`meta-ultima-beagleplay-src` left untouched)
+
+- `IMAGE_INSTALL`: `ultima-app ultima-splash can-utils mmc-utils
+  ultima-data-mount volatile-binds` + the GPU smoke-test set
+  (`ti-img-rogue-driver ti-img-rogue-umlibs kmscube mesa-demos`). **Not**
+  ported: `ultima-hwclock-load` (hardcodes `/dev/rtc0` = the BeaglePlay-only
+  BQ32002; this board's `KERNEL_DEVICETREE` has an *optional*
+  `k3-am67a-beagley-ai-i2c1-rtc-rv3028.dtbo` overlay for a different RTC chip,
+  not applied here), WiFi (`wpa-supplicant`/`wl18xx-firmware`, WL1807 is
+  BeaglePlay-only hardware), `mycam004m` (camera port is a later milestone).
+- `WKS_FILE:beagley-ai = "ultima-beagley-ai.wks.in"` — straight copy of
+  `ultima-beagleplay.wks.in`; every line in that file is generic TI/EFI wic
+  syntax (`${TI_WKS_BOOTLOADER_APPEND}`, `${EFI_PROVIDER}`, `bootimg-efi`
+  source), nothing AM625-specific. **Not yet hardware-verified** that the ROM
+  finds `tiboot3.bin` in p1 the same way on this board's HS-FS boot chain — the
+  original beagleplay wks file has a hardware-corrected history on exactly this
+  point (see its own header comment), worth re-checking here once a board
+  exists rather than assuming the same result.
+- `hostname:beagley-ai = "ultimagc-beagley"` — deliberately distinct from
+  `beagleplay-ti`'s `ultimagc`, both machines may coexist on the network during
+  bring-up and this project already has one documented same-hostname collision
+  scare (see "SSH" section, eMMC vs SD both `beagleplay-ti.local`).
+- `PACKAGECONFIG:append:beagley-ai = " linuxfb"` on qtbase — same reasoning as
+  the beagleplay-ti line: meta-ti's `PREFERRED_PROVIDER_virtual/gpudriver`
+  wiring for this machine (`j722s.inc` + `beagle-bsp.inc`, same Rogue-driver
+  mechanism as beagleplay-ti.conf) already makes eglfs the default
+  `PACKAGECONFIG_GL`; linuxfb added as a same-image fallback, selected via env
+  var not rebuild.
+- **`ultima-app.service`: linuxfb-first for this board specifically**, not
+  eglfs. New file at
+  `recipes-ultima/ultima-app/ultima-app/beagley-ai/ultima-app.service` in the
+  new layer, plus a sibling `recipes-ultima/ultima-app/ultima-app.bbappend`
+  with an explicit `FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"` — this
+  file lives in a *different* layer than `ultima-app.bb` itself, so (unlike
+  the single-layer version of this same idea, see the tisdk-uenv gotcha
+  above) it needs that line to be found at all; it does not just fall out of
+  `files/` auto-discovery the way a same-layer override would. Deliberate:
+  the BXS-4-64 GPU driver stack was completely unproven on this board going
+  into this milestone. Turned out **`ti-img-rogue-driver`/`ti-img-rogue-umlibs`
+  build and package cleanly against the bb.org 6.12 kernel** (confirmed —
+  `do_rootfs` resolved every RDEPENDS with zero GPU-related failures) — so the
+  named build-time risk didn't materialize. What's still unverified is
+  *runtime*: whether the driver actually initializes against real BXS-4-64
+  silicon and Qt's `eglfs_kms` finds `/dev/dri/card0` — that's exactly why
+  linuxfb-first stays the right call for the *first hardware boot*, even though
+  the build-time risk is now cleared. Once linuxfb is confirmed rendering on
+  real hardware, flip both `Environment=` lines back to
+  `QT_QPA_PLATFORM=eglfs` + `QT_QPA_EGLFS_INTEGRATION=eglfs_kms` (both
+  together — qtbase is built `-opengl es2`, so linuxfb alone leaves Quick
+  trying the GL scenegraph with no context, same trap the beagleplay-ti file's
+  own comment documents).
+
+### Verification (build-only, no board yet)
+
+- `bitbake tisdk-base-image` for `MACHINE=beagley-ai`: all tasks succeeded
+  (8918 attempted, 1 harmless QA warning — a qtdeclarative-dev header
+  referencing `TMPDIR`, pre-existing upstream noise unrelated to this port).
+- Package manifest confirmed: `ultima-app`, `ultima-splash`,
+  `ultima-data-mount`, `can-utils`, `mmc-utils`, `volatile-binds`,
+  `ti-img-rogue-driver`, `ti-img-rogue-umlibs`, `kmscube`, `mesa-demos` all
+  present for `beagley_ai`/`aarch64`.
+- `.wic` partition table confirmed (decompressed + `parted print`): p1 FAT16
+  134MB (boot, active), p2 ext4 1400MB (root), p3 ext4 16.8MB (`/data`) — the
+  intended 3-partition layout, not the vendor-default 2-partition one, so the
+  custom WKS took effect correctly.
+- Full boot artifact set present in `deploy-ti/images/beagley-ai/`: R5 SPL
+  (`tiboot3-j722s-hs-fs-evm...bin`), `tispl.bin`, `u-boot.img`/`u-boot-spl.bin`,
+  kernel `Image`/FIT image, `k3-am67a-beagley-ai.dtb` + the full set of
+  meta-beagle's overlays (i2c/PWM/PPS/mikroBUS/etc.), GRUB EFI
+  (`grub-efi-bootaa64.efi`).
+
+### Deferred (not this milestone)
+
+Falcon boot (needs its own fork — HS-FS + bb.org u-boot, see above), the
+MY-CAM004M camera driver port (open question: J722S CSI-2 receiver
+multi-virtual-channel demux for 4 simultaneous 1080p streams — see
+`docs/BEAGLEY-AI-EVAL.md`'s capture-risk section, same open question flagged
+there for this exact board), CAN bring-up (Waveshare MCP2515 HAT on the real
+MCU_SPI0, not the header's default software-SPI shim — see
+`docs/BEAGLEY-AI-EVAL.md`'s CAN section), WiFi, RTC, and — obviously — anything
+requiring the physical board: flashing, serial verification, and the
+eglfs switch-back.

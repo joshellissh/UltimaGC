@@ -1,0 +1,24 @@
+# short-description: Ultima gauge cluster image: stock boot/root + ext4 /data
+# long-description: Adds a small ext4 /data partition (p3) to meta-ti-bsp's
+# stock sdimage-2part-efi.wks.in, same as ultima-beagleplay.wks.in for the
+# original board — see that file for the full history/reasoning (p1 must
+# stay the vfat --source bootimg-efi partition, root stays partition #2,
+# --no-fstab-update on root, resize_rootfs.service masked in
+# tisdk-base-image.bbappend). Every line here is generic TI/EFI wic-plugin
+# syntax (${TI_WKS_BOOTLOADER_APPEND}, ${EFI_PROVIDER}, bootimg-efi source),
+# nothing AM625-specific, so this is a straight copy for BeagleY-AI
+# (AM67A/J722S) rather than a real port — kept as a separate per-machine
+# file instead of sharing WKS_FILE across both machines only to match this
+# layer's existing one-file-per-machine convention.
+#
+# Not yet verified on real hardware (no board in hand as of 2026-08-28) —
+# this machine's boot chain is HS-FS signed (tiboot3-j722s-hs-fs-evm...),
+# unlike beagleplay-ti's GP boot, which is new territory this project
+# hasn't exercised before. Confirm the ROM actually finds tiboot3.bin in p1
+# the same way once hardware is available, same as the original board's
+# own hardware-verified correction (see ultima-beagleplay.wks.in header).
+
+bootloader --timeout=3 --append="rootfstype=ext4 ${TI_WKS_BOOTLOADER_APPEND}"
+part --source bootimg-efi --sourceparams="loader=${EFI_PROVIDER}" --fstype=vfat --label boot --active --align 1024 --use-uuid --fixed-size 128M
+part / --source rootfs --fstype=ext4 --label root --align 1024 --use-uuid --no-fstab-update
+part /data --fstype=ext4 --label data --fixed-size 16M --align 1024

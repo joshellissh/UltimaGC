@@ -1,0 +1,40 @@
+[Unit]
+Description=Ultima gauge cluster
+DefaultDependencies=no
+After=ultima-data-mount.service
+Wants=ultima-data-mount.service
+After=systemd-modules-load.service
+Conflicts=shutdown.target
+Before=shutdown.target
+StartLimitIntervalSec=0
+
+[Service]
+ExecStartPre=/bin/mkdir -p /tmp/runtime
+ExecStartPre=/bin/mkdir -p /data/qt-shader-cache
+ExecStart=/usr/bin/ultima-app
+# BeagleY-AI (AM67A/J722S) first bring-up (2026-08-28): linuxfb + software
+# Quick backend rather than eglfs/kms, deliberately, for this machine only —
+# see the beagleplay-ti variant of this file
+# (meta-ultima-beagleplay-src/recipes-ultima/ultima-app/files/ultima-app.service)
+# for the full eglfs rationale and revert instructions this is following. The
+# BXS-4-64 GPU driver stack (ti-img-rogue-driver against the bb.org 6.12
+# kernel) is unproven on this board as of this file's creation — no board in
+# hand yet to test on. Running linuxfb first isolates the app/QML layer from
+# the GPU stack: if this doesn't render, it's an app/display problem, not a
+# GPU one. Once linuxfb is confirmed working on real hardware, flip both
+# lines below back to Environment=QT_QPA_PLATFORM=eglfs +
+# Environment=QT_QPA_EGLFS_INTEGRATION=eglfs_kms (both together, not just
+# the platform line — qtbase is built -opengl es2, so linuxfb alone leaves
+# Quick trying the GL scenegraph with no GL context, same trap the
+# beagleplay-ti file's comment already documents).
+Environment=QT_QPA_PLATFORM=linuxfb
+Environment=QT_QUICK_BACKEND=software
+Environment=XDG_RUNTIME_DIR=/tmp/runtime
+Environment=XDG_CACHE_HOME=/data/qt-shader-cache
+Restart=on-failure
+RestartSec=1
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=local-fs.target
