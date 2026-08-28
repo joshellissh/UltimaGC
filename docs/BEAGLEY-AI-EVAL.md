@@ -227,6 +227,41 @@ DDR/image differences to shake out.
 
 ---
 
+## Storage: no onboard eMMC — SD stays in the boot path
+
+**BeagleY-AI has no eMMC at all** — the only integrated storage is the microSD
+slot (`MMC1` on AM67A). This is a real difference from the current BeaglePlay
+setup, which boots from eMMC by default (NOTES.md: eMMC + Falcon together get
+power-on → first Qt frame to ~4.5 s). `[BeagleBoard-verified]`
+
+- **Boot ROM order: SD card → Ethernet netboot** if no SD is present. No
+  USB-boot or direct-NVMe-boot at the ROM stage. `[BeagleBoard-verified]`
+- **microSD does support UHS-I** (1.8 V voltage-switching circuit present), so a
+  good UHS-I U3/A2 card is the ceiling if staying SD-only — random 4K read/write
+  matters more for boot time than sequential MB/s, and varies a lot card-to-card
+  even within the same speed class. `[BeagleBoard-verified]`
+- **PCIe Gen2 x1 → NVMe is the real higher-speed option**, but it doesn't
+  eliminate the SD card: the AM67A boot ROM can't boot straight to NVMe, so SD
+  still has to hold the initial SPL/U-Boot stage, which then chain-loads the
+  rootfs from NVMe. What this buys you is moving the **heavy stuff** (rootfs,
+  Qt app, assets) off SD onto NVMe, while SD's job shrinks to a small boot
+  partition. Connector is a Raspberry Pi 5-style flat-flex HAT connector (not a
+  standard M.2 slot) wired to SERDES1, so an RPi5-style M.2 HAT+ (or a
+  BeagleY-specific equivalent, if one exists) is needed to actually plug in a
+  drive. `[BeagleBoard-verified]`
+- **USB 3.1 (4 ports via hub)** is available as a fallback storage path but has
+  the same U-Boot-mediated chain-load caveat as NVMe, and is slower besides —
+  only worth it to avoid a HAT. `[BeagleBoard-verified]`
+
+**Storage verdict:** you can't get away from needing an SD card for the initial
+boot stage given current ROM constraints, so **the SD dependency this eval's
+opening question was about doesn't go away**. PCIe NVMe is the closest
+equivalent to what eMMC would've bought — it's the option to reach for if
+rootfs/asset read speed (not the tiny SPL-load step) turns out to be the actual
+bottleneck once Falcon-on-J722S is measured. `[inferred]`
+
+---
+
 ## CAN bus: no mikroBUS, but the software stack transfers
 
 **Current setup (BeaglePlay):** MikroE CAN SPI 3.3 V click (MCP2515 controller +
@@ -348,3 +383,14 @@ hardware required, and together they decide the switch.
   <https://forum.beagleboard.org/t/beagley-ai-controller-area-network-can-support/40549>
 - Waveshare 2-CH CAN HAT (MCP2515 + SN65HVD230, 8/12 MHz crystal variants) —
   <https://www.waveshare.com/wiki/2-CH_CAN_HAT> ; Amazon ASIN B087RJ6XGG
+- BeagleY-AI — Design & specifications (storage: no eMMC, microSD UHS-I,
+  PCIe Gen2 x1, USB 3.1) —
+  <https://docs.beagleboard.org/boards/beagley/ai/03-design.html>
+- BeagleY-AI — Booting from NVMe Drives (SD-mediated chain-load, no
+  direct-ROM NVMe boot) —
+  <https://docs.beagleboard.org/boards/beagley/ai/demos/expansion-nvme.html>
+- BeagleY-AI Application Note — Processor SDK AM67A (boot ROM order: SD →
+  Ethernet) —
+  <https://software-dl.ti.com/processor-sdk-android/esd/AM67AX/11_00_01/docs/devices/AM67A/android/Application_Notes_BeagleY_AI.html>
+- U-Boot — AM67A BeagleY-AI board doc —
+  <https://docs.u-boot.org/en/latest/board/beagle/am67a_beagley_ai.html>
