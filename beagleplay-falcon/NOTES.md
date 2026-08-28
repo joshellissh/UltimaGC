@@ -4578,7 +4578,7 @@ one task later at `do_configure` ("no `.pro` file found"). Fixed by adding the
 same `-v "$ULTIMA_APP_SRC:/home/builder/yocto/ultima-app-src:ro"` mount
 `build.sh` uses.
 
-### Build setup used (not yet folded into `build.sh`)
+### Build setup used — now folded into `build.sh` (2026-08-28, later same day)
 
 A second, independent BitBake build directory, `tisdk/build-beagley-ai/`
 (sibling to the existing `tisdk/build/`), seeded by copying
@@ -4592,11 +4592,48 @@ machine's build never matches). `SSTATE_DIR` pointed at the existing
 (aarch64 toolchain, common non-machine-specific recipes) across both machines —
 worked as intended; a large fraction of the ~8918-task build already existed in
 shared sstate. `DL_DIR` (`${TOPDIR}/../downloads`) was already shared
-automatically since both build dirs are siblings under `tisdk/`. This whole
-setup lives only in the docker volume right now, same caveat as the rest of
-this file's "Build environment" section — not reproducible by `build.sh` alone
-yet. Folding a `beagley-ai` target (and syncing both ultima layers, not just
-one) into `build.sh` is future work, not done this session.
+automatically since both build dirs are siblings under `tisdk/`.
+
+**Now reproducible from a fresh volume via `build.sh` itself** —
+`BOARD=beagley-ai ./build.sh [target]` (defaults to `beagleplay-ti` /
+`tisdk/build` when `BOARD` is unset, unchanged from before). What `build.sh`
+automates on a cold volume: copies `tisdk/build/conf/{local.conf,bblayers.conf}`
+into a fresh `tisdk/build-beagley-ai/conf/`, flips `MACHINE`, comments out the
+`ti-falcon` `DISTROOVERRIDES` line, and points `SSTATE_DIR` at the shared cache
+— exactly the manual recipe above, made idempotent (a no-op once
+`conf/local.conf` already exists). Both `meta-ultima-*` layers are synced into
+`tisdk/sources/` on every run regardless of `BOARD`. **Deliberately NOT
+automated**: adding either `meta-ultima-*` layer to a build dir's `BBLAYERS` —
+same as this project's existing pattern for `meta-ultima-beagleplay`, that's a
+one-time, human-reviewed edit to a shared config, not mechanical setup; a
+truly fresh volume gets a clear "add it manually once" error naming the exact
+file, and `build.sh` verifies the line is present before invoking bitbake
+rather than assuming.
+
+**Also fixed in the process**: the sync step's `cp -a` of the host layer
+directories into the container was vulnerable to the same SMB
+`.smbdeleteAAA*` ghost-file race documented earlier in this section (a
+rename-then-unlink artifact from macOS smbfs, left behind by the
+`recipes-tisdk/` deletion during the layer split — several more turned up
+scattered across `meta-ultima-beagleplay-src` from the same session's churn,
+all already covered by the existing `.smbdelete*` gitignore pattern but still
+breaking a bind-mounted container's directory traversal). This was a
+pre-existing latent bug in `build.sh`'s original single-layer sync, not
+something the beagley-ai addition introduced — it just hadn't been hit
+recently. Fixed for both layers by staging through `rsync -a
+--exclude='.smbdelete*'` to a `mktemp -d` scratch directory (cleaned up via
+`trap ... EXIT`) before bind-mounting, same workaround already used by hand
+during the layer-split resync earlier in this section.
+
+Verified: `BOARD=beagley-ai ./build.sh tisdk-base-image` run for real against
+the live volume — sync + bootstrap succeeded, bitbake ran against
+`tisdk/build-beagley-ai` (confirmed via its own `prserv.sqlite3`/cache paths in
+the log), and the full image build completed clean (8918/8918 tasks, all
+succeeded — mostly served from the sstate already warmed by this session's
+earlier ad-hoc build, but end-to-end through the script this time, not manual
+`docker run` invocations). Default `BOARD` (beagleplay-ti) path re-verified
+too, both syncs also independently confirmed to no longer trip the ghost-file
+bug.
 
 ### Ported into the new `beagley-ai/meta-ultima-beagley-ai-src` layer (`meta-ultima-beagleplay-src` left untouched)
 
@@ -4669,14 +4706,83 @@ one) into `build.sh` is future work, not done this session.
   meta-beagle's overlays (i2c/PWM/PPS/mikroBUS/etc.), GRUB EFI
   (`grub-efi-bootaa64.efi`).
 
+### Falcon boot mode for BeagleY-AI — feasibility check (2026-08-28, later same day)
+
+Went looking at what a Falcon fork for j722s would actually involve, before
+attempting it. Conclusion: **this is a materially bigger job than the
+BeaglePlay Falcon port was, not attempted this session, and needs a scope/
+priority call from the user before someone sinks real hours into it.**
+
+**The gap is a missing feature, not a missing wire-up.** BeaglePlay's Falcon
+port (see "Fix: custom layer `meta-falcon-beagleplay`" above) worked because
+`u-boot-ti-staging` already had a *complete* Falcon implementation in
+`arch/arm/mach-k3/common.c` — `spl_start_uboot()`, `k3_falcon_prep()`,
+`k3_falcon_fdt_fixup()` (confirmed present, lines 581–710 of that file in the
+2025.01+git tree built for `beagleplay-ti`) — just never wired up for a
+non-TI-EVM board name. The BeaglePlay fork was three small patches plus a
+`UBOOT_CONFIG_FRAGMENTS` line scoping an *existing* TI feature to a new board.
+
+BeagleY-AI's bootloader is different at the recipe level:
+`beagle-bsp.inc`'s `bb_org` BSP variant builds `u-boot-bb.org`
+(`git://github.com/beagleboard/u-boot.git`, BeagleBoard.org's own
+independently-maintained fork, U-Boot 2025.10), not `u-boot-ti-staging`
+(`git.ti.com/git/ti-u-boot/ti-u-boot.git`, TI's own fork, U-Boot 2025.01) —
+confirmed via each recipe's `SRC_URI`/`UBOOT_GIT_URI`. Grepping the actual
+unpacked `u-boot-bb.org` 2025.10 source tree built for `beagley-ai` this
+session: **zero occurrences of `falcon` anywhere under `arch/arm/mach-k3`**,
+and zero occurrences of `spl_start_uboot`/`CONFIG_SPL_OS_BOOT`/`k3_falcon` in
+its `mach-k3/common.c` — the entire Falcon SPL subsystem TI's fork carries is
+simply absent, not just unreferenced by a board config. What's established:
+`k3_falcon_*` is a TI-downstream-only feature — present in TI's own
+`ti-u-boot`, absent from bb.org's *newer* (2025.10 vs 2025.01) tree, so it
+isn't upstream code bb.org would have inherited for free. What's genuinely
+**not** established: how much `mach-k3/common.c` has otherwise diverged
+between the two trees — bb.org's `mach-k3` is itself clearly TI-derived K3
+support (`j722s/`, `sysfw-loader.h`, `security.c`, the same HS-FS machinery),
+so this may be closer to a conflict-heavy cherry-pick than a from-scratch
+transplant, or it may not — that divergence is unmeasured and is the first
+thing whoever picks this up should check, not something to assume either way.
+Either way it's transplanting TI's downstream `k3_falcon_*` C code (plus its
+Kconfig options, the `k3_r5_falcon.config` fragment, and the `tifalcon.bin`
+binman node) onto a tree that has evolved separately for ~9 months of
+upstream U-Boot, with no guarantee the functions Falcon hooks into still
+match shape.
+
+**Compounded by HS-FS.** `beagley-ai-k3r5.conf` builds the HS-FS (not GP)
+signed boot chain (see "The R5/TIFS boot chain is HS-FS" above) — genuinely
+new territory for this project. Falcon means rebuilding the R5 SPL with a
+different config fragment; whether meta-beagle's default/dev signing still
+produces a chain the ROM accepts once that SPL is Falcon-modified is an open
+question with no way to check without deep TI secure-boot documentation
+reading, let alone hardware.
+
+**Not attempted, and shouldn't be, without a board.** Even a syntactically
+clean patch set here would be unverifiable — Falcon bugs manifest as a
+completely dead boot (no U-Boot console, no kernel log), and this project has
+already hit one real eMMC-corruption scare from a *known-working* config
+misstep (see "eMMC persistence" above); doing first-time HS-FS + Falcon
+debugging blind, with no serial-console ground truth to fall back on, is a
+bad risk trade until hardware is in hand anyway.
+
+**Recommendation, not a decision made here:** Falcon is a boot-time
+optimization — valuable, but the actual stated reason for this whole
+BeagleY-AI port is the Wave5 hardware encoder for dashcam recording (see
+`docs/BEAGLEY-AI-EVAL.md`), which doesn't need Falcon at all. Given a board
+isn't even in hand yet, the camera driver port and CAN bring-up (both also
+deferred, see below) deliver more toward that actual goal per hour spent than
+a from-scratch Falcon backport with no way to verify it. Suggest deferring
+Falcon until after first hardware boot (stock, non-Falcon) is confirmed
+working, and revisiting priority then — flagging it here rather than
+defaulting to "keep going."
+
 ### Deferred (not this milestone)
 
-Falcon boot (needs its own fork — HS-FS + bb.org u-boot, see above), the
-MY-CAM004M camera driver port (open question: J722S CSI-2 receiver
-multi-virtual-channel demux for 4 simultaneous 1080p streams — see
-`docs/BEAGLEY-AI-EVAL.md`'s capture-risk section, same open question flagged
-there for this exact board), CAN bring-up (Waveshare MCP2515 HAT on the real
-MCU_SPI0, not the header's default software-SPI shim — see
-`docs/BEAGLEY-AI-EVAL.md`'s CAN section), WiFi, RTC, and — obviously — anything
-requiring the physical board: flashing, serial verification, and the
+Falcon boot (see feasibility check just above — bigger than expected, defer/
+proceed is a call for the user), the MY-CAM004M camera driver port (open
+question: J722S CSI-2 receiver multi-virtual-channel demux for 4 simultaneous
+1080p streams — see `docs/BEAGLEY-AI-EVAL.md`'s capture-risk section, same
+open question flagged there for this exact board), CAN bring-up (Waveshare
+MCP2515 HAT on the real MCU_SPI0, not the header's default software-SPI shim
+— see `docs/BEAGLEY-AI-EVAL.md`'s CAN section), WiFi, RTC, and — obviously —
+anything requiring the physical board: flashing, serial verification, and the
 eglfs switch-back.
