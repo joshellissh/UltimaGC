@@ -4809,6 +4809,97 @@ Not yet re-tested after a fix — board was powered off promptly once the
 crash-loop was identified, per this project's standing rule for that
 situation.
 
+### Crash-loop fixed offline; real root cause found; a fix attempt hung the board (2026-08-29)
+
+**Stopped the crash loop without a rebuild.** Since `/` is read-only anyway and
+this project's rootfs-editing pattern is already established, masked both
+units via a kernel cmdline edit on the boot partition's `EFI/BOOT/grub.cfg`
+(FAT, natively mountable on macOS — no ext4/loop-device tooling needed):
+appended `systemd.mask=ultima-splash.service systemd.mask=ultima-app.service`
+to the `linux` line. Confirmed on reboot: unit both masked, zero crash-loop
+audit lines, clean boot to a login prompt, SSH reachable over Ethernet at
+`ultimagc-beagley.local` (mDNS) / DHCP-assigned IP — first live shell access
+to this board.
+
+**Root cause of no `/dev/fb0`, confirmed directly against both DTBs, not
+guessed:** this board's GRUB (`EFI/BOOT/grub.cfg`) boots `/Image` with no
+`devicetree` directive, so per the ARM64 Linux EFI stub's own behavior
+("Using DTB from configuration table") it inherits whatever FDT U-Boot's own
+EFI implementation already had registered — **U-Boot's own minimal internal
+control DTB** (`u-boot-beagley-ai.dtb`, ~71KB), not the full kernel-target
+`k3-am67a-beagley-ai.dtb` (~97KB) our wks build produces and puts on the FAT
+partition. Verified by pulling the live tree straight off the running kernel
+(`/sys/firmware/fdt` over SSH) and `dtc`-decompiling it against both
+candidates: it matches `u-boot-beagley-ai.dtb` almost exactly (25 cosmetic
+line diff, all phandle renumbering) and is missing huge chunks present in the
+kernel-target dtb (HAT pinctrl entries, `mcu_sram1`, etc.). Smoking gun:
+`u-boot-beagley-ai.dtb`'s `i2c@20010000` (`main_i2c1`, the bus carrying the
+`it66122` HDMI bridge per the board's own dts) is `status = "disabled"` and
+doesn't even have the `it66122` bridge node at all — U-Boot's own DTB simply
+doesn't need HDMI for its own operation. The kernel-target dtb has
+`main_i2c1` `status = "okay"` with the bridge node present, matching the
+board's schematic-derived dts we read earlier — that dtb is correct, it's
+just never the one actually handed to Linux. This explains the earlier
+"only one I2C bus registers, zero dss/tidss/it66121/hdmi driver lines" boot
+symptom precisely: `main_i2c1` (and `i2c2`/`i2c3`) are disabled in the DTB
+actually in use, so the bridge chip's I2C bus never exists for its driver to
+attach to, and tidss's component-match with it66122 never completes.
+
+**The "obvious" fix — point GRUB at the right file — hangs the board.** Added
+`devicetree /k3-am67a-beagley-ai.dtb` to `grub.cfg` (dtb copied onto the FAT
+partition first) and rebooted. Result: `EFI stub: Using DTB from
+configuration table` → `EFI stub: Exiting boot services...` → **complete
+silence, raw NUL bytes on serial, board unreachable over the network** — a
+full hang, no crash-loop audit noise, nothing. This is a genuinely different,
+worse failure mode than the crash loop (silent + no network + no serial text
+at all), recovered only by a full power cycle and pulling the grub.cfg change
+back out (same offline FAT-partition edit, done live over the still-mounted
+SD card via SSH, then again via the Mac reader once the board hung and SSH
+dropped).
+
+**Root cause of the hang is not nailed down — flagging candidate causes,
+not a confirmed diagnosis:**
+- Most likely: a TI SYSFW/TIFS resource-permission mismatch. K3 SoCs
+  statically partition peripheral/clock/power-domain resources (TISCI board
+  config) around what's negotiated during early boot; U-Boot's own DM
+  devicetree is what U-Boot itself negotiated against. Swapping in a much
+  larger devicetree at the Linux/EFI-stub layer — requesting many more
+  peripherals than U-Boot's own resource negotiation covered — under this
+  board's HS-FS (stricter than GP) secure boot chain is a plausible way to
+  get an early, silent hang with zero printk, before earlycon.
+- Also plausible and not ruled out: the kernel-target dtb's UART node
+  (clock parent / pinmux for the earlycon path) differs subtly from
+  whatever U-Boot's minimal dtb had — since **every prior successful boot
+  ran on U-Boot's dtb's UART setup**, swapping to the other tree's UART
+  config for the same physical console could break earlycon itself before
+  any message could print, independent of any resource-permission story.
+- Also possible: GRUB's `devicetree` command mis-relocating/mis-sizing the
+  larger FDT (there's a GRUB `fdt resize` step in the TI bootscript flow
+  found in `u-boot-bb.org-initial-env` — see below — that GRUB's own
+  `devicetree` command may not replicate).
+
+**Likely the real fix: this board isn't meant to boot through GRUB's
+raw `devicetree` command at all.** `u-boot-bb.org-initial-env` (this board's
+compiled-in default U-Boot env, dumped from the deploy dir) has a whole
+`bootcmd_ti_mmc` / `get_fdt_mmc` / `get_overlay_mmc` / `name_overlays` flow —
+TI's standard pattern of U-Boot loading the **kernel's own** dtb from
+`/dtb/${fdtfile}` (separate from U-Boot's internal DM dtb), applying
+`.dtbo` overlays via `fdt apply` (with an explicit `fdt resize` first) via
+`name_overlays`, and booting via `booti`/FIT rather than through
+GRUB/EFI at all. This board's `.wks`/grub.cfg (straight-copied from
+BeaglePlay, which normally boots via Falcon and may never exercise this GRUB
+path for real) bypasses that entire intended mechanism. The likely real fix
+is getting this board onto that native TI boot flow — or replicating its
+`fdt resize`-before-`fdt apply` sequence — rather than a raw GRUB
+`devicetree` command, but this needs more research before another live
+attempt: **each failed attempt costs a full power cycle and physical SD-card
+swap, and a hang is a strictly worse failure mode than the crash loop
+(unreachable over both serial and network) — don't rush the next attempt.**
+
+Current state: reverted to the known-stable config (crash loop masked, no
+HDMI, no devicetree line) — confirmed this is the safe baseline to leave the
+board in between investigation sessions.
+
 ### Falcon boot mode for BeagleY-AI — feasibility check (2026-08-28, later same day)
 
 Went looking at what a Falcon fork for j722s would actually involve, before
