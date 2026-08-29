@@ -4753,6 +4753,62 @@ Not yet done: actually booting it. Next real step is serial console + power-on
 verification, per this project's usual first-boot practice (see the top-level
 hardware caveats in `CLAUDE.md` re: USR-button SD-boot timing).
 
+### First power-on (2026-08-29): boot chain works, no /dev/fb0 → ultima-app crash-loops
+
+Serial via the JST debug header + Raspberry Pi Debug Probe (`/dev/cu.usbmodem102`
+on the Mac, not `/dev/cu.usbserial-*` like BeaglePlay's CP2102 — a different USB
+class entirely, shows up as a modem device not a serial adapter). Full capture:
+`boot-logs/beagley-ai-first-boot-20260829T180227.txt` (gitignored). Capture
+contains a handful of stray NUL bytes that make `file`/plain `grep` treat it as
+binary — use `grep -a`.
+
+**The hard, genuinely-unverified parts all worked first try:**
+- TIFS/HS-FS: `Authentication passed` x5, straight into `Starting ATF on
+  ARM64 core...` — the HS-FS signed chain flagged as new territory in the
+  Falcon feasibility check above is fine for a plain (non-Falcon) boot.
+- The custom 3-partition `.wks` layout worked exactly as built: SD card
+  enumerated `mmcblk1`, `mmcblk1p2` (root) and `mmcblk1p3` (`/data`) both
+  mounted clean. The wks header's own "not yet verified that the ROM finds
+  tiboot3.bin in p1" caveat is resolved — it does.
+- Wave5 hardware encoder — the actual reason for this whole port — probed
+  successfully: `vdec 30210000.video-codec: Added wave5 driver with caps:
+  'ENCODE' 'DECODE'`, Product Code `0x521c`, firmware rev `363254`.
+
+**What's broken: no display driver ever creates `/dev/fb0`.** At kernel t=5.7s,
+`ultima-splash.service` ("draws once to /dev/fb0, then exits") fails outright.
+`ultima-app` (linuxfb-first on this board, see above) starts at t=7.3s, aborts
+immediately (SIGABRT) for the same reason, and systemd restarts it every ~5s —
+27 cycles caught in the log before power was cut (per `CLAUDE.md`'s
+crash-loop rule — this project has one prior eMMC I/O-error scare from leaving
+a crash-loop running, not worth re-testing here even though this board's `/`
+is presumably similarly read-only). Log has zero `drm`/`dss`/`tidss`/`fb`
+lines beyond the generic `drm` core module loading via
+`systemd-modules-load` — the actual display driver never probes.
+
+**This is the same bug class BeaglePlay already fought, not re-applied here.**
+See "Fix: force `tidss` to actually load" (search this file) —
+`CONFIG_DRM_TIDSS` silently downgrading `=y`→`=m`, and even as a module never
+auto-loading via udev coldplug, needing an explicit forced-load. Checked
+`beagley-ai/meta-ultima-beagley-ai-src/`: it sets `QT_QPA_PLATFORM=linuxfb`
+and appends the `linuxfb` `PACKAGECONFIG` to qtbase, but has **no** kernel
+config fragment and no forced module-load for whatever this board's DSS
+driver is — that machinery was never ported when the layer was created.
+AM67A/J722S almost certainly still uses `tidss` (same TI DSS IP family across
+K3 SoCs) but this hasn't been confirmed against bb.org's actual kernel config/
+source tree yet — that's the next concrete step, not done this session:
+1. Confirm the driver name/Kconfig symbol in the built `linux-bb.org` 6.12
+   source tree (grep for `tidss` or `am67`/`j722s` display compatible
+   strings under `drivers/gpu/drm/`).
+2. Check whether it's `=n`, `=m`-and-uncoldplugged, or built but failing to
+   bind (a device-tree node issue would be a different, worse problem than
+   BeaglePlay's, which was purely a module-loading gap).
+3. Apply the same class of fix (built-in, or forced `/etc/modules-load.d/`
+   entry + RDEPENDS) in the new layer, same reasoning as BeaglePlay's fix.
+
+Not yet re-tested after a fix — board was powered off promptly once the
+crash-loop was identified, per this project's standing rule for that
+situation.
+
 ### Falcon boot mode for BeagleY-AI — feasibility check (2026-08-28, later same day)
 
 Went looking at what a Falcon fork for j722s would actually involve, before
