@@ -2,6 +2,7 @@ output/
 build/
 beagleplay-falcon/deploy/
 beagleplay-falcon/deploy-falcon/
+beagleplay-falcon/deploy-beagley-ai/
 beagleplay-falcon/boot-logs/
 .DS_Store
 **/.DS_Store

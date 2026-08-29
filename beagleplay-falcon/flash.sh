@@ -5,6 +5,15 @@
 #   image.wic.xz defaults to deploy-falcon/tisdk-base-image-beagleplay-ti.rootfs.wic.xz
 #
 # Run with no arguments to just list disks (nothing is written).
+#
+# SKIP_SIG_PATCH=1 ./flash.sh ...  — skip the MBR disk-signature patch below.
+#   Required for beagley-ai: that image's EFI/BOOT/grub.cfg bakes in a static
+#   `root=PARTUUID=076c4a2a-02` at build time (confirmed by extracting p1 from
+#   the built .wic) — there's no Falcon-style fixup on this board to re-derive
+#   it from the live partition table at boot, so patching the signature here
+#   would desync it from that baked-in value and the kernel would fail to find
+#   root. beagley-ai also has no onboard eMMC (see NOTES.md "storage"), so the
+#   SD-vs-eMMC collision this patch exists for doesn't apply to it anyway.
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -12,6 +21,7 @@ cd "$(dirname "$0")"
 DEFAULT_IMAGE="deploy-falcon/tisdk-base-image-beagleplay-ti.rootfs.wic.xz"
 DISK="${1:-}"
 IMAGE="${2:-$DEFAULT_IMAGE}"
+SKIP_SIG_PATCH="${SKIP_SIG_PATCH:-0}"
 
 if [ -z "$DISK" ]; then
     echo "Usage: $0 /dev/diskN [image.wic.xz]"
@@ -77,6 +87,14 @@ diskutil unmountDisk "$COOKED"
 echo "Writing image (this can take a few minutes)..."
 xzcat "$IMAGE" | sudo dd of="$RAW" bs=4m status=progress
 sync
+
+if [ "$SKIP_SIG_PATCH" = "1" ]; then
+    echo "Flushing and ejecting (SKIP_SIG_PATCH=1, disk signature left as-is)..."
+    sync
+    diskutil eject "$COOKED"
+    echo "Done. $COOKED now has: $IMAGE"
+    exit 0
+fi
 
 # Give the SD card a disk signature distinct from the eMMC's.
 #

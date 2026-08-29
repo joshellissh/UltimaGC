@@ -4471,9 +4471,10 @@ decoding at 25fps.
 
 ## BeagleY-AI (AM67A/J722S) bring-up — milestone 1: Yocto build/app port
 
-**Status (2026-08-28): milestone 1 done — `beagley-ai` `tisdk-base-image` builds
-clean with `ultima-app` packaged, `.wic` produced with the expected 3-partition
-layout, no board in hand yet to flash/verify.** See `docs/BEAGLEY-AI-EVAL.md` for
+**Status (2026-08-29): board in hand, image flashed to SD — not yet booted/
+verified.** `tisdk-base-image` builds clean with `ultima-app` packaged, `.wic`
+produced with the expected 3-partition layout, and is now written to the SD
+card that'll go in the board. See `docs/BEAGLEY-AI-EVAL.md` for
 the paper evaluation (why switch boards at all — the AM67A Wave5 hardware
 encoder unblocking 4-camera dashcam recording) and the local plan at
 `/Users/jellis/.claude/plans/nested-floating-wand.md` for the full milestone
@@ -4641,10 +4642,20 @@ bug.
   ultima-data-mount volatile-binds` + the GPU smoke-test set
   (`ti-img-rogue-driver ti-img-rogue-umlibs kmscube mesa-demos`). **Not**
   ported: `ultima-hwclock-load` (hardcodes `/dev/rtc0` = the BeaglePlay-only
-  BQ32002; this board's `KERNEL_DEVICETREE` has an *optional*
-  `k3-am67a-beagley-ai-i2c1-rtc-rv3028.dtbo` overlay for a different RTC chip,
-  not applied here), WiFi (`wpa-supplicant`/`wl18xx-firmware`, WL1807 is
-  BeaglePlay-only hardware), `mycam004m` (camera port is a later milestone).
+  BQ32002 — this board has a **different, but real, onboard RTC**: official
+  BeagleBoard docs confirm a populated **DS1340** chip with a 2-pin JST SH
+  connector for an external coin-cell backup battery, same pattern as
+  BeaglePlay's BQ32002/CR1220 — see
+  <https://docs.beagleboard.org/boards/beagley/ai/demos/using-rtc.html>. Not
+  "no RTC" — just needs its own hwclock-load variant once RTC bring-up is
+  scheduled, same reasoning as the WiFi/camera skips below: this milestone's
+  script hardcodes the wrong chip, not a missing one. Don't confuse this with
+  the *separate*, genuinely optional `k3-am67a-beagley-ai-i2c1-rtc-rv3028.dtbo`
+  overlay also in this board's `KERNEL_DEVICETREE` list — that's an add-on RTC
+  module overlay (different chip, RV-3028, presumably a pluggable I2C1
+  module), unrelated to the built-in DS1340 and not needed for it.), WiFi
+  (`wpa-supplicant`/`wl18xx-firmware`, WL1807 is BeaglePlay-only hardware),
+  `mycam004m` (camera port is a later milestone).
 - `WKS_FILE:beagley-ai = "ultima-beagley-ai.wks.in"` — straight copy of
   `ultima-beagleplay.wks.in`; every line in that file is generic TI/EFI wic
   syntax (`${TI_WKS_BOOTLOADER_APPEND}`, `${EFI_PROVIDER}`, `bootimg-efi`
@@ -4705,6 +4716,42 @@ bug.
   kernel `Image`/FIT image, `k3-am67a-beagley-ai.dtb` + the full set of
   meta-beagle's overlays (i2c/PWM/PPS/mikroBUS/etc.), GRUB EFI
   (`grub-efi-bootaa64.efi`).
+
+### Flashed to SD (2026-08-29)
+
+Pulled `tisdk-base-image-beagley-ai.rootfs.wic.xz` (+ `.wic.bmap`) out of the
+volume the same way as beagleplay-ti (see "Build environment" above), into a
+new `beagleplay-falcon/deploy-beagley-ai/` (gitignored, same pattern as
+`deploy-falcon/`), then flashed with `flash.sh` to the Mac's built-in SDXC
+reader (`/dev/disk4` this session — showed as "internal, physical" per that
+script's own header comment about the reader, confirmed removable via
+`diskutil info`).
+
+**Found before flashing, and it mattered**: `flash.sh`'s disk-signature patch
+(the `deadbee5` MBR rewrite, see its own comments) is **BeaglePlay/Falcon-only
+and must be skipped for beagley-ai** — new `SKIP_SIG_PATCH=1` env var added to
+`flash.sh` for this. Checked by extracting p1 from the built `.wic` (`parted`
+for offsets, `mtools`/`mcopy` to read the FAT partition without needing a loop
+device — Docker Desktop/OrbStack on this Mac refused `losetup` even
+`--privileged`, "Permission denied"/"cannot find an unused loop device").
+`EFI/BOOT/grub.cfg` bakes in a **static** `root=PARTUUID=076c4a2a-02` at wic
+build time:
+```
+menuentry 'boot'{
+linux /Image root=PARTUUID=076c4a2a-02 rootwait rootfstype=ext4  ro
+}
+```
+BeaglePlay's Falcon path re-derives this from the live partition table at
+boot (`k3_falcon_fdt_fixup()`) so patching the flashed card's MBR signature is
+safe there — beagley-ai has no Falcon at all, so patching the signature here
+would desync it from that static baked-in PARTUUID and the kernel would fail
+to find root. Moot anyway: this board has no onboard eMMC (see "Storage"
+below), so the SD-vs-eMMC PARTUUID collision the patch exists to prevent
+doesn't apply to it in the first place.
+
+Not yet done: actually booting it. Next real step is serial console + power-on
+verification, per this project's usual first-boot practice (see the top-level
+hardware caveats in `CLAUDE.md` re: USR-button SD-boot timing).
 
 ### Falcon boot mode for BeagleY-AI — feasibility check (2026-08-28, later same day)
 
