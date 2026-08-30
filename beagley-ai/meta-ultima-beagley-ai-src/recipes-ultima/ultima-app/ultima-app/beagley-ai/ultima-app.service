@@ -4,33 +4,46 @@ DefaultDependencies=no
 After=ultima-data-mount.service
 Wants=ultima-data-mount.service
 After=systemd-modules-load.service
+# /tmp is a tmpfs (tmp.mount); without this the ExecStartPre mkdir can land
+# on the rootfs a moment before the tmpfs is mounted over it.
+After=tmp.mount
 Conflicts=shutdown.target
 Before=shutdown.target
 StartLimitIntervalSec=0
 
 [Service]
+# Type=notify: main.cpp sends READY=1 from the first rendered frame
+# (notifySystemd). systemd-udev-trigger.service.d/ultima-after-dash.conf
+# orders udev's coldplug — and with it the ~50 module loads, remoteproc
+# firmware, WiFi, sound, video codecs — After=ultima-app.service, so all of
+# that starts once the dash is on screen rather than while the app is
+# loading its libraries off the same SD card. Measured 2026-08-30 on the
+# falcon boot: the app took 5.4 s from main() to first frame at boot vs
+# 1.9 s for a restart with a cold page cache — the difference was
+# one-time GPU init plus exactly that contention. If the app never renders
+# (no display), TimeoutStartSec fails the unit and the rest of the boot
+# proceeds anyway.
+Type=notify
+NotifyAccess=main
+TimeoutStartSec=45
 ExecStartPre=/bin/mkdir -p /tmp/runtime
 ExecStartPre=/bin/mkdir -p /data/qt-shader-cache
 ExecStart=/usr/bin/ultima-app
-# BeagleY-AI (AM67A/J722S) first bring-up (2026-08-28): linuxfb + software
-# Quick backend rather than eglfs/kms, deliberately, for this machine only —
-# see the beagleplay-ti variant of this file
-# (meta-ultima-beagleplay-src/recipes-ultima/ultima-app/files/ultima-app.service)
-# for the full eglfs rationale and revert instructions this is following. The
-# BXS-4-64 GPU driver stack (ti-img-rogue-driver against the bb.org 6.12
-# kernel) is unproven on this board as of this file's creation — no board in
-# hand yet to test on. Running linuxfb first isolates the app/QML layer from
-# the GPU stack: if this doesn't render, it's an app/display problem, not a
-# GPU one. Once linuxfb is confirmed working on real hardware, flip both
-# lines below back to Environment=QT_QPA_PLATFORM=eglfs +
-# Environment=QT_QPA_EGLFS_INTEGRATION=eglfs_kms (both together, not just
-# the platform line — qtbase is built -opengl es2, so linuxfb alone leaves
-# Quick trying the GL scenegraph with no GL context, same trap the
-# beagleplay-ti file's comment already documents).
-Environment=QT_QPA_PLATFORM=linuxfb
-Environment=QT_QUICK_BACKEND=software
+# GPU path (eglfs on the tidss KMS device, PowerVR BXS-4-64 via
+# ti-img-rogue-driver + Mesa's PVR shim), confirmed on hardware 2026-08-30
+# — the first bring-up ran linuxfb + the software Quick backend to isolate
+# the app from the GPU stack; that is no longer needed. Both lines together:
+# qtbase is built -opengl es2, so eglfs without eglfs_kms (or linuxfb
+# without QT_QUICK_BACKEND=software) leaves Quick with no usable context.
+Environment=QT_QPA_PLATFORM=eglfs
+Environment=QT_QPA_EGLFS_INTEGRATION=eglfs_kms
 Environment=XDG_RUNTIME_DIR=/tmp/runtime
 Environment=XDG_CACHE_HOME=/data/qt-shader-cache
+# Win the boot-time scheduling fights against journald/udevd/tmpfiles for
+# the cores and the card. Nothing else at boot is latency-sensitive.
+Nice=-10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=0
 Restart=on-failure
 RestartSec=1
 StandardOutput=journal

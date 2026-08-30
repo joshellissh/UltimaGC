@@ -1,0 +1,20 @@
+[Unit]
+Description=Ultima: pre-read the gauge cluster's binaries into the page cache
+# No dependencies at all: this is meant to start the instant systemd does,
+# so the ~1.5 s systemd spends on its own early units overlaps with the SD
+# reads ultima-app would otherwise do on demand, 4 KiB fault by 4 KiB fault,
+# the moment it is exec'd. Type=simple, no Before= on the app: the app is
+# never made to wait for this — a file it needs that is already cached is a
+# win, one still in flight is no worse than today.
+DefaultDependencies=no
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/ultima-prefetch
+IOSchedulingClass=best-effort
+IOSchedulingPriority=0
+
+[Install]
+WantedBy=sysinit.target

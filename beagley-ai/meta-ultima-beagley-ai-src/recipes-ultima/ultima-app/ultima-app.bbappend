@@ -13,3 +13,35 @@
 # recipes-ultima/ultima-app/files/ultima-app.service for MACHINE=beagley-ai
 # builds specifically.
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
+
+# Boot-time pieces (2026-08-30), beagley-ai only — see the comments in each
+# file and NOTES.md "BeagleY-AI boot-time work":
+# - ultima-prefetch(.service/.list): read the app's libraries into the page
+#   cache from the moment systemd starts, in parallel with its early units.
+# - udev-trigger-after-dash.conf: drop-in ordering udev's coldplug (and all
+#   the module/firmware loading it triggers) after the app's first frame,
+#   which the Type=notify beagley-ai ultima-app.service reports via READY=1.
+SRC_URI:append:beagley-ai = " \
+    file://ultima-prefetch \
+    file://ultima-prefetch.service \
+    file://ultima-prefetch.list \
+    file://udev-trigger-after-dash.conf \
+"
+SYSTEMD_SERVICE:${PN}:append:beagley-ai = " ultima-prefetch.service"
+
+do_install:append:beagley-ai () {
+    install -m 0755 ${WORKDIR}/ultima-prefetch ${D}${bindir}/ultima-prefetch
+    install -m 0644 ${WORKDIR}/ultima-prefetch.service ${D}${systemd_unitdir}/system/ultima-prefetch.service
+    install -d ${D}${sysconfdir}/ultima
+    install -m 0644 ${WORKDIR}/ultima-prefetch.list ${D}${sysconfdir}/ultima/prefetch.list
+    install -d ${D}${sysconfdir}/systemd/system/systemd-udev-trigger.service.d
+    install -m 0644 ${WORKDIR}/udev-trigger-after-dash.conf \
+        ${D}${sysconfdir}/systemd/system/systemd-udev-trigger.service.d/ultima-after-dash.conf
+}
+
+FILES:${PN}:append:beagley-ai = " \
+    ${bindir}/ultima-prefetch \
+    ${systemd_unitdir}/system/ultima-prefetch.service \
+    ${sysconfdir}/ultima/prefetch.list \
+    ${sysconfdir}/systemd/system/systemd-udev-trigger.service.d/ultima-after-dash.conf \
+"

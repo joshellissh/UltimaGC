@@ -45,3 +45,31 @@ WKS_FILE:beagley-ai = "ultima-beagley-ai.wks.in"
 # recipes-bsp/ultima-falcon-fit and wic/ultima-beagley-ai.wks.in.
 IMAGE_BOOT_FILES:beagley-ai = "tiboot3.bin tifalcon.bin"
 do_image_wic[depends] += "${@bb.utils.contains('MACHINE', 'beagley-ai', 'ultima-falcon-fit:do_deploy', '', d)}"
+
+# Boot-time trim (2026-08-30): services the dash has no use for, masked in
+# the finished rootfs the same way meta-ultima-beagleplay's
+# ultima_mask_timesyncd does it (a /dev/null symlink wins over any enable
+# pass). None of these run before the app, but every one of them was
+# starting in the same window as the app's first frame, and the unit files
+# are parsed by systemd at every boot regardless. Networking itself
+# (systemd-networkd, dropbear) stays: wired SSH is the bench path.
+# - rpcbind / nfs-statd / remote-fs: no NFS on this image (NFS_FS is off in
+#   ultima-boot.cfg too).
+# - avahi: mDNS advertising; the board is reached by IP.
+# - iptables / ip6tables: meta-arago's empty-ruleset loaders.
+# - docker.socket: stray socket unit from the base image, no docker here.
+# - gplv3-notice: prints a licence banner to the console at boot.
+# - systemd-networkd-wait-online: blocks network-online.target for up to
+#   2 min when no link is up — in a car there is none.
+# - systemd-resolved: DNS stub for a box that only ever talks to an IP.
+ROOTFS_POSTPROCESS_COMMAND:append:beagley-ai = " ultima_beagley_mask_units; "
+
+ultima_beagley_mask_units () {
+    for u in rpcbind.service rpcbind.socket nfs-statd.service remote-fs.target \
+             avahi-daemon.service avahi-daemon.socket iptables.service ip6tables.service \
+             docker.socket gplv3-notice.service systemd-networkd-wait-online.service \
+             systemd-resolved.service; do
+        rm -f ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/*.wants/$u
+        ln -sf /dev/null ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/$u
+    done
+}

@@ -13,8 +13,14 @@
 #include <QVariant>
 #include <QSurfaceFormat>
 #include <atomic>
+#include <cstddef>
+#include <cstring>
 #include <signal.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <sys/socket.h>
+#include <sys/un.h>
+#endif
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
 #include <QSGRendererInterface>
@@ -35,6 +41,43 @@ static double readUptime() {
         f.close();
     }
     return t;
+}
+
+// sd_notify(3) without libsystemd: one datagram to $NOTIFY_SOCKET. The
+// BeagleY-AI unit is Type=notify and sends READY=1 from the first rendered
+// frame (see logFirstFrame below), which is what lets the rest of the boot
+// (udev coldplug, the ~50 module loads it triggers, remoteproc firmware,
+// networking) be ordered *after* the dash is on screen instead of competing
+// with it for the SD card and the cores — see
+// beagley-ai/meta-ultima-beagley-ai-src/recipes-ultima/ultima-app/. A
+// no-op when NOTIFY_SOCKET is unset (dev builds, the BeaglePlay's
+// Type=simple unit), so it costs nothing anywhere else.
+static void notifySystemd(const char *state)
+{
+#if defined(__linux__)
+    const char *path = getenv("NOTIFY_SOCKET");
+    if (!path || !*path)
+        return;
+    const size_t len = strlen(path);
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    if (len >= sizeof(addr.sun_path))
+        return;
+    memcpy(addr.sun_path, path, len + 1);
+    socklen_t addrLen = offsetof(struct sockaddr_un, sun_path) + len + 1;
+    if (path[0] == '@') {            // abstract namespace socket
+        addr.sun_path[0] = '\0';
+        addrLen = offsetof(struct sockaddr_un, sun_path) + len;
+    }
+    int fd = socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    if (fd < 0)
+        return;
+    sendto(fd, state, strlen(state), MSG_NOSIGNAL, reinterpret_cast<struct sockaddr *>(&addr), addrLen);
+    close(fd);
+#else
+    (void)state;
+#endif
 }
 
 static OdoStore *g_odoStore = nullptr;
@@ -113,6 +156,10 @@ int main(int argc, char *argv[])
     CameraFeed cameraFeed4("/dev/mycam/cam4");
     qmlRegisterType<CameraView>("Ultima", 1, 0, "CameraView");
     qmlRegisterType<SurroundView>("Ultima", 1, 0, "SurroundView");
+    {
+        double t = readUptime();
+        fprintf(stderr, "[%6.2f] core objects created (+%.2fs)\n", t, t-t1);
+    }
 
     signal(SIGTERM, sigHandler);
     signal(SIGINT, sigHandler);
@@ -143,6 +190,10 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty("cameraFeed3", camFanout ? &cameraFeed1 : &cameraFeed3);
     engine.rootContext()->setContextProperty("cameraFeed4", camFanout ? &cameraFeed1 : &cameraFeed4);
     engine.rootContext()->setContextProperty("splashImagePath", splashImageUrl);
+    {
+        double t = readUptime();
+        fprintf(stderr, "[%6.2f] QML engine ready (+%.2fs)\n", t, t-t1);
+    }
     engine.load(QUrl(QStringLiteral("qrc:/main.qml")));
     double t2 = readUptime();
     fprintf(stderr, "[%6.2f] QML loaded (+%.2fs)\n", t2, t2-t1);
@@ -163,19 +214,23 @@ int main(int argc, char *argv[])
     auto rootWindow = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
     std::atomic<bool> renderedOnce{false};
     std::atomic<bool> swappedOnce{false};
-    auto logFirstFrame = [t0](std::atomic<bool> &done, const char *label) {
+    auto logFirstFrame = [t0](std::atomic<bool> &done, const char *label) -> bool {
         if (bool expected = false; !done.compare_exchange_strong(expected, true))
-            return;
+            return false;
         double t = readUptime();
         fprintf(stderr, "[%6.2f] %s (+%.2fs since app main())\n", t, label, t-t0);
         if (FILE *kmsg = fopen("/dev/kmsg", "w")) {
             fprintf(kmsg, "<3>ultima-app: [%.2f] %s\n", t, label);
             fclose(kmsg);
         }
+        return true;
     };
     if (rootWindow) {
         QObject::connect(rootWindow, &QQuickWindow::afterRendering, rootWindow, [&]() {
-            logFirstFrame(renderedOnce, "first frame rendered (afterRendering)");
+            // The dash is on screen: tell systemd (Type=notify units only)
+            // so everything ordered After=ultima-app.service can start now.
+            if (logFirstFrame(renderedOnce, "first frame rendered (afterRendering)"))
+                notifySystemd("READY=1\nSTATUS=first frame rendered");
         }, Qt::DirectConnection);
         QObject::connect(rootWindow, &QQuickWindow::frameSwapped, rootWindow, [&]() {
             logFirstFrame(swappedOnce, "first frame swapped (frameSwapped)");

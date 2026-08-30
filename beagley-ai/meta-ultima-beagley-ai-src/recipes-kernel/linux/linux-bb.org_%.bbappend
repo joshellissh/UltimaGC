@@ -28,3 +28,10 @@ SRC_URI:append = " file://0001-arm64-dts-k3-am67a-beagley-ai-enable-usb1-host.pa
 # `&serdes_wiz1` (PCIe's own copy of the same wiz block) has the identical
 # gap and was deliberately NOT touched here — same root cause, but PCIe is
 # unrelated to this fix and out of scope; see NOTES.md.
+
+# Boot-time config trims (2026-08-30) — see ultima-boot.cfg for the per-option
+# reasoning and the initcall_debug measurements behind it. setup-defconfig.inc
+# merges KERNEL_CONFIG_FRAGMENTS onto bb.org_defconfig with merge_config.sh
+# and re-runs oldconfig, same mechanism meta-beagle's own no-fortify.cfg uses.
+SRC_URI:append = " file://ultima-boot.cfg"
+KERNEL_CONFIG_FRAGMENTS += "${WORKDIR}/ultima-boot.cfg"

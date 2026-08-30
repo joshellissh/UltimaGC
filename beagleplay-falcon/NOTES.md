@@ -5552,3 +5552,118 @@ is *not* yet exercised is a full `flash.sh` of a wic built with the new
 `.wks.in` (the card in use was flashed pre-falcon and hand-patched) — the
 partition layout and p1 contents were checked with `mdir` on the built wic
 instead.
+
+### BeagleY-AI boot-time work (2026-08-30): 9.3 s → 6.9 s cold, GPU on
+
+Same board, same card, timed serial captures, falcon boot throughout. The
+constraint was "keep the GPU and everything else the dash needs"; the first
+measurement showed the board wasn't even *using* the GPU yet (the first
+bring-up ran linuxfb + the software Quick backend), and turning eglfs on
+made things much worse before they got better:
+
+| power-on → ultima-app first frame           | cold  | warm `reboot` | kernel-relative |
+|---------------------------------------------|------:|--------------:|----------------:|
+| morning: falcon, linuxfb + software Quick   | 9.26  | 10.16         | 6.76            |
+| same, eglfs_kms + PowerVR switched on       |   —   | 14.10         | 10.70           |
+| **after this work, eglfs_kms + PowerVR**    | **6.94** (first boot, empty caches) | **7.53** | **5.17** (5.52 first boot) |
+
+Warm reboots start ~0.9 s before the SPL banner (pre-reset serial noise
+counts as first byte), so 7.53 warm ≈ 6.6 cold at steady state. Logs:
+`boot-logs/beagley-ai-falcon-optimized-coldboot-timed-20260830T115810.txt`,
+`...-optimized-reboot2-timed-20260830T120052.txt`; the GPU-on "before" is
+`...-eglfs-initcalldebug-timed-20260830T111601.txt`.
+
+**Where the time was (GPU on, before), from `initcall_debug` + the journal
++ the app's own stderr marks:** R5 SPL streaming the 41 MiB FIT at ~20 MB/s
+2.1 s; kernel to init 2.3 s of which **1.27 s was a single initcall,
+`init_kprobe_trace`** (kallsyms walk for the kprobe blacklist on a 40 MiB
+kitchen-sink kernel — invisible in a normal dmesg, it's the silent gap
+between 0.16 s and 1.44 s); systemd to app exec 1.9 s; app exec → `main()`
+1.0 s; `main()` → first frame 5.4 s, of which QGuiApplication creation was
+1.5–1.8 s and QML load 3.5 s. The decisive experiment: restarting the app on
+the booted system — even after `echo 3 > drop_caches` — took **1.9 s** from
+`main()` to first frame, not 5.4. The boot-time penalty was (a) the app
+mapping **`libLLVM.so.18.1`, 100 MB** (Mesa's `gallium-llvm` PACKAGECONFIG
+from arago.conf; reading it cold measured 1.03 s by itself) plus a 16 MB
+`tidss_dri.so` linked against it, (b) udev coldplug replaying ~50 module
+loads, two DSP + two R5 remoteproc firmware loads, WiFi, sound and video
+codecs in exactly the same 5 s window, all off the same SD card, and (c)
+SurroundView's GLES shader compile + four warp-mesh builds running inside
+the very first frame (Qt Quick calls `updatePaintNode()` on a new
+QQuickFramebufferObject even under an invisible parent). A boot with
+`systemd-udev-trigger.service` masked put first frame at kernel_ts 8.5 s
+instead of 10.7 — 2.2 s of pure contention.
+
+**What changed (all in `beagley-ai/meta-ultima-beagley-ai-src` unless noted):**
+
+- `recipes-kernel/linux/linux-bb.org/ultima-boot.cfg` (+ bbappend,
+  `KERNEL_CONFIG_FRAGMENTS`): kprobes/uprobes/ftrace off, KASLR off, LSMs +
+  IMA/EVM/audit off, hibernation/kexec/EFI off, PCI off (the board DT keeps
+  `serdes_wiz1` disabled so j721e-pcie only ever fails and gets re-probed —
+  part of `deferred_probe_initcall`'s 0.39 s), a dozen filesystems + MD/DM
+  off, per-allocation debug/hardening off, `MODULE_COMPRESS` off (every
+  boot-time module was being xz-decompressed), and evdev/hid-multitouch/MCAN
+  built in so the touchscreen and CAN never wait on coldplug. `Image` 42.0
+  → 22.2 MB, `tifalcon.bin` 43 → 23 MB, SPL→ATF 2.08 → 1.21 s, kernel to
+  init 2.27 → 0.85 s. Built-in options 2325 → 1988, modules 2881 → 2692.
+- `recipes-graphics/mesa/mesa-pvr_%.bbappend`: `PACKAGECONFIG:remove =
+  "gallium-llvm zink virgl vulkan video-codecs"`, `GALLIUMDRIVERS = ""` (the
+  recipe appends `,pvr`). No LLVM in the image; `tidss_dri.so` 16.5 → 11.4
+  MB. QGuiApplication creation at boot 1.5–1.8 s → 0.41 s.
+- `ultima-app/beagley-ai/ultima-app.service`: eglfs_kms + PowerVR (confirmed
+  working on hardware), **`Type=notify`** — `main.cpp` sends `READY=1` from
+  the first rendered frame via a hand-rolled sd_notify (no libsystemd
+  dependency, no-op elsewhere) — `Nice=-10`, best-effort IO prio 0,
+  `TimeoutStartSec=45` so a display-less boot still proceeds.
+- `udev-trigger-after-dash.conf` → `systemd-udev-trigger.service.d/`:
+  `After=ultima-app.service`. Coldplug now starts 40 ms after the first
+  frame (journal: `Started Ultima gauge cluster` 5.523 s, `Starting Coldplug`
+  5.561 s). udevd itself isn't delayed, so hotplug still works; everything
+  the dash needs before coldplug is built in or on modules-load.d.
+- `ultima-prefetch(.service/.list)`: a `cat >/dev/null` sweep of the app's
+  mapped files from systemd's first transaction. A/B (masked vs not, same
+  image): first frame kernel_ts 5.44 vs 5.17 — worth 0.27 s, but it only
+  gets a 0.45 s head start and reads whole files (~70 MB at ~50 MB/s), so
+  exec → `main()` is still 0.94 s at boot vs 0.05 s warm. Next lever: see
+  below.
+- `ultima-app/qml/Camera360Screen.qml`: SurroundView behind a `Loader`,
+  armed 4 s after startup or on first open, whichever first.
+- `tisdk-base-image.bbappend` `ultima_beagley_mask_units`: rpcbind,
+  nfs-statd, remote-fs, avahi, iptables/ip6tables, docker.socket,
+  gplv3-notice, networkd-wait-online, resolved.
+- `main.cpp`: two more startup marks (`core objects created`, `QML engine
+  ready`) — both ~0.02 s, i.e. the QML load line is now purely
+  `engine.load()`.
+
+**Steady-state profile now (warm reboot, kernel_ts):** init 0.85 → systemd
+unit load done 1.70 → first jobs 1.96 → app exec 2.41 (gated on
+`ultima-data-mount` 0.37 s and the splash 0.32 s, both finishing ~2.31) →
+`main()` 3.35 → QGuiApplication 3.78 → QML loaded 5.04 → first frame 5.17.
+Coldplug 5.21–6.13, Ethernet link 10.8 s, SSH ~22 s after power-on.
+
+**Not done / next levers, in order of expected payoff:** (1) a recorded
+page-range readahead (mincore at first frame → replay with `readahead(2)`)
+in place of the whole-file prefetch — the app touches a fraction of the
+70 MB, and it's the 0.9 s exec→`main()` plus part of the QML load; (2)
+`/data` as a plain `data.mount` unit instead of the shell script, and not
+gating the app on the splash — together ~0.3 s off the app's start; (3)
+`systemd-analyze` in the image to see the 0.62 s of unit loading properly;
+(4) QML load itself (1.26 s warm) — instantiation of ~2900 lines of QML plus
+image decode, unprofiled; (5) UHS/SDR104 in the R5 SPL (it runs the card at
+HS ~20 MB/s; the kernel gets SDR104) for another ~0.6 s off the FIT read —
+needs `SPL_MMC_UHS_SUPPORT`/`SPL_MMC_IO_VOLTAGE` and the `vdd_sd_dv`
+regulator in the R5 DT, and a bad SPL means a card swap; (6) the A53s run
+at 1.2 GHz with no OPP table in this DT.
+
+**Bench notes from this pass:** with the wic reflashed the boot partition is
+just `tiboot3.bin` + `tifalcon.bin` (22 MB used of 128) — the pre-falcon
+stock files are gone from the card, recovery is `flash.sh` or a FIT copy
+from the Mac. `flash.sh` works unattended here (passwordless sudo). And the
+mask-udev-trigger experiment is not repeatable without a card swap: with no
+coldplug, systemd never sees `eth0` or `ttyS2` — no SSH, no getty — and the
+ext4 root can't be edited from macOS; it was recovered with a falcon FIT
+carrying `init=/bin/sh` in its baked bootargs and the serial console
+scripted from the Mac (`boot-logs/beagley-ai-rescue-20260830T114107.txt`).
+The serial adapter's TX works; bash's prompt there is `sh-5.2# `, not `# `.
+CAN: no `can0` exists on this board's DT yet (the MCAN nodes need an
+overlay) — nothing here changed that, it just isn't a regression.

@@ -116,11 +116,30 @@ Item {
     // surroundview.h for the architecture. feeds order (cam1..cam4) maps to
     // front/rear/left/right — see surroundview.h's class comment for why
     // that mapping is currently a placeholder assumption.
-    SurroundView {
+    //
+    // Behind a Loader (2026-08-30, BeagleY-AI boot-time work): Qt Quick calls
+    // updatePaintNode() on a freshly created QQuickFramebufferObject even
+    // while its parent is invisible, so SurroundView's renderer was being
+    // created — GLES shader compile + all four warp-mesh builds — inside the
+    // dash's very first frame at boot ("[surroundview] initialized" landed
+    // ~0.6 s before "QML loaded" on every start). Deferred until either the
+    // overlay is actually opened or a few seconds after startup, whichever
+    // comes first, so a normal boot still has it warm long before anyone
+    // taps for it, and a tap in the first seconds just pays the init then.
+    property bool surroundArmed: false
+    Timer {
+        interval: 4000
+        running: true
+        onTriggered: surroundArmed = true
+    }
+    Loader {
         anchors.fill: parent
-        feeds: root.feeds
-        calibrationSource: calibrationStore
-        visible: !showPlaceholder
+        active: root.surroundArmed || root.visible
+        sourceComponent: SurroundView {
+            feeds: root.feeds
+            calibrationSource: calibrationStore
+            visible: !showPlaceholder
+        }
     }
 
     // Car icon over the vehicle-mask hole in SurroundView's mesh (the
