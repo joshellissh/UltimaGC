@@ -5069,6 +5069,43 @@ Not done as part of this: reflashing/rebooting the physical board — this
 was a build-only change, verified by inspecting the `.wic` artifact
 directly, not by touching hardware again this round.
 
+### Clean-build boot confirmed on hardware (2026-08-29, later same day) — milestone 1 actually done
+
+Closed the loop flagged just above. Pulled the rebuilt image fresh from the
+Docker volume (the local `deploy-beagley-ai/` copy was stale — timestamped
+before the rebuild, would have re-flashed the pre-fix image), reflashed the
+SD card (`SKIP_SIG_PATCH=1 ./flash.sh disk4 ...`), and did a fully clean
+boot: SSH `poweroff`, confirmed the board actually went dark (dropped off
+`ping`, not just the SSH session closing) before pulling the card, no
+manual U-Boot intervention on power-on.
+
+**The `linux`-before-`devicetree` ordering question is resolved: it doesn't
+matter.** On-device `grub.cfg` confirms the plugin's write order made it to
+the card unchanged, and it booted clean anyway — GRUB's `linux`/`devicetree`
+calls are load-only, execution happens after the menuentry script finishes,
+so order between them was never actually significant. No longer a caveat.
+
+**Verified via SSH afterward, not just serial:**
+- `dmesg`: `it66121 3-004c: IT66121 revision 0 probed` at t=2.9s, `tidss
+  30220000.dss: [drm] fb0: tidssdrmfb frame buffer device` at t=3.3s. (The
+  intervening "[drm] Cannot find any crtc or sizes" lines are transient
+  probe-order noise, not a fault — `/dev/fb0` shows up two lines later.)
+- `systemctl show ultima-app ultima-splash -p NRestarts` → `NRestarts=0` for
+  both — not just "active" at a point in time, actually never crashed.
+- `journalctl -k | grep -c sig=6` → `0`.
+- `ultima-app` log: QML loaded, first frame rendered, first frame swapped,
+  all within 1.42s of app start — same clean startup profile as the
+  hand-patched card.
+- Unrelated pre-existing failures also present (`e5010` IRQ registration,
+  `cc33xx` wifi firmware missing) — expected on this dev image, nothing to
+  do with display, not a regression from this change.
+
+This is the actual, reproducible-from-clean-build finish line for milestone
+1 — not just the earlier hand-patched-card result. A fresh `git clone` +
+`./build.sh tisdk-base-image` + `./flash.sh` now produces a card that boots
+straight to a working gauge-cluster display, no manual grub.cfg surgery
+required.
+
 ### Falcon boot mode for BeagleY-AI — feasibility check (2026-08-28, later same day)
 
 Went looking at what a Falcon fork for j722s would actually involve, before
