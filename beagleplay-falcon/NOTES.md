@@ -5776,7 +5776,52 @@ it is a syscall-free stretch right after `drmModeGetConnector`, i.e. PVR's
 plugin. (3) First-frame sync 66 ms + instantiation 0.4 s — the five screens
 are all instantiated eagerly; `Loader`s would cut both. (4) systemd unit
 load 0.45 s (218 units) and the 0.22 s to exec systemd itself off a cold
-card. (5) UHS in the R5 SPL, as before.
+card. (5) UHS in the R5 SPL — **tried 2026-08-30, dead end, see below.**
+
+### UHS/SDR104 in the R5 SPL: dead end (2026-08-30)
+
+The biggest remaining lever looked like the SPL→ATF gap: the R5 SPL streams
+the ~22 MiB `tifalcon.bin` off the SD FAT partition in ~1.2 s (≈18 MB/s =
+the high-speed 4-bit ceiling), while the *kernel* runs this same card at
+SDR104 (~4× the clock). So: teach the R5 SPL to do the 1.8 V UHS switch.
+It doesn't work on this board, for an architectural reason worth recording
+so nobody burns another card swap on it.
+
+The DT is fully ready — `&sdhci1` has `vqmmc-supply = <&vdd_sd_dv>` (a
+`regulator-gpio` switching 3.3↔1.8 V on `main_gpio1[49]`), `vmmc-supply =
+<&vdd_mmc1>` (a fixed reg gpio-enabled on `main_gpio1[50]`), the
+`ti,otap-del-sel-sdr104` tap delay, and `bootph-all` on the mmc node, both
+regulators, `main_gpio1`, and the voltage-switch pinmux. The config side
+(all confirmed landing in the generated `.config`): `MMC_UHS_SUPPORT` +
+`MMC_IO_VOLTAGE` + `DM_REGULATOR{,_GPIO,_FIXED}` + `GPIO`/`DM_GPIO` +
+`DA8XX_GPIO` (the driver for `ti,am64-gpio`/`ti,keystone-gpio`), each with
+its `SPL_` twin. SPL grew 317 → 324 KiB, no size overflow.
+
+Result on hardware: the SPL **can't drive `main_gpio1` at all**, so the
+`vdd_sd_dv` regulator can't switch, so it fails to set vqmmc to *either*
+voltage, and — because `MMC_IO_VOLTAGE` makes the SDHCI driver require the
+vqmmc set even for the default 3.3 V — SD init fails outright and the SPL
+halts at `### ERROR ### Please RESET the board ###` (a non-booting board,
+recovered by restoring the prior `tiboot3.bin` to the FAT partition; the
+card content is untouched, the ROM power-cycles at 3.3 V on the next boot).
+Not graceful HS fallback — worse than the stock SPL.
+
+Root cause, from the serial log: `ti_power_domain_of_xlate: invalid
+dev-id: 78`. Dev-id 78 is `main_gpio1` (`power-domains = <&k3_pds 78>`).
+`lpsc_lookup()` in `drivers/power/domain/ti-power-domain.c` rejects it —
+main_gpio1 is not in the R5 SPL's compiled SoC power-domain (PSC/LPSC)
+tables, so the GPIO can't be powered on, so the gpio-regulator can't
+toggle. The boot-essential devices (sdhci1 itself, etc.) are in those
+tables; a MAIN-domain GPIO used only for a vqmmc switch is not. Fixing it
+means hand-patching TI's generated per-SoC power-domain data to add dev 78
+with its correct PSC mapping — fragile, on the boot-critical path — and
+even then the cold-start tune could still be marginal. This is exactly why
+neither the stock `am67a_beagley_ai_r5_defconfig` nor TI's
+`j722s_evm_r5_defconfig` enables SPL UHS: it's not a config flip, it needs
+SoC-data work TI didn't do. Reverted; ~0.8 s not worth patching generated
+PSC tables under a car dash's must-boot constraint. If ever revisited, the
+one required change is main_gpio1 (dev 78) in the R5 power-domain table —
+start there, not at the MMC config.
 
 **Bench notes:** `strace` under a `Type=notify` unit makes strace the main
 PID, READY=1 is ignored, and the unit times out after 45 s — run the
