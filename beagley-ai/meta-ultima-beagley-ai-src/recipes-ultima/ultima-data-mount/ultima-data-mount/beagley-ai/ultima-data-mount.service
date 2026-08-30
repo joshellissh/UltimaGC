@@ -1,0 +1,19 @@
+[Unit]
+Description=Mount /data (SD partition 3)
+DefaultDependencies=no
+Before=local-fs.target ultima-app.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# The shared ultima-data-mount.sh works out SD-vs-eMMC with findmnt; this
+# board only boots from SD (mmcblk1, the root is baked as /dev/mmcblk1p2 in
+# the falcon FIT) and the script's three cold execs were 0.37 s on the app's
+# critical path. One mount(8) call instead. Not a systemd data.mount unit on
+# purpose: that would BindsTo=dev-mmcblk1p3.device, which only becomes
+# active once udev coldplug has run — and coldplug is ordered *after* the
+# app on this board (see systemd-udev-trigger.service.d/ultima-after-dash.conf).
+ExecStart=/bin/mount -o noatime /dev/mmcblk1p3 /data
+
+[Install]
+WantedBy=local-fs.target

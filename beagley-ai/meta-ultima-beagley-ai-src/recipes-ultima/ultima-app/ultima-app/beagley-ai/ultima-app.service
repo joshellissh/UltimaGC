@@ -4,9 +4,6 @@ DefaultDependencies=no
 After=ultima-data-mount.service
 Wants=ultima-data-mount.service
 After=systemd-modules-load.service
-# /tmp is a tmpfs (tmp.mount); without this the ExecStartPre mkdir can land
-# on the rootfs a moment before the tmpfs is mounted over it.
-After=tmp.mount
 Conflicts=shutdown.target
 Before=shutdown.target
 StartLimitIntervalSec=0
@@ -26,8 +23,11 @@ StartLimitIntervalSec=0
 Type=notify
 NotifyAccess=main
 TimeoutStartSec=45
-ExecStartPre=/bin/mkdir -p /tmp/runtime
-ExecStartPre=/bin/mkdir -p /data/qt-shader-cache
+# No ExecStartPre forks: RuntimeDirectory= gives XDG_RUNTIME_DIR natively
+# (two cold /bin/mkdir execs were ~0.15 s between "Starting" and the app's
+# own exec), and Qt creates its cache subdirectories under XDG_CACHE_HOME
+# itself.
+RuntimeDirectory=ultima
 ExecStart=/usr/bin/ultima-app
 # GPU path (eglfs on the tidss KMS device, PowerVR BXS-4-64 via
 # ti-img-rogue-driver + Mesa's PVR shim), confirmed on hardware 2026-08-30
@@ -37,7 +37,7 @@ ExecStart=/usr/bin/ultima-app
 # without QT_QUICK_BACKEND=software) leaves Quick with no usable context.
 Environment=QT_QPA_PLATFORM=eglfs
 Environment=QT_QPA_EGLFS_INTEGRATION=eglfs_kms
-Environment=XDG_RUNTIME_DIR=/tmp/runtime
+Environment=XDG_RUNTIME_DIR=/run/ultima
 Environment=XDG_CACHE_HOME=/data/qt-shader-cache
 # Win the boot-time scheduling fights against journald/udevd/tmpfiles for
 # the cores and the card. Nothing else at boot is latency-sensitive.

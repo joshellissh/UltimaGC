@@ -5667,3 +5667,122 @@ scripted from the Mac (`boot-logs/beagley-ai-rescue-20260830T114107.txt`).
 The serial adapter's TX works; bash's prompt there is `sh-5.2# `, not `# `.
 CAN: no `can0` exists on this board's DT yet (the MCAN nodes need an
 overlay) — nothing here changed that, it just isn't a regression.
+
+### BeagleY-AI boot-time work, cycle 2 (2026-08-30): 6.9 s → 5.3 s cold
+
+Same method as above (timed serial captures, the app's stderr marks,
+`QSG_RENDER_TIMING`, `strace -f -tt` on the app, restart-with-dropped-caches
+A/Bs), same constraints (GPU on, nothing the dash needs removed).
+
+| power-on → ultima-app first frame     | cold  | warm `reboot` | kernel-relative |
+|---------------------------------------|------:|--------------:|----------------:|
+| end of cycle 1                        | 6.94  | 7.53          | 5.17            |
+| + OP-TEE hwrng (CRNG ready at 0.24 s) |   —   | —             | 4.56            |
+| + 6 systemd generators removed        |   —   | —             | 4.38            |
+| **+ app-side work, final image**      | **5.31** (5.62 on the image's first boot, empty caches) | **6.27** (SPL banner → frame 5.30) | **3.86** (4.19 first boot) |
+
+Cold power-on, SPL banner at +0.005 s: SPL → ATF 1.23 s, ATF → kernel 0
+≈ 0.2 s, kernel → init 0.85 s, init → app exec 1.46 s, exec → first frame
+1.55 s. The day started at 9.26 s; 43 % of it is gone with nothing the dash
+needs removed. Log: `boot-logs/beagley-ai-falcon-cycle2-final-coldboot2-timed-20260830T140432.txt`.
+
+The app's own `main()` → first frame, restart on the booted board with
+`echo 3 > drop_caches` (so: the app, not the boot):
+
+| build                                             | `main()` → first frame | render thread's first frame |
+|---------------------------------------------------|-----------------------:|----------------------------:|
+| end of cycle 1                                    | 1.74–1.90 s            | 565 ms (sync 70, render 485) |
+| CameraView: no FBO node while hidden              | 1.33–1.45 s            | 163 ms (sync 54, render 105) |
+| Window shown from C++, splash decoded off-thread  | 1.21–1.33 s (true first frame; the earlier marks were the *second* frame, ~120 ms late) | 190 ms |
+| splash pre-decoded from `main()` (image provider) | 1.11–1.26 s            | 190 ms (sync 66, render 111) |
+
+At boot (warm reboot, kernel_ts): app exec 2.27 → `main()` 2.37 →
+QGuiApplication 2.82 → QML loaded 3.43 → window shown 3.48 → first frame
+3.87. Logs: `boot-logs/beagley-ai-falcon-cycle2-final-coldboot-timed-20260830T130506.txt`
+(first boot of the flashed image), `...-final-warm-timed-*.txt`.
+
+**Root causes found this cycle, in the order they were found:**
+
+1. **`getrandom()` blocked the app until the CRNG was ready.** `main()` sat
+   at kernel_ts ≈ 3.4 s on every boot no matter how early the unit was
+   exec'd or how much was prefetched — a `QT_HASH_SEED=0` experiment just
+   moved the same wait into QGuiApplication (Mesa/PVR ask for randomness
+   too). dmesg: `random: crng init done` at 3.4 s after a 0.9 s silent gap.
+   The SoC's TRNG lives behind OP-TEE (SA2UL is firewalled to secure world)
+   and is reachable as a hwrng through `optee_rng`; as modules, TEE +
+   optee_rng only loaded at udev coldplug, i.e. after the app. Built in
+   (`CONFIG_TEE/OPTEE/HW_RANDOM_OPTEE=y` in `ultima-boot.cfg`): `crng init
+   done` at **0.236 s**, `main()` 3.35 → 2.43 s, first frame 5.17 → 4.56.
+2. **Whole-file prefetch → recorded page ranges.** `recipes-ultima/
+   ultima-readahead` (`record <pack> <pid>` = mmap + mincore over
+   `/proc/<pid>/maps` in map order, gaps ≤ 64 KiB bridged; `replay <pack>`
+   = `readahead(2)` per range, a file whose size changed is read whole
+   instead, ≤ 32 MiB). `ultima-app/beagley-ai/readahead.pack`: 59 files,
+   42 MB of ranges; `ultima-prefetch` uses it when present and falls back to
+   the `cat` list. Exec → `main()` at boot 0.94 → 0.10 s. Record it on a
+   boot with `ultima-prefetch` masked, right after the first frame, or the
+   cache lies (instructions in the `ultima-prefetch` script).
+3. **Unit plumbing in front of the app.** `RuntimeDirectory=ultima`
+   instead of two `ExecStartPre=mkdir` forks (0.15 s between "Starting" and
+   the app's exec); the board's own `ultima-splash.service` without
+   `Before=ultima-app.service` and its own `ultima-data-mount.service`
+   (plain oneshot `mount`, not a `data.mount` unit — those wait for the
+   device unit, i.e. for udev). App exec at boot 2.41 → 2.26 s.
+4. **systemd generators.** Nine of them fork+exec in series before the first
+   job is queued; six do nothing here (gpt-auto, hibernate-resume,
+   system-update, rc-local, debug, run) — removed at rootfs postprocess
+   (`ultima_beagley_drop_generators`). "Hostname set" → "Queued start job"
+   0.53 → 0.455 s.
+5. **Five hidden `CameraView`s built their FBOs in the first frame.**
+   `QSG_RENDER_TIMING` showed the render thread's first frame at 565 ms of
+   which the scene-graph renderer was 105; `strace` put the rest in a
+   400 ms window with no syscalls. It was `QQuickFramebufferObject`: Qt
+   creates the renderer and FBO in `updatePaintNode()` even for a hidden
+   item and runs its `render()` from `beforeRendering` — so the four
+   CameraGridScreen views and the RearCameraScreen one each compiled
+   blit + mirror GLSL (ten PowerVR compiles, ~40 ms each) and allocated
+   an FBO, for screens nobody could see. `CameraView::updatePaintNode` now
+   returns nothing while hidden and node-less (a visibility change dirties
+   the item, so the node is built on first show); `ShaderManager` uses
+   `addCacheableShaderFromSourceCode` so even that first show hits the
+   program-binary cache after the first run. First frame 565 → 163 ms;
+   camera grid first open 42 ms, second 12 ms.
+6. **The window was shown before the first-frame hooks existed, and the
+   splash PNGs decoded on the GUI thread.** `main.qml`'s Window is now
+   `visible: false` and `main.cpp` shows it after connecting
+   afterRendering/frameSwapped — so READY=1 and the marks are the real
+   first frame (they used to be the second, 120 ms later). The two intro
+   bitmaps are decoded from the start of `main()` on their own threads
+   (`SplashImageProvider`, `image://splash/screen|car`) — Qt's asynchronous
+   Image path is one reader thread and the pair took ~0.6 s there, longer
+   than the rest of the QML took to instantiate — and `background_overlay`
+   / `car_360` (both 1600x720, both invisible on the first frame) are
+   `asynchronous: true`. The window is shown when `introAssetsReady`, or
+   after 1.5 s regardless. The intro fade is gated on `root.visible` since
+   the scene graph's animation timer ticks with no window exposed.
+
+**Tried, no gain:** a throwaway `QOpenGLContext` on a helper thread right
+after QGuiApplication to pre-warm PowerVR — context creation is 24 ms, the
+cost was item 5. `QT_HASH_SEED=0` — see item 1.
+
+**Not done / next levers:** (1) the A53s run at **1.2 GHz**: no OPP table
+and no `ti,j722s` match in `ti-cpufreq` in this 6.12 tree (the sibling
+AM62P5 has both, up to 1.25 GHz), U-Boot's J722S EVM R5 DT asks for
+1.4 GHz. The board idles at 71–73 °C with the app up and there is no
+cpufreq cooling device, so raising the clock is a thermal question first —
+not just `assigned-clock-rates`. (2) QGuiApplication's 0.4 s: ~190 ms of
+it is a syscall-free stretch right after `drmModeGetConnector`, i.e. PVR's
+`eglInitialize`; single-threaded, unavoidable short of a lighter platform
+plugin. (3) First-frame sync 66 ms + instantiation 0.4 s — the five screens
+are all instantiated eagerly; `Loader`s would cut both. (4) systemd unit
+load 0.45 s (218 units) and the 0.22 s to exec systemd itself off a cold
+card. (5) UHS in the R5 SPL, as before.
+
+**Bench notes:** `strace` under a `Type=notify` unit makes strace the main
+PID, READY=1 is ignored, and the unit times out after 45 s — run the
+experiment with `NotifyAccess=all` or expect the restart. Drop-ins in
+`/run/systemd/system/<unit>.d/` work on the read-only root and vanish at
+reboot — the right tool for env-var experiments (`QSG_RENDER_TIMING=1`,
+`QML_IMPORT_TRACE=1`). The app's `/tmp/ultima-screenshot.request` and
+`/tmp/ultima-camtest.request` triggers were what made the camera-grid check
+and the "is the first frame really the splash" check possible over SSH.

@@ -1,0 +1,19 @@
+[Unit]
+Description=Ultima boot splash (draws once to /dev/fb0, then exits)
+DefaultDependencies=no
+# Deliberately NOT Before=ultima-app.service on this board (2026-08-30 boot-
+# time work): the splash takes ~0.3 s to decode + blit and that ordering was
+# one of the two things holding the app's exec back to ~2.4 s after kernel
+# start. Both start together now; the splash lands on fb0 at ~2.3 s and the
+# app's KMS modeset doesn't happen until its first frame at ~5 s, so the
+# splash is still on screen for the whole gap and nothing overlaps.
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/ultima-splash
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=sysinit.target

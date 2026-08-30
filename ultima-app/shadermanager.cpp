@@ -87,11 +87,19 @@ QOpenGLShaderProgram *ShaderManager::program(const QString &vertPath, const QStr
     QString vertSrc = versionHeader(QOpenGLShader::Vertex) + vertBody;
     QString fragSrc = versionHeader(QOpenGLShader::Fragment, fragExtensionLines) + fragBody;
 
-    if (!prog->addShaderFromSourceCode(QOpenGLShader::Vertex, vertSrc)) {
+    // Cacheable: goes through Qt's program-binary cache (the same
+    // qtshadercache-* directory under XDG_CACHE_HOME that Qt Quick's own
+    // materials use — on the BeagleY-AI that's /data/qt-shader-cache, and
+    // PowerVR supports GL_OES_get_program_binary), so after the first run a
+    // program is a file read + glProgramBinary instead of a GLSL compile
+    // (~40 ms each on that GPU's compiler). With the cacheable variants the
+    // compile is deferred into link(), which is where a bad shader now
+    // reports; the per-stage checks stay for drivers without a cache.
+    if (!prog->addCacheableShaderFromSourceCode(QOpenGLShader::Vertex, vertSrc)) {
         qWarning() << "ShaderManager: vertex compile failed for" << vertPath << ":" << prog->log();
         return nullptr;
     }
-    if (!prog->addShaderFromSourceCode(QOpenGLShader::Fragment, fragSrc)) {
+    if (!prog->addCacheableShaderFromSourceCode(QOpenGLShader::Fragment, fragSrc)) {
         qWarning() << "ShaderManager: fragment compile failed for" << fragPath << ":" << prog->log();
         return nullptr;
     }

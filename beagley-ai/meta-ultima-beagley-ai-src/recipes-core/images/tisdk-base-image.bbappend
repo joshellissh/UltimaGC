@@ -28,6 +28,12 @@ IMAGE_INSTALL:append:beagley-ai = " ultima-app ultima-splash can-utils mmc-utils
 # Remove alongside the beagleplay-ti copy once both are confirmed working.
 IMAGE_INSTALL:append:beagley-ai = " ti-img-rogue-driver ti-img-rogue-umlibs kmscube mesa-demos"
 
+# Boot-time work (2026-08-30): ultima-readahead replays the recorded startup
+# working set (see recipes-ultima/ultima-readahead); systemd-analyze is here
+# so `systemd-analyze blame/critical-chain/plot` can be run on the board
+# instead of reconstructing the unit timeline from the journal by hand.
+IMAGE_INSTALL:append:beagley-ai = " ultima-readahead systemd-analyze"
+
 # See wic/ultima-beagley-ai.wks.in (this layer) for the full reasoning —
 # straight copy of ultima-beagleplay.wks.in, nothing AM625-specific in it.
 # WKS_SEARCH_PATH covers this layer's own wic/ dir the same way it already
@@ -62,7 +68,7 @@ do_image_wic[depends] += "${@bb.utils.contains('MACHINE', 'beagley-ai', 'ultima-
 # - systemd-networkd-wait-online: blocks network-online.target for up to
 #   2 min when no link is up — in a car there is none.
 # - systemd-resolved: DNS stub for a box that only ever talks to an IP.
-ROOTFS_POSTPROCESS_COMMAND:append:beagley-ai = " ultima_beagley_mask_units; "
+ROOTFS_POSTPROCESS_COMMAND:append:beagley-ai = " ultima_beagley_mask_units; ultima_beagley_drop_generators; "
 
 ultima_beagley_mask_units () {
     for u in rpcbind.service rpcbind.socket nfs-statd.service remote-fs.target \
@@ -71,5 +77,21 @@ ultima_beagley_mask_units () {
              systemd-resolved.service; do
         rm -f ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/*.wants/$u
         ln -sf /dev/null ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/$u
+    done
+}
+
+# systemd runs every generator in system-generators/ before it can queue the
+# first job — nine fork+execs off a cold SD card, in series, on the critical
+# path. Six of them have nothing to do here: gpt-auto (partition
+# auto-discovery; the root and /data are stated explicitly), hibernate-resume,
+# system-update, rc-local (no /etc/rc.local), debug (systemd.debug_shell=),
+# run (systemd.run=). Measured on hardware 2026-08-30: "Hostname set" →
+# "Queued start job" 0.53 → 0.455 s. Kept: fstab (mounts), getty (creates
+# serial-getty@ttyS2 from console=), sysv (/etc/init.d/telnetd).
+ultima_beagley_drop_generators () {
+    for g in systemd-gpt-auto-generator systemd-hibernate-resume-generator \
+             systemd-system-update-generator systemd-rc-local-generator \
+             systemd-debug-generator systemd-run-generator; do
+        rm -f ${IMAGE_ROOTFS}${nonarch_libdir}/systemd/system-generators/$g
     done
 }

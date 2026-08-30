@@ -12,9 +12,13 @@
 #include <QMetaObject>
 #include <QVariant>
 #include <QSurfaceFormat>
+#include <QQuickImageProvider>
+#include <QElapsedTimer>
 #include <atomic>
 #include <cstddef>
 #include <cstring>
+#include <future>
+#include <memory>
 #include <signal.h>
 #include <unistd.h>
 #if defined(__linux__)
@@ -80,6 +84,40 @@ static void notifySystemd(const char *state)
 #endif
 }
 
+// The two splash bitmaps main.qml's intro overlay shows on the first frame
+// (image://splash/screen, image://splash/car), decoded on their own threads
+// from the moment main() starts. Rationale (BeagleY-AI, 2026-08-30): Qt's
+// asynchronous Image path decodes on a single reader thread, in order, and
+// these two 1600x720 / 1104x364 PNGs took ~0.6 s there — longer than the
+// rest of the QML took to instantiate, so the window (held until they are
+// ready, see main.qml) sat waiting. Started here they overlap the ~0.4 s of
+// KMS/EGL setup inside QGuiApplication's constructor, during which three of
+// the four cores are idle, and are done before the QML engine even exists.
+// QImage needs no QGuiApplication; qrc is registered by a static initialiser.
+class SplashImageProvider : public QQuickImageProvider
+{
+public:
+    SplashImageProvider()
+        : QQuickImageProvider(QQuickImageProvider::Image)
+        , m_screen(std::async(std::launch::async, [] { return QImage(QStringLiteral(":/splash_screen.png")); }))
+        , m_car(std::async(std::launch::async, [] { return QImage(QStringLiteral(":/splash_car_start.png")); }))
+    {}
+    QImage requestImage(const QString &id, QSize *size, const QSize &) override
+    {
+        QImage img;
+        if (id == QLatin1String("screen"))
+            img = m_screen.get();
+        else if (id == QLatin1String("car"))
+            img = m_car.get();
+        if (size)
+            *size = img.size();
+        return img;
+    }
+private:
+    std::shared_future<QImage> m_screen;
+    std::shared_future<QImage> m_car;
+};
+
 static OdoStore *g_odoStore = nullptr;
 static CanBus *g_canBus = nullptr;
 
@@ -95,6 +133,10 @@ int main(int argc, char *argv[])
 {
     double t0 = readUptime();
     fprintf(stderr, "[%6.2f] app main() entered\n", t0);
+
+    // First thing, before QGuiApplication: kicks off the splash decodes
+    // (see the class). Ownership passes to the QML engine below.
+    auto *splashProvider = new SplashImageProvider;
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
     // Qt6 defaults to Metal on macOS (and other non-OpenGL RHI backends
@@ -175,6 +217,7 @@ int main(int argc, char *argv[])
         : QUrl::fromLocalFile(splashImageFile).toString();
 
     QQmlApplicationEngine engine;
+    engine.addImageProvider(QStringLiteral("splash"), splashProvider);
     engine.rootContext()->setContextProperty("bootTime", t0);
     engine.rootContext()->setContextProperty("odoStore", &odoStore);
     engine.rootContext()->setContextProperty("calibrationStore", &calibrationStore);
@@ -235,6 +278,41 @@ int main(int argc, char *argv[])
         QObject::connect(rootWindow, &QQuickWindow::frameSwapped, rootWindow, [&]() {
             logFirstFrame(swappedOnce, "first frame swapped (frameSwapped)");
         }, Qt::DirectConnection);
+
+        // main.qml's Window is `visible: false`; it's shown from here, once
+        // the two splash bitmaps it decodes asynchronously are ready (its
+        // introAssetsReady property — see the comment on the Window), so
+        // that (a) the hooks above exist before the first frame is drawn,
+        // and (b) that first frame still shows the splash rather than a
+        // black window. On eglfs show() renders synchronously, so the
+        // "first frame" marks fire inside it. If the assets aren't ready
+        // straight away, poll briefly; past the deadline show anyway — a
+        // missing PNG must never keep the dash black.
+        auto showRootWindow = [rootWindow, t0](const char *why) {
+            if (rootWindow->isVisible())
+                return;
+            double t = readUptime();
+            fprintf(stderr, "[%6.2f] showing window (%s, +%.2fs since app main())\n", t, why, t-t0);
+            rootWindow->show();
+        };
+        if (rootWindow->property("introAssetsReady").toBool()) {
+            showRootWindow("intro assets ready");
+        } else {
+            auto *showTimer = new QTimer(&app);
+            auto deadline = std::make_shared<QElapsedTimer>();
+            deadline->start();
+            QObject::connect(showTimer, &QTimer::timeout, rootWindow, [=]() {
+                if (rootWindow->property("introAssetsReady").toBool())
+                    showRootWindow("intro assets ready");
+                else if (deadline->elapsed() >= 1500)
+                    showRootWindow("deadline, assets not ready");
+                else
+                    return;
+                showTimer->stop();
+                showTimer->deleteLater();
+            });
+            showTimer->start(5);
+        }
 
         // Debug-only on-device screenshot capture. eglfs_kms has no
         // screenshot tooling on this image (no modetest/ffmpeg/fbgrab), and

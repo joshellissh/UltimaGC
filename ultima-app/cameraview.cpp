@@ -418,3 +418,23 @@ QQuickFramebufferObject::Renderer *CameraView::createRenderer() const
 {
     return new CameraViewRenderer();
 }
+
+QSGNode *CameraView::updatePaintNode(QSGNode *node, UpdatePaintNodeData *data)
+{
+    // Qt Quick calls updatePaintNode() on a brand-new QQuickFramebufferObject
+    // even when it (or an ancestor) is hidden, and the base implementation
+    // then creates the Renderer and the FBO right away and hooks the FBO
+    // render pass onto QQuickWindow::beforeRendering — so at boot all five
+    // CameraViews (four in CameraGridScreen, one in RearCameraScreen, none
+    // of them on screen) each allocated an FBO and ran render() once, i.e.
+    // ten PowerVR GLSL compiles inside the very first frame. Measured on the
+    // BeagleY-AI (2026-08-30, QSG_RENDER_TIMING): the first frame's render
+    // phase was ~485 ms of which the scene-graph renderer itself was 105.
+    // While hidden and node-less, return nothing; a visibility change marks
+    // the item dirty (QQuickItemPrivate::Visible is in ContentUpdateMask),
+    // so the node gets built the first time the view actually shows. An
+    // existing node is kept across hide/show as before.
+    if (!node && !isVisible())
+        return nullptr;
+    return QQuickFramebufferObject::updatePaintNode(node, data);
+}

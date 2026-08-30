@@ -6,8 +6,24 @@ Window {
     id: root
     width: 1600
     height: 720
-    visibility: Window.Windowed
+    // Shown from main.cpp (rootWindow->show()), not here. Two reasons, both
+    // measured on the BeagleY-AI (2026-08-30): a Window that is visible at
+    // instantiation draws its first frame *inside* engine.load(), before
+    // main.cpp has connected afterRendering/frameSwapped — so the "first
+    // frame" mark and systemd's READY=1 were really the second frame, ~120 ms
+    // late. And with the window held back until introAssetsReady, the two
+    // splash bitmaps below can decode off the GUI thread (asynchronous:
+    // true) in parallel with the rest of this file being instantiated,
+    // instead of ~230 ms of synchronous PNG decode on the critical path.
+    // main.cpp shows the window as soon as introAssetsReady, or after a
+    // short deadline regardless, so a broken asset can never keep the dash
+    // black.
+    visible: false
     color: "black"
+
+    readonly property bool introAssetsReady:
+        (introSplash.status === Image.Ready || introSplash.status === Image.Error) &&
+        (introCar.status === Image.Ready || introCar.status === Image.Error)
 
     // Startup self-test: on launch, sweep every needle to full deflection
     // and back while flashing every tell-tale icon, like a normal car's
@@ -93,8 +109,12 @@ Window {
         onTriggered: { bootOverlay.visible = false; splashDone = true }
     }
 
+    // Gated on root.visible as well: the window is shown from main.cpp (see
+    // the Window's comment), and the scene graph's animation timer ticks
+    // even while no window is exposed — without this the splash would fade
+    // out before anyone could see it.
     SequentialAnimation {
-        running: splashDone
+        running: splashDone && root.visible
         NumberAnimation { target: root; property: "introFrac"; to: 1; duration: 1000; easing.type: Easing.InOutQuad }
         PropertyAction { target: root; property: "introTransitionDone"; value: true }
     }
@@ -118,6 +138,56 @@ Window {
     // signal/slot does, so no explicit locking is needed here.
     property int _fpsFrameCount: 0
     onFrameSwapped: _fpsFrameCount++
+
+    // Declared before everything else on purpose: Qt serves asynchronous
+    // Images from one reader thread in creation order, and these two are the
+    // ones the first frame waits for (introAssetsReady) — everything below
+    // is hidden behind them until the intro fade anyway.
+    // Splash-to-cluster intro overlay — see introFrac/introTransitionDone
+    // above for the timing/rationale. z:8500 sits above the dash (default
+    // z) and the headlight dim layer (8000) but below the FPS counter
+    // (9000) and dev-only boot-splash simulation (9999), matching those
+    // layers' existing "debug chrome always wins" ordering. Hidden outright
+    // once done rather than just transparent, so it stops costing paint
+    // time for the rest of the run.
+    Item {
+        id: introOverlay
+        anchors.fill: parent
+        z: 8500
+        visible: !introTransitionDone
+
+        // Both come from main.cpp's SplashImageProvider (splash_screen.png
+        // and splash_car_start.png, decoded on their own threads from the
+        // start of main()) and are fetched asynchronously, so the GUI thread
+        // never decodes them; the Window stays hidden until introAssetsReady
+        // (see the top of this file), so the first frame is still
+        // pixel-identical to the fbdev splash.
+        Image {
+            id: introSplash
+            anchors.fill: parent
+            source: "image://splash/screen"
+            asynchronous: true
+            opacity: 1 - root.introFrac
+        }
+
+        Image {
+            id: introCar
+            x: introCarStartX + (introCarEndX - introCarStartX) * root.introFrac
+            y: introCarStartY + (introCarEndY - introCarStartY) * root.introFrac
+            width: introCarStartW
+            height: introCarStartH
+            source: "image://splash/car"
+            asynchronous: true
+            opacity: 1 - root.introFrac
+
+            transform: Scale {
+                origin.x: 0
+                origin.y: 0
+                xScale: 1 + (introCarEndW / introCarStartW - 1) * root.introFrac
+                yScale: 1 + (introCarEndH / introCarStartH - 1) * root.introFrac
+            }
+        }
+    }
 
     // Background layers, back to front: boost circle, gauge overlay, car
     //
@@ -196,6 +266,11 @@ Window {
     Image {
         anchors.fill: parent
         source: "qrc:/background_overlay.png"
+        // Fully covered by introOverlay's opaque splash on the first frame
+        // and only revealed over the 1 s intro fade, so a 1600x720 decode
+        // (~100 ms on the A53s) has no business on the GUI thread before
+        // that frame.
+        asynchronous: true
     }
     // Was anchors.fill: parent (full 1600x720) — the car artwork itself only
     // occupies a small box in the middle of that canvas (the rest is fully
@@ -235,43 +310,6 @@ Window {
         MouseArea {
             anchors.fill: parent
             onClicked: toggleCamera360()
-        }
-    }
-
-    // Splash-to-cluster intro overlay — see introFrac/introTransitionDone
-    // above for the timing/rationale. z:8500 sits above the dash (default
-    // z) and the headlight dim layer (8000) but below the FPS counter
-    // (9000) and dev-only boot-splash simulation (9999), matching those
-    // layers' existing "debug chrome always wins" ordering. Hidden outright
-    // once done rather than just transparent, so it stops costing paint
-    // time for the rest of the run.
-    Item {
-        id: introOverlay
-        anchors.fill: parent
-        z: 8500
-        visible: !introTransitionDone
-
-        Image {
-            anchors.fill: parent
-            source: "qrc:/splash_screen.png"
-            opacity: 1 - root.introFrac
-        }
-
-        Image {
-            id: introCar
-            x: introCarStartX + (introCarEndX - introCarStartX) * root.introFrac
-            y: introCarStartY + (introCarEndY - introCarStartY) * root.introFrac
-            width: introCarStartW
-            height: introCarStartH
-            source: "qrc:/splash_car_start.png"
-            opacity: 1 - root.introFrac
-
-            transform: Scale {
-                origin.x: 0
-                origin.y: 0
-                xScale: 1 + (introCarEndW / introCarStartW - 1) * root.introFrac
-                yScale: 1 + (introCarEndH / introCarStartH - 1) * root.introFrac
-            }
         }
     }
 

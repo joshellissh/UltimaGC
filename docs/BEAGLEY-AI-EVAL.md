@@ -179,6 +179,17 @@ board's off-ribbon 5 V/control harness and the SoC-side DT/driver plumbing.
 
 ## Boot time: can it match the current ~4.5 s to first Qt frame?
 
+> **Measured 2026-08-30 (supersedes the inference below):** Falcon works on
+> J722S with the stock bb.org R5 SPL (see `beagleplay-falcon/NOTES.md`,
+> "Falcon on BeagleY-AI: working"), and after two boot-time passes the
+> BeagleY-AI does power-on → first Qt frame in **5.3 s cold on SD with the
+> GPU (eglfs_kms + PowerVR) on** (5.6 s on an image's very first boot) —
+> from 9.3 s at first bring-up. The AM625
+> figure it's compared with is eMMC + linuxfb; the remaining gap is mostly
+> the R5 SPL streaming a 23 MB FIT at HS speed (1.2 s) and PowerVR/KMS
+> init inside QGuiApplication (0.45 s). Details and the per-change table:
+> NOTES.md "BeagleY-AI boot-time work" (cycles 1 and 2).
+
 **Current AM625 baseline [verified on-hardware, see NOTES.md]:** power-on → first
 Qt frame ≈ **4.5 s on eMMC** (kernel-clock to first frame ≈ 3.3 s), down from a
 ~8.9 s baseline. The win is *mostly* TI **Falcon mode** — R5 SPL loading the

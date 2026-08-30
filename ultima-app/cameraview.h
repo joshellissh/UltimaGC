@@ -60,6 +60,11 @@ public:
 
     Renderer *createRenderer() const override;
 
+protected:
+    // Don't build the FBO node (renderer + FBO + shader compiles) for a
+    // view that isn't visible yet — see cameraview.cpp.
+    QSGNode *updatePaintNode(QSGNode *node, UpdatePaintNodeData *data) override;
+
 signals:
     void feedChanged();
     void mirrorViewSideChanged();

@@ -158,6 +158,10 @@ Item {
         source: "qrc:/car_360.png"
         scale: calibrationStore.geometry.carIconScale
         visible: !showPlaceholder
+        // This screen is instantiated hidden at boot; a hidden Image still
+        // decodes its source synchronously unless told otherwise, and this
+        // one is 1600x720.
+        asynchronous: true
     }
 
     // Calibration settings entry point — subtle by design (this is a tuning
