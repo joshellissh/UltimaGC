@@ -11,14 +11,43 @@
 # file instead of sharing WKS_FILE across both machines only to match this
 # layer's existing one-file-per-machine convention.
 #
-# Not yet verified on real hardware (no board in hand as of 2026-08-28) —
-# this machine's boot chain is HS-FS signed (tiboot3-j722s-hs-fs-evm...),
-# unlike beagleplay-ti's GP boot, which is new territory this project
-# hasn't exercised before. Confirm the ROM actually finds tiboot3.bin in p1
-# the same way once hardware is available, same as the original board's
-# own hardware-verified correction (see ultima-beagleplay.wks.in header).
+# Hardware-verified 2026-08-29 (board in hand): the ROM does find
+# tiboot3.bin in p1 the same way as beagleplay-ti's GP boot, resolving the
+# caveat this header used to carry. Two real fixes landed the same day, both
+# found by booting for real over serial (see beagleplay-falcon/NOTES.md
+# "Resolved: the hang was never a hang — display works end to end" for the
+# full story, including a red-herring "hang" that was actually just missing
+# console=/earlycon, not a real freeze):
+#
+# 1. `dtb=k3-am67a-beagley-ai.dtb` sourceparam below. Without it,
+#    bootimg-efi's grub.cfg has no `devicetree` line, and GRUB/the EFI stub
+#    silently falls back to whatever minimal internal control DTB U-Boot
+#    itself was using — which has `main_i2c1` (the bus carrying this
+#    board's it66122 HDMI bridge chip) disabled and no bridge node at all,
+#    since U-Boot doesn't need HDMI for its own operation. Confirmed by
+#    diffing /sys/firmware/fdt off the live kernel against both candidate
+#    DTBs — it matched U-Boot's, not this build's. With the sourceparam,
+#    bootimg-efi (see oe-core's bootimg-efi.py `_copy_additional_files` /
+#    `do_configure_grubefi`) both copies the real kernel-target dtb onto
+#    this FAT partition and adds `devicetree /k3-am67a-beagley-ai.dtb` to
+#    grub.cfg for us — no separate IMAGE_BOOT_FILES or grub.cfg bbappend
+#    needed, this one sourceparam does both.
+# 2. `console=ttyS2,115200n8 earlycon` added to the bootloader append
+#    below. Same UART instance name TI's own am64xx.inc hardcodes into
+#    TI_WKS_BOOTLOADER_APPEND for that family — j722s/k3.inc's own default
+#    is empty (`?=` ""), so this board got no console= at all before. Not
+#    just cosmetic: without earlycon specifically, a from-cold boot with
+#    the correct (fuller) devicetree above produces zero serial output at
+#    all even though the kernel boots fine — looks exactly like a hard
+#    hang and easy to misdiagnose as one (this project did, briefly).
+#
+# Confirmed end to end on real hardware, including one fully unattended
+# reboot straight through autoboot (no manual U-Boot intervention): main_i2c1
+# registers, the it66121 HDMI bridge chip probes, tidss initializes DRM and
+# creates /dev/fb0, ultima-splash succeeds, and ultima-app renders real
+# frames (first frame ~1.2s after launch, stable, zero crashes).
 
-bootloader --timeout=3 --append="rootfstype=ext4 ${TI_WKS_BOOTLOADER_APPEND}"
-part --source bootimg-efi --sourceparams="loader=${EFI_PROVIDER}" --fstype=vfat --label boot --active --align 1024 --use-uuid --fixed-size 128M
+bootloader --timeout=3 --append="rootfstype=ext4 console=ttyS2,115200n8 earlycon ${TI_WKS_BOOTLOADER_APPEND}"
+part --source bootimg-efi --sourceparams="loader=${EFI_PROVIDER},dtb=k3-am67a-beagley-ai.dtb" --fstype=vfat --label boot --active --align 1024 --use-uuid --fixed-size 128M
 part / --source rootfs --fstype=ext4 --label root --align 1024 --use-uuid --no-fstab-update
 part /data --fstype=ext4 --label data --fixed-size 16M --align 1024

@@ -5004,6 +5004,71 @@ is separately untested territory, real transplant work not a small config
 change) is unaffected by anything found this session and still stands as
 the actual scope estimate for that work.
 
+### The display fix, baked into the Yocto build (2026-08-29, later same day)
+
+Everything in the section above was applied by hand, live, over SSH/serial —
+real on the physical card, but not reproducible from a fresh `./build.sh`.
+Folded both fixes into `beagley-ai/meta-ultima-beagley-ai-src/wic/ultima-beagley-ai.wks.in`
+itself — no separate `.bbappend` or `IMAGE_BOOT_FILES` needed, both turned
+out to be controllable from the wks file alone once the actual mechanism was
+read (oe-core's `scripts/lib/wic/plugins/source/bootimg-efi.py`, not
+guessed):
+
+- **`part --source bootimg-efi --sourceparams="loader=${EFI_PROVIDER},dtb=k3-am67a-beagley-ai.dtb"`**
+  — the `dtb=` sourceparam is `bootimg-efi`'s own built-in mechanism for
+  exactly this: `_copy_additional_files()` copies `$DEPLOY_DIR_IMAGE/<dtb>`
+  onto the FAT partition, and `do_configure_grubefi()` appends a
+  `devicetree /<dtb>` line to the generated `grub.cfg` — both problems (dtb
+  missing from p1, grub.cfg not referencing it) from one parameter. No
+  `IMAGE_BOOT_FILES` involved at all; that variable exists in the same
+  plugin (`do_configure_partition`) for a different purpose (arbitrary
+  extra files onto the ESP), overkill and unnecessary here.
+- **`bootloader --append="rootfstype=ext4 console=ttyS2,115200n8 earlycon ${TI_WKS_BOOTLOADER_APPEND}"`**
+  — `bootloader.append` from the wks file is what `do_configure_grubefi`
+  puts on the `linux` line's cmdline. `TI_WKS_BOOTLOADER_APPEND` itself
+  (`meta-ti-bsp/conf/machine/include/k3.inc`) defaults to empty for the
+  j722s/k3 family — only `am64xx.inc` hardcodes `console=ttyS2,115200n8`
+  for its own machines, confirmed by grepping every definition of that
+  variable across `tisdk/sources/`. Added the console/earlycon args
+  directly in this layer's own wks file instead of trying to override the
+  shared TI variable from a machine conf this layer doesn't own — simpler
+  and fully localized to this board.
+
+**Rebuilt and verified against the actual artifact, not assumed:**
+`BOARD=beagley-ai ./build.sh tisdk-base-image` — 8918/8918 tasks, all
+succeeded (mostly served from sstate, as expected for a wic/wks-only
+change). Extracted p1 from the freshly built `.wic.xz` the same way as
+earlier this session (`dd`+`mtools`, no loop device — still unavailable in
+this Docker/OrbStack setup): `k3-am67a-beagley-ai.dtb` (97448 bytes, exact
+match to the deploy dir's copy) is now present at the FAT partition root,
+and `grub.cfg` reads:
+```
+serial --unit=0 --speed=115200 --word=8 --parity=no --stop=1
+default=boot
+timeout=3
+menuentry 'boot'{
+linux /Image root=PARTUUID=076c4a2a-02 rootwait rootfstype=ext4 console=ttyS2,115200n8 earlycon  ro
+devicetree /k3-am67a-beagley-ai.dtb
+}
+```
+**One difference from the hand-verified config worth flagging, not yet
+re-confirmed on hardware**: the plugin always emits `linux` before
+`devicetree` (see `do_configure_grubefi`'s fixed write order) — the manual
+fix applied directly to the card earlier this session had `devicetree`
+*before* `linux`. GRUB's `linux`/`devicetree`/`initrd` commands are loader
+*setup* calls (actual boot happens once the menuentry script finishes, not
+on the `linux` call itself), so this ordering is expected to be equivalent
+and is exactly what every other OE machine using `bootimg-efi`'s `dtb=`
+sourceparam already relies on — but this specific generated `grub.cfg` has
+not itself been booted on the physical board yet. Do a normal (unattended)
+boot with a freshly flashed card from this build to close that loop before
+treating milestone 1 as fully done from a clean build, not just from the
+hand-patched card.
+
+Not done as part of this: reflashing/rebooting the physical board — this
+was a build-only change, verified by inspecting the `.wic` artifact
+directly, not by touching hardware again this round.
+
 ### Falcon boot mode for BeagleY-AI — feasibility check (2026-08-28, later same day)
 
 Went looking at what a Falcon fork for j722s would actually involve, before
