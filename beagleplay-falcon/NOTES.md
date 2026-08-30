@@ -5272,6 +5272,78 @@ Falcon until after first hardware boot (stock, non-Falcon) is confirmed
 working, and revisiting priority then — flagging it here rather than
 defaulting to "keep going."
 
+### Falcon on J722S/BeagleY-AI: dead end, not just deferred (2026-08-29, later same day)
+
+Hardware is now in hand and both the display and USB1/touchscreen fixes are
+verified and baked in (see the two sections above this one). Picked Falcon
+back up to actually resolve the "materially bigger job" open question from
+the feasibility check above, by diffing the real fetched `u-boot-bb.org`
+2025.10 source against `u-boot-ti-staging` 2025.01 (both already present in
+the Docker build volume from this project's own builds) instead of reasoning
+from docs. Conclusion: **the C-code/binman gap is real but portable — the
+actual blocker is one level lower, and it's final.**
+
+**What turned out to be fine (contrary to the "conflict-heavy cherry-pick"
+worry above):** the falcon SPL logic in TI staging's `common.c`/`r5/common.c`
+(~150 lines: `spl_start_uboot()`, `k3_falcon_prep()`,
+`k3_falcon_fdt_fixup()`, `k3_r5_falcon_bootmode()`) turned out to be
+self-contained — every API it calls (`spl_start_uboot` as a weak SPL hook,
+`struct spl_image_loader`, `spl_image_fdt_addr`, `spl_loader_name`) exists
+verbatim in bb.org's tree, and it doesn't touch the ~250 unrelated lines of
+TI-staging-only LPM/wake and clock-fixup code also in that file. Likewise the
+binman side: TI staging's `ti_falcon_template` (in the shared, SoC-generic
+`k3-binman.dtsi`) is absent from bb.org's copy of that file, but bb.org's own
+`k3-am67a-beagley-ai-u-boot.dtsi` already uses the identical
+`insert-template = <&ti_spl_template>` pattern for its normal (non-falcon)
+boot, including the exact same J722S DM firmware
+(`ti-dm/j722s/ipc_echo_testb_mcu1_0_release_strip.xer5f`) and `custMpk.pem`
+signing convention TI's falcon template needs — both already fetched and
+working in this board's current boot. None of that would have been a
+blocker.
+
+**What is a blocker: TI has never published the TIFS stub firmware J722S's
+Falcon fast-path needs.** Both trees' falcon FIT images load a
+`tifsstub-<gp/hs/fs>` image alongside ATF/OP-TEE/DM — this is what lets the
+R5 SPL do falcon's abbreviated security handshake without the normal A53-SPL
+chain. That binary comes from TI's `ti-linux-firmware` git repo via the
+existing `ti-sci-fw` recipe (`meta-ti-bsp/recipes-bsp/ti-sci-fw/`, already
+built for this board's normal boot — its `do_deploy:k3r5()` unconditionally
+installs `ti-fs-stub-firmware-*` from that repo, whatever exists). Checked
+the actual fetched repo (`tisdk/downloads/git2/git.ti.com.git.processor-
+firmware.ti-linux-firmware.git`) directly: **`ti-fs-stub-firmware-*` exists
+only for `am62x`/`am62ax`/`am62px`** — exactly the four machines TI's own
+`ti-falcon` Yocto override already covers (am62xx-evm, am62axx-evm,
+am62pxx-evm, am62xx-lp-evm). Zero files matching `j722s`/`am67a` on the
+pinned SRCREV. Re-checked live against a fresh `git fetch` of every branch
+TI publishes (`main`, `ti-linux-firmware-6.12.y-next`, etc.) — the `-next`
+branch's tip commit was 12 days old at the time of this check and had just
+touched J722S IPC firmware in the same commit, so this isn't a stale-mirror
+artifact. Still nothing for J722S on any branch.
+
+**So this isn't "TI hasn't wired the config yet," it's "TI hasn't shipped
+the firmware yet."** No amount of backporting C code or binman dtsi nodes
+fixes a missing signed firmware blob only TI can produce. Falcon is off the
+table for this board until TI publishes J722S stub firmware upstream — worth
+periodically re-checking (`git fetch` that repo, grep for
+`ti-fs-stub-firmware-j722s` across branches), but not worth further
+engineering time until that happens. This also means
+`docs/BEAGLEY-AI-EVAL.md`'s "family-capable... reachable" framing for Falcon
+was wrong on this specific point — the SPL bootflow being shared across the
+am62xxx-extended family (true, per U-Boot's own J722S board doc) does not
+imply TI has released the same firmware for every member of that family.
+
+**With Falcon closed off, the GRUB/console-spam lever is not throwaway
+anymore.** Earlier framing was "don't bother trimming GRUB, Falcon deletes
+that path entirely" — that's now moot. `ultima-beagley-ai.wks.in` already
+carries `console=ttyS2,115200n8` (needed for the display fix) with no
+`quiet`, the same synchronous-UART-spam shape BeaglePlay measured at ~3.3s/
+~38KB of console text before its own `quiet` fix. Added `quiet` and
+`vt.global_cursor_default=0` to the bootloader append (same reasoning as
+BeaglePlay's falcon-cmdline fix, see "Fix: custom layer
+`meta-falcon-beagleplay`" above) — not yet re-measured on this board's own
+boot-log capture, so treat as applied-by-analogy until confirmed with a real
+serial capture.
+
 ### Deferred (not this milestone)
 
 Falcon boot (see feasibility check just above — bigger than expected, defer/

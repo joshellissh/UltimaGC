@@ -46,8 +46,29 @@
 # registers, the it66121 HDMI bridge chip probes, tidss initializes DRM and
 # creates /dev/fb0, ultima-splash succeeds, and ultima-app renders real
 # frames (first frame ~1.2s after launch, stable, zero crashes).
+#
+# 2026-08-29, later same day: `quiet` + `vt.global_cursor_default=0` added
+# below. TI Falcon boot mode was investigated as the big fast-boot lever
+# (same as BeaglePlay), but is a dead end on this SoC specifically: TI's own
+# ti-falcon Yocto wiring only covers am62xx/am62axx/am62pxx/am62xx-lp, and
+# more fundamentally, TI has never published the TIFS stub firmware
+# (ti-fs-stub-firmware-j722s-*) the Falcon fast-path needs to do its
+# security handshake — confirmed absent on every branch tip of TI's
+# ti-linux-firmware repo (re-checked live, including a branch updated 12
+# days before this note). Not a missing-config problem, a
+# TI-hasn't-shipped-it problem — see beagleplay-falcon/NOTES.md "Falcon on
+# J722S/BeagleY-AI: dead end" for the full trail. With Falcon off the
+# table, the console=ttyS2 line just above is the same synchronous
+# 115200-baud UART bottleneck BeaglePlay had before its own `quiet` fix
+# (measured there at ~3.3s/~38KB of console text on the critical path
+# before tidss inits, plus systemd's own [ OK ]/Started spam, which `quiet`
+# also suppresses). `vt.global_cursor_default=0` hides the blinking fbcon
+# text cursor on the HDMI output between tidss coming up and ultima-app
+# taking the framebuffer (same fix BeaglePlay and RPi5/Buildroot carry).
+# Not yet re-measured on this board's own boot-log capture — do that before
+# calling this win closed.
 
-bootloader --timeout=3 --append="rootfstype=ext4 console=ttyS2,115200n8 earlycon ${TI_WKS_BOOTLOADER_APPEND}"
+bootloader --timeout=3 --append="rootfstype=ext4 console=ttyS2,115200n8 earlycon quiet vt.global_cursor_default=0 ${TI_WKS_BOOTLOADER_APPEND}"
 part --source bootimg-efi --sourceparams="loader=${EFI_PROVIDER},dtb=k3-am67a-beagley-ai.dtb" --fstype=vfat --label boot --active --align 1024 --use-uuid --fixed-size 128M
 part / --source rootfs --fstype=ext4 --label root --align 1024 --use-uuid --no-fstab-update
 part /data --fstype=ext4 --label data --fixed-size 16M --align 1024

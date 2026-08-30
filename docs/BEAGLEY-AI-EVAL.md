@@ -212,18 +212,38 @@ Splitting the question by boot half:
     list.**
 
 ### What that means
-You would **extend the `ti-falcon` wiring to J722S yourself**, following the
-`am62pxx` / `am62axx` pattern (machine override, R5 falcon defconfig fragment,
-`tispl_falcon.bin` packaging). **Precedent exists:** this project already closed
-the same kind of gap on AM625 (NOTES.md: meta-ti "ships Falcon Mode support, but
-it's wired [specifically]… Missing package/config wiring"). So it's bounded
-config/recipe work, not a research spike.
 
-**Boot verdict:** the **~4.5 s-class first-frame target is realistically
-reachable** on J722S (same family bootflow, Falcon is family-level) — *provided*
-the Falcon enablement is done and validated. No published J722S Falcon numbers
-exist, so it's plausible-but-unproven until measured. Plan for first-boot
-DDR/image differences to shake out.
+**Update (2026-08-29, hardware in hand): this turned out to be a dead end, not
+bounded work — corrected below, see `beagleplay-falcon/NOTES.md` "Falcon on
+J722S/BeagleY-AI: dead end" for the full trail.** The C-code/binman gap
+itself *was* portable (bb.org's fork lacks the falcon SPL logic and binman
+template TI staging has, but every API/firmware-reference it would need
+already exists in bb.org's tree). The actual blocker is one level lower: **TI
+has never published the TIFS stub firmware (`ti-fs-stub-firmware-j722s-*`)
+the falcon fast-path's security handshake depends on** — confirmed absent on
+every branch of TI's `ti-linux-firmware` repo, rechecked live against a fresh
+fetch (a branch updated 12 days prior still had nothing for J722S). It exists
+only for the four machines TI's own `ti-falcon` override already lists
+(am62xx/am62axx/am62pxx/am62xx-lp). This is a TI-hasn't-shipped-it problem,
+not a missing-wiring problem — no amount of Yocto/patch work here fixes it.
+The "family-capable" framing below was based on the SPL bootflow being
+shared across the am62xxx-extended family (true, per U-Boot's own J722S
+board doc) — that does **not** imply TI has released the same firmware for
+every SoC in that family, which is the part that actually matters.
+
+**Original (now-superseded) framing, kept for context:** You would extend
+the `ti-falcon` wiring to J722S yourself, following the `am62pxx` /
+`am62axx` pattern (machine override, R5 falcon defconfig fragment,
+`tispl_falcon.bin` packaging). Precedent exists: this project already closed
+the same kind of gap on AM625 (NOTES.md: meta-ti "ships Falcon Mode support,
+but it's wired [specifically]… Missing package/config wiring"). This was
+believed to be bounded config/recipe work — it was not; see the update above.
+
+**Boot verdict:** the ~4.5 s-class first-frame target is **not reachable via
+Falcon on this board** until TI publishes J722S stub firmware. The remaining
+lever on this SoC is OS-level: suppressing UART console spam (`quiet`) and
+trimming the GRUB timeout, the same non-Falcon-specific wins BeaglePlay's own
+numbers partially came from.
 
 ---
 
