@@ -5355,3 +5355,200 @@ MCP2515 HAT on the real MCU_SPI0, not the header's default software-SPI shim
 — see `docs/BEAGLEY-AI-EVAL.md`'s CAN section), WiFi, RTC, and — obviously —
 anything requiring the physical board: flashing, serial verification, and the
 eglfs switch-back.
+
+### Falcon on BeagleY-AI: working (2026-08-30) — the "dead end" above was wrong
+
+**Status: Falcon boots on the BeagleY-AI, hardware-verified, first attempt.**
+Chain is now ROM → R5 SPL (`tiboot3.bin`) → ATF → OP-TEE → kernel. No A53
+SPL, no U-Boot proper, no GRUB. Measured on the bench (timed serial capture,
+`reboot` from a running system, times from first byte after reset):
+
+| event (serial, s after first byte)   | stock GRUB chain | falcon |
+|--------------------------------------|-----------------:|-------:|
+| R5 SPL banner                        |             0.92 |   0.96 |
+| "Starting ATF on ARM64 core"         |             1.16 |   3.02 |
+| A53 SPL banner                       |             1.43 |      — |
+| GRUB menu (then 3 s `timeout=3`)     |             6.07 |      — |
+| kernel time zero (derived)           |            ~10.9 |   ~3.4 |
+| **ultima-app first frame rendered**  |        **16.55** | **10.16** |
+| (kernel-relative first frame)        |             5.64 |   6.73 |
+
+Logs: `boot-logs/beagley-ai-stock-grub-reboot-timed-20260830T101826.txt` and
+`boot-logs/beagley-ai-falcon-reboot-timed-20260830T102001.txt`, same board,
+same card, consecutive reboots (`bench-compare` swap of `tiboot3.bin` only).
+**−6.4 s, 39 % of the total.** Both runs already had `quiet` on the cmdline.
+Where the stock chain's time went: U-Boot proper alone 1.4 → 6.0 s (its
+own probing, env, EFI), then GRUB's 3 s menu timeout plus ~1.9 s to load the
+40 MiB `Image` through the EFI stub. Falcon's ~2 s between the SPL banner
+and ATF is the R5 SPL streaming that same `Image` off the SD card (see the
+"next lever" note at the end). One oddity worth a look later: kernel-relative
+time to first frame is ~1.1 s *longer* under falcon (6.73 vs 5.64 s) — the
+kernel starts ~7 s earlier in wall time, so something it waits on (a PHY,
+DM/TIFS, the SD card re-init that U-Boot proper used to have done already)
+is plausibly on the critical path now. Not chased; falcon still wins by a
+wide margin and that's a kernel-side investigation, not a bootloader one.
+
+The first falcon boot ever on this board (bring-up log
+`boot-logs/beagley-ai-falcon-bringup-20260830T100742.txt`) came up
+identically — 10.20 s to first frame — so the number is repeatable, not a
+warm-cache fluke.
+
+The section directly above concluded Falcon was blocked on a TIFS stub
+firmware TI never published for J722S. That was a misread of what the stub
+is for. Two independent data points killed it: (1) a TI E2E user got R5-SPL
+→ ATF → OP-TEE → Linux booting on a **J722S HS-FS EVM** (thread 1376134,
+SDK 9.2) with a hand-built FIT and no stub, following the recipe TI's own
+Keerthy J posted for J721S2 (thread 1334006); (2) TI's MCU+ SDK `main`
+grew `FALCON_MODE=1` support for `j722s-evm` in March 2026
+(`tools/boot/linuxAppimageGen/board/j722s-evm/config.mak`, examples
+`sbl_sd_hlos`) — an SBL-based variant, also stub-free. The `tifsstub-*`
+image in TI-staging's `ti_falcon_template` mirrors what AM62x's *normal*
+`tispl` template carries for low-power-mode resume; this board's normal
+boot already runs without one, so its falcon path doesn't need one either.
+`docs/BEAGLEY-AI-EVAL.md` corrected accordingly.
+
+**How it works here (no falcon code at all — this is the whole trick).**
+bb.org's stock R5 SPL already loads a FIT whose `firmware` is ATF and whose
+`loadables` are OP-TEE + the DM firmware, then starts ATF on the A53 and
+drops into the DM itself (`arch/arm/mach-k3/r5/common.c` `jump_to_image`).
+`tifalcon.bin` is that same FIT with the A53 SPL swapped for the kernel
+`Image` and the DTB as two more plain loadables (`type = "standalone"`),
+placed exactly where TF-A's compiled-in constants make it jump:
+`PRELOADED_BL33_BASE` (BL33 = the kernel) and `K3_HW_CONFIG_BASE` (x0 =
+DTB). ATF → OP-TEE → kernel is then the normal TF-A flow; the R5 SPL never
+knows a kernel was involved. `common/spl/spl_fit.c` only appends/fixes up
+an FDT for `os = u-boot` (or `linux` under `SPL_OS_BOOT`, unset here) so
+neither image is touched, and on this HS-FS part unsigned images just get
+the "Did not detect image signing certificate. Skipping authentication"
+warning (`arch/arm/mach-k3/security.c`, one per image, five in the log).
+Nothing about this is J722S-specific beyond addresses.
+
+**Memory map** (the only thing that had to change; DDR starts at
+`0x80000000`, the board has 4 GiB):
+
+| addr         | what                     | set by                                  |
+|--------------|--------------------------|-----------------------------------------|
+| `0x80000000` | ATF                      | `CONFIG_K3_ATF_LOAD_ADDR` (unchanged)   |
+| `0x80080000` | FIT metadata buffer      | `CONFIG_SPL_LOAD_FIT_ADDRESS` (unchanged) |
+| `0x82000000` | kernel `Image` (~43 MiB incl. BSS) | TF-A `PRELOADED_BL33_BASE` (was `0x80080000`) |
+| `0x88000000` | kernel DTB               | TF-A `K3_HW_CONFIG_BASE` (was `0x82000000`) |
+| `0x89000000` | DM firmware staging      | binman default (unchanged)              |
+| `0x8c000000` | R5 SPL relocated stack   | `CONFIG_SPL_STACK_R_ADDR` (was `0x82000000` = kernel) |
+| `0x9e800000` | OP-TEE                   | `CONFIG_K3_OPTEE_LOAD_ADDR` (unchanged) |
+
+TF-A's defaults (BL33 `0x80080000`, DTB `0x82000000`) are what TI's MCU+
+SDK uses for J722S, but they assume a kernel under ~31 MiB — this build's
+uncompressed `Image` is 40 MiB on disk (42,025,472 B, `image_size` in the
+arm64 header 0x2950000) and would overrun the DTB slot. The two TF-A
+overrides are the exact pair meta-ti's `ti-falcon` DISTROOVERRIDE applies
+for TI's own EVMs (`trusted-firmware-a-ti.inc`), just scoped to
+`beagley-ai` here. OP-TEE is built `CFG_DT=n`/`CFG_EXTERNAL_DT=n` and never
+touches the DTB, so nothing else cares about the move.
+
+**Two DTB fixups U-Boot proper used to do at runtime, now baked at build
+time** (`recipes-bsp/ultima-falcon-fit`, `fdtput` on the deployed DTB):
+
+1. `/chosen/bootargs` — nothing populates it anymore. `root=/dev/mmcblk1p2`
+   rather than `PARTUUID=`: only one storage device on this board, and the
+   MBR disk signature is assigned by wic per build and re-patched by
+   `flash.sh`, so a build-time DTB can't know it. (The bench test used the
+   card's live PARTUUID; both verified.)
+2. `/reserved-memory/tfa@9e780000` `reg` → `0x80000000`/`0x80000`. The
+   upstream DT reserves ATF at `0x9e780000`; bb.org actually loads it at
+   `0x80000000` and U-Boot proper rewrites the node in `ft_system_setup`
+   (`arch/arm/mach-k3/j722s/j722s_fdt.c`). **Under GRUB this mismatch was
+   silently masked**: the kernel was booting via the EFI stub, taking
+   memory from U-Boot's UEFI memory map (which reserved ATF's real location)
+   and ignoring the DT's `reserved-memory` — the live kernel's DT still said
+   `tfa@9e780000` while ATF sat at `0x80000000`. With Falcon the DT is
+   authoritative; without this fixup the kernel would hand
+   `0x80000000-0x80080000` out as RAM and corrupt the running ATF.
+
+Things checked on the falcon-booted system and found fine without any
+U-Boot help: Ethernet MAC (same `04:25:e8:...`, `am65-cpsw-nuss` reads it
+from efuse via `ti,syscon-efuse`; DHCP gave the same IP), `MemTotal` 3.78
+GiB from the DT `memory` node, `/dev/fb0` + both DRM cards, `ultima-app`
+active, `optee@9e800000` reservation (already correct in the upstream DT).
+
+**What was built (all in `beagley-ai/meta-ultima-beagley-ai-src`):**
+
+- `recipes-bsp/trusted-firmware-a/trusted-firmware-a_%.bbappend` —
+  `EXTRA_OEMAKE:append:beagley-ai = " PRELOADED_BL33_BASE=0x82000000
+  K3_HW_CONFIG_BASE=0x88000000"`.
+- `recipes-bsp/u-boot/u-boot-bb.org_%.bbappend` +
+  `u-boot-bb.org/am67a_beagley_ai_r5_falcon.config` —
+  `UBOOT_CONFIG_FRAGMENTS:beagley-ai-k3r5`, copied into `${S}/configs/`
+  in `do_configure:prepend` (same lesson meta-falcon-beagleplay learned:
+  the merge rule only looks there). Sets `CONFIG_SPL_STACK_R_ADDR=0x8c000000`
+  and `CONFIG_SPL_FS_LOAD_PAYLOAD_NAME="tifalcon.bin"` — the payload rename
+  is what lets the stock `tispl.bin` stay on the card untouched so
+  swapping `tiboot3.bin` alone selects the mode.
+- `recipes-bsp/ultima-falcon-fit/` — assembles `tifalcon.bin` from
+  `DEPLOY_DIR_IMAGE` (`bl31.bin`, `optee/bl32.bin`, `ti-dm/j722s/...xer5f`,
+  `Image`, the DTB) with `mkimage -f tifalcon.its -E -B 0x1000`.
+  **`-E` is not optional**: the R5 SPL reads the FIT metadata to
+  `0x80080000` and streams each image to its own load address; without
+  external data the whole 41 MiB would land at `0x80080000`, on top of the
+  kernel's slot. `do_compile[file-checksums]` on the inputs so a rebuilt
+  kernel/DTB/bl31 re-assembles it instead of leaving a stale FIT in deploy.
+- `wic/ultima-beagley-ai.wks.in` — p1 is now `bootimg-partition` with
+  `IMAGE_BOOT_FILES:beagley-ai = "tiboot3.bin tifalcon.bin"` (set in
+  `tisdk-base-image.bbappend` along with the `do_image_wic` dependency on
+  `ultima-falcon-fit:do_deploy`). GRUB, `Image`, the dtb copy, `tispl.bin`
+  and `u-boot.img` are gone from the card — a falcon build's own `tispl.bin`
+  wouldn't work anyway (its bl31 jumps to `0x82000000`, where no A53 SPL
+  is).
+- `beagley-ai/falcon/build-tifalcon.sh` — bench-only: same assembly run by
+  hand inside the `falcon-yocto` container against the build volume's
+  deploy dir, for iterating on the FIT/DTB without a bitbake round trip.
+  This is what produced the first booting image.
+
+**Bring-up procedure that worked (for the record / next board):** rebuild
+just `trusted-firmware-a` and `mc:k3r5:u-boot-bb.org` (`BOARD=beagley-ai
+./build.sh "trusted-firmware-a mc:k3r5:u-boot-bb.org"`, ~2 min with sstate),
+`build-tifalcon.sh`, `scp` `tifalcon.bin` + the new `tiboot3.bin` (as
+`tiboot3-falcon.bin`) onto the board's mounted boot partition
+(`/run/media/boot-mmcblk1p1`, rw), `cp tiboot3.bin tiboot3.bin.orig` first,
+`cp tiboot3-falcon.bin tiboot3.bin; sync; reboot`. **Fallback if it doesn't
+come up**: card into the Mac, `tiboot3.bin.orig` back over `tiboot3.bin` —
+the stock `tispl.bin`/`u-boot.img`/GRUB set is still there on a card
+flashed before this change. There is no interactive bootloader at all in
+falcon mode (no U-Boot prompt, no GRUB menu); every recovery is a file swap
+on the card.
+
+**Kernel load time is the obvious next lever, not more bootloader work.**
+The R5 SPL streams the 40 MiB `Image` off the SD card over the SPL's MMC
+driver — about 1.8 s of the ~3 s from reset to "Starting ATF". A pruned
+kernel config (this is bb.org's kitchen-sink defconfig; TI's SDK Image is
+about half the size) or a faster SPL MMC mode would each cut directly into
+that. Everything after "Starting ATF" is kernel + userspace and unchanged
+from the GRUB chain.
+
+**Bench mistake worth not repeating (2026-08-30, same session):** pushing a
+second `tifalcon.bin` next to the first on a card that still carried the
+stock files (`Image` 40 MiB + `tispl.bin`/`u-boot.img`/GRUB) left ~1 MiB
+free on the 128 MiB boot partition; the `cp` over `tifalcon.bin` failed
+with ENOSPC, the file was left truncated, and the reboot that followed hit
+`spl_load_simple_fit: can't load image loadables index 2 (ret = -5)` →
+`SPL: failed to boot from all boot devices`. In falcon mode that is the
+end: no U-Boot prompt, no GRUB, no network — card out, into the Mac, fix
+the file, card back, power-cycle. Rules: `df` the boot partition before
+copying a FIT onto it (it needs 41 MiB free, or 82 MiB to keep the old one
+as a fallback), copy to a temp name and `mv` over the live name only after
+checking the size, and never script a reboot after a copy that wasn't
+checked. Also: two readers on the serial tty split the bytes between them
+and garble the log — kill the old `cat` before starting a new capture.
+
+**Recipe-built FIT validated on hardware (2026-08-30, after the recovery
+above).** The bitbake-produced `tifalcon.bin` (the one the wic image
+carries, `root=/dev/mmcblk1p2` baked in, md5 `a7635d64…`) was put on the
+card in the Mac and the board cold power-cycled: **9.26 s from first serial
+byte to ultima-app's first frame** (kernel-relative 6.76 s, log
+`boot-logs/beagley-ai-falcon-recipe-mmcblk1p2-timed-20260830T110338.txt`),
+`/proc/cmdline` is the baked string, `/` is `/dev/mmcblk1p2` ext4 ro,
+`ultima-app` active, SSH up ~22 s after power-on. The 10.16 s figure above
+was a warm `reboot`; a power-cycle is ~0.9 s quicker to the SPL banner. What
+is *not* yet exercised is a full `flash.sh` of a wic built with the new
+`.wks.in` (the card in use was flashed pre-falcon and hand-patched) — the
+partition layout and p1 contents were checked with `mdir` on the built wic
+instead.

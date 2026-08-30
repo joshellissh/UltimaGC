@@ -10,6 +10,17 @@ mainline U-Boot because TI Falcon boot mode (R5 SPL jumping straight to the kern
 skipping A53 SPL/U-Boot-proper/GRUB — the biggest boot-time win found on this board)
 needs logic that only exists in that fork.
 
+A second board, BeagleY-AI (AM67A/J722S), is being brought up in `beagley-ai/`
+(its own Yocto layer, `beagley-ai/meta-ultima-beagley-ai-src/`, built by the same
+`beagleplay-falcon/build.sh` with `BOARD=beagley-ai`; notes live in the BeagleY-AI
+sections at the end of `beagleplay-falcon/NOTES.md`, evaluation in
+`docs/BEAGLEY-AI-EVAL.md`). It uses BeagleBoard.org's `u-boot-bb.org` fork, not
+TI's, and **Falcon works there without any TI falcon code** (as of 2026-08-30): the
+stock R5 SPL loads a FIT carrying ATF + OP-TEE + DM + kernel + DTB
+(`tifalcon.bin`, built by `recipes-bsp/ultima-falcon-fit`), with TF-A rebuilt for
+the kernel/DTB addresses. Don't trust the older "Falcon is a dead end on J722S"
+notes — they're superseded, and say so.
+
 The project previously also shipped on Raspberry Pi 5 via a separate Buildroot build
 (`br2-external/`, `SETUP-RPI5.md`). That board and its whole build system have been
 removed — don't go looking for `br2-external/`, `ultima_rpi5_defconfig`, or

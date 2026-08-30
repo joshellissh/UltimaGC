@@ -1,74 +1,33 @@
-# short-description: Ultima gauge cluster image: stock boot/root + ext4 /data
-# long-description: Adds a small ext4 /data partition (p3) to meta-ti-bsp's
-# stock sdimage-2part-efi.wks.in, same as ultima-beagleplay.wks.in for the
-# original board — see that file for the full history/reasoning (p1 must
-# stay the vfat --source bootimg-efi partition, root stays partition #2,
-# --no-fstab-update on root, resize_rootfs.service masked in
-# tisdk-base-image.bbappend). Every line here is generic TI/EFI wic-plugin
-# syntax (${TI_WKS_BOOTLOADER_APPEND}, ${EFI_PROVIDER}, bootimg-efi source),
-# nothing AM625-specific, so this is a straight copy for BeagleY-AI
-# (AM67A/J722S) rather than a real port — kept as a separate per-machine
-# file instead of sharing WKS_FILE across both machines only to match this
-# layer's existing one-file-per-machine convention.
+# short-description: Ultima gauge cluster image (falcon boot): SD boot + root + ext4 /data
+# long-description: Three partitions on the SD card (this board has no eMMC):
+#   p1  vfat "boot"  tiboot3.bin (falcon-configured R5 SPL) + tifalcon.bin
+#                    (ATF + OP-TEE + DM + kernel Image + DTB in one FIT) —
+#                    that is the whole boot chain: R5 SPL -> ATF -> OP-TEE ->
+#                    kernel. No A53 SPL, no U-Boot proper, no GRUB, no
+#                    separate Image/dtb/grub.cfg on the card. The kernel
+#                    cmdline lives in the DTB inside tifalcon.bin (see
+#                    recipes-bsp/ultima-falcon-fit).
+#   p2  ext4 "root"  rootfs, mounted read-only (--no-fstab-update: the stock
+#                    fstab's `/dev/root / auto ro` is what we want)
+#   p3  ext4 "data"  the only persistent writable partition (odometer etc.),
+#                    mounted by ultima-data-mount
 #
-# Hardware-verified 2026-08-29 (board in hand): the ROM does find
-# tiboot3.bin in p1 the same way as beagleplay-ti's GP boot, resolving the
-# caveat this header used to carry. Two real fixes landed the same day, both
-# found by booting for real over serial (see beagleplay-falcon/NOTES.md
-# "Resolved: the hang was never a hang — display works end to end" for the
-# full story, including a red-herring "hang" that was actually just missing
-# console=/earlycon, not a real freeze):
+# History: until 2026-08-30 this was a copy of ultima-beagleplay.wks.in's
+# bootimg-efi layout (GRUB via U-Boot's EFI loader, `dtb=` sourceparam and
+# `console=ttyS2,115200n8 earlycon` on the bootloader line were the two fixes
+# that got this board's display working — see beagleplay-falcon/NOTES.md
+# "Resolved: the hang was never a hang"). Falcon makes all of that moot: the
+# DTB is chosen and the cmdline set at build time in the FIT, so the wks has
+# nothing bootloader-related left to say. The stock (GRUB) chain from a
+# pre-falcon build remains the fallback on the bench — see NOTES.md "Falcon
+# on BeagleY-AI" for the file swap — but a falcon build's own tispl.bin no
+# longer works (its bl31 jumps to 0x82000000, where the kernel goes, not to
+# the A53 SPL), which is why it isn't on the card at all.
 #
-# 1. `dtb=k3-am67a-beagley-ai.dtb` sourceparam below. Without it,
-#    bootimg-efi's grub.cfg has no `devicetree` line, and GRUB/the EFI stub
-#    silently falls back to whatever minimal internal control DTB U-Boot
-#    itself was using — which has `main_i2c1` (the bus carrying this
-#    board's it66122 HDMI bridge chip) disabled and no bridge node at all,
-#    since U-Boot doesn't need HDMI for its own operation. Confirmed by
-#    diffing /sys/firmware/fdt off the live kernel against both candidate
-#    DTBs — it matched U-Boot's, not this build's. With the sourceparam,
-#    bootimg-efi (see oe-core's bootimg-efi.py `_copy_additional_files` /
-#    `do_configure_grubefi`) both copies the real kernel-target dtb onto
-#    this FAT partition and adds `devicetree /k3-am67a-beagley-ai.dtb` to
-#    grub.cfg for us — no separate IMAGE_BOOT_FILES or grub.cfg bbappend
-#    needed, this one sourceparam does both.
-# 2. `console=ttyS2,115200n8 earlycon` added to the bootloader append
-#    below. Same UART instance name TI's own am64xx.inc hardcodes into
-#    TI_WKS_BOOTLOADER_APPEND for that family — j722s/k3.inc's own default
-#    is empty (`?=` ""), so this board got no console= at all before. Not
-#    just cosmetic: without earlycon specifically, a from-cold boot with
-#    the correct (fuller) devicetree above produces zero serial output at
-#    all even though the kernel boots fine — looks exactly like a hard
-#    hang and easy to misdiagnose as one (this project did, briefly).
-#
-# Confirmed end to end on real hardware, including one fully unattended
-# reboot straight through autoboot (no manual U-Boot intervention): main_i2c1
-# registers, the it66121 HDMI bridge chip probes, tidss initializes DRM and
-# creates /dev/fb0, ultima-splash succeeds, and ultima-app renders real
-# frames (first frame ~1.2s after launch, stable, zero crashes).
-#
-# 2026-08-29, later same day: `quiet` + `vt.global_cursor_default=0` added
-# below. TI Falcon boot mode was investigated as the big fast-boot lever
-# (same as BeaglePlay), but is a dead end on this SoC specifically: TI's own
-# ti-falcon Yocto wiring only covers am62xx/am62axx/am62pxx/am62xx-lp, and
-# more fundamentally, TI has never published the TIFS stub firmware
-# (ti-fs-stub-firmware-j722s-*) the Falcon fast-path needs to do its
-# security handshake — confirmed absent on every branch tip of TI's
-# ti-linux-firmware repo (re-checked live, including a branch updated 12
-# days before this note). Not a missing-config problem, a
-# TI-hasn't-shipped-it problem — see beagleplay-falcon/NOTES.md "Falcon on
-# J722S/BeagleY-AI: dead end" for the full trail. With Falcon off the
-# table, the console=ttyS2 line just above is the same synchronous
-# 115200-baud UART bottleneck BeaglePlay had before its own `quiet` fix
-# (measured there at ~3.3s/~38KB of console text on the critical path
-# before tidss inits, plus systemd's own [ OK ]/Started spam, which `quiet`
-# also suppresses). `vt.global_cursor_default=0` hides the blinking fbcon
-# text cursor on the HDMI output between tidss coming up and ultima-app
-# taking the framebuffer (same fix BeaglePlay and RPi5/Buildroot carry).
-# Not yet re-measured on this board's own boot-log capture — do that before
-# calling this win closed.
-
-bootloader --timeout=3 --append="rootfstype=ext4 console=ttyS2,115200n8 earlycon quiet vt.global_cursor_default=0 ${TI_WKS_BOOTLOADER_APPEND}"
-part --source bootimg-efi --sourceparams="loader=${EFI_PROVIDER},dtb=k3-am67a-beagley-ai.dtb" --fstype=vfat --label boot --active --align 1024 --use-uuid --fixed-size 128M
+# IMAGE_BOOT_FILES (tiboot3.bin tifalcon.bin) is set in this layer's
+# tisdk-base-image.bbappend, next to the do_image_wic dependency on
+# ultima-falcon-fit that makes tifalcon.bin exist before wic runs.
+# resize_rootfs.service stays masked in that bbappend (root is read-only).
+part --source bootimg-partition --fstype=vfat --label boot --active --align 1024 --use-uuid --fixed-size 128M
 part / --source rootfs --fstype=ext4 --label root --align 1024 --use-uuid --no-fstab-update
 part /data --fstype=ext4 --label data --fixed-size 16M --align 1024

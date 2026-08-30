@@ -35,3 +35,13 @@ IMAGE_INSTALL:append:beagley-ai = " ti-img-rogue-driver ti-img-rogue-umlibs kmsc
 # tisdk-base-image` after the split, same check meta-ultima-beagleplay's
 # own comment on this line already used).
 WKS_FILE:beagley-ai = "ultima-beagley-ai.wks.in"
+
+# Falcon boot (2026-08-30, hardware-verified): the boot partition carries only
+# the falcon-configured R5 SPL and the FIT it loads (ATF + OP-TEE + DM +
+# kernel Image + DTB). Replaces k3.inc's default of tispl.bin/u-boot.img plus
+# bootimg-efi's GRUB/Image/dtb copies — none of those run anymore. wic's
+# bootimg-partition source copies IMAGE_BOOT_FILES out of DEPLOY_DIR_IMAGE,
+# so tifalcon.bin must have been deployed first. See
+# recipes-bsp/ultima-falcon-fit and wic/ultima-beagley-ai.wks.in.
+IMAGE_BOOT_FILES:beagley-ai = "tiboot3.bin tifalcon.bin"
+do_image_wic[depends] += "${@bb.utils.contains('MACHINE', 'beagley-ai', 'ultima-falcon-fit:do_deploy', '', d)}"

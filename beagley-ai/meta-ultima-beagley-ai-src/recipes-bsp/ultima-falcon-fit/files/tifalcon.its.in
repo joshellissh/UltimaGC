@@ -1,0 +1,88 @@
+/dts-v1/;
+
+/*
+ * Falcon boot FIT for BeagleY-AI (AM67A/J722S): loaded by the R5 SPL in
+ * place of tispl.bin. Same structure as the stock tispl.bin (firmware=ATF,
+ * loadables=OP-TEE + DM firmware), with the A53 SPL replaced by the kernel
+ * Image + DTB as plain loadables at the addresses the rebuilt TF-A jumps
+ * to (PRELOADED_BL33_BASE=0x82000000, K3_HW_CONFIG_BASE=0x88000000).
+ *
+ * MUST be assembled with `mkimage -E` (external data): the R5 SPL reads
+ * the FIT metadata to CONFIG_SPL_LOAD_FIT_ADDRESS=0x80080000 and only then
+ * streams each image to its own load address. Without -E the whole ~43 MiB
+ * blob would land at 0x80080000, on top of the kernel's slot.
+ *
+ * Images are unsigned. On this HS-FS device the R5 SPL prints
+ * "Did not detect image signing certificate. Skipping authentication" per
+ * image and continues (arch/arm/mach-k3/security.c). This would not boot on
+ * an HS-SE part.
+ *
+ * @VAR@ placeholders are substituted by build-tifalcon.sh.
+ */
+
+/ {
+	description = "Ultima falcon boot: ATF + OP-TEE + DM + Linux (BeagleY-AI)";
+	#address-cells = <1>;
+
+	images {
+		atf {
+			description = "ARM Trusted Firmware";
+			data = /incbin/("@BL31@");
+			type = "firmware";
+			arch = "arm64";
+			compression = "none";
+			os = "arm-trusted-firmware";
+			load = <0x80000000>;
+			entry = <0x80000000>;
+		};
+		tee {
+			description = "OP-TEE";
+			data = /incbin/("@BL32@");
+			type = "tee";
+			arch = "arm64";
+			compression = "none";
+			os = "tee";
+			load = <0x9e800000>;
+			entry = <0x9e800000>;
+		};
+		dm {
+			description = "DM binary";
+			data = /incbin/("@DM@");
+			type = "firmware";
+			arch = "arm32";
+			compression = "none";
+			os = "DM";
+			load = <0x89000000>;
+			entry = <0x89000000>;
+		};
+		kernel {
+			description = "Linux Kernel (64-bit)";
+			data = /incbin/("@IMAGE@");
+			type = "standalone";
+			os = "Linux";
+			arch = "arm64";
+			compression = "none";
+			load = <0x82000000>;
+			entry = <0x82000000>;
+		};
+		fdt {
+			description = "k3-am67a-beagley-ai (falcon, bootargs + tfa reservation baked in)";
+			data = /incbin/("@DTB@");
+			type = "standalone";
+			arch = "arm";
+			compression = "none";
+			load = <0x88000000>;
+			entry = <0x88000000>;
+		};
+	};
+
+	configurations {
+		default = "falcon";
+
+		falcon {
+			description = "BeagleY-AI falcon";
+			firmware = "atf";
+			loadables = "tee", "dm", "fdt", "kernel";
+		};
+	};
+};

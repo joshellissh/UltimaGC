@@ -213,7 +213,20 @@ Splitting the question by boot half:
 
 ### What that means
 
-**Update (2026-08-29, hardware in hand): this turned out to be a dead end, not
+**Update (2026-08-30): Falcon is working on the BeagleY-AI, hardware-verified
+— see `beagleplay-falcon/NOTES.md` "Falcon on BeagleY-AI: working". The
+2026-08-29 "dead end" verdict kept below was wrong: the TIFS stub it hinged on
+is a low-power-resume artifact of AM62x's boot images, not a falcon
+prerequisite. No TI falcon code was needed at all — bb.org's stock R5 SPL
+loads a FIT of ATF + OP-TEE + DM + kernel + DTB (`tifalcon.bin`), TF-A is
+rebuilt with the kernel/DTB addresses (the same two overrides meta-ti's
+`ti-falcon` uses), and two DTB fixups U-Boot used to do at runtime are baked
+in at build time. Same recipe a TI E2E user had booting on a J722S HS-FS EVM
+(thread 1376134); TI's MCU+ SDK `main` also gained a `FALCON_MODE` for
+j722s-evm in March 2026. Measured first Qt frame: see NOTES.md for the
+stock-vs-falcon numbers from the same board and card.**
+
+**Superseded (2026-08-29, hardware in hand): this turned out to be a dead end, not
 bounded work — corrected below, see `beagleplay-falcon/NOTES.md` "Falcon on
 J722S/BeagleY-AI: dead end" for the full trail.** The C-code/binman gap
 itself *was* portable (bb.org's fork lacks the falcon SPL logic and binman
@@ -239,11 +252,13 @@ the same kind of gap on AM625 (NOTES.md: meta-ti "ships Falcon Mode support,
 but it's wired [specifically]… Missing package/config wiring"). This was
 believed to be bounded config/recipe work — it was not; see the update above.
 
-**Boot verdict:** the ~4.5 s-class first-frame target is **not reachable via
-Falcon on this board** until TI publishes J722S stub firmware. The remaining
-lever on this SoC is OS-level: suppressing UART console spam (`quiet`) and
-trimming the GRUB timeout, the same non-Falcon-specific wins BeaglePlay's own
-numbers partially came from.
+**Boot verdict (superseded, see the 2026-08-30 update above):** ~~the ~4.5 s-class
+first-frame target is not reachable via Falcon on this board until TI publishes
+J722S stub firmware.~~ Falcon is in and removes the whole A53-SPL → U-Boot →
+GRUB stretch (U-Boot proper alone was ~4.6 s on this board, GRUB's timeout
+another 3 s). What's left between reset and the kernel is the R5 SPL streaming
+the 40 MiB uncompressed `Image` off the SD card (~1.8 s) — the next lever is a
+smaller kernel (bb.org's kitchen-sink defconfig), not more bootloader work.
 
 ---
 
