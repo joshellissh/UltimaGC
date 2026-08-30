@@ -4900,6 +4900,110 @@ Current state: reverted to the known-stable config (crash loop masked, no
 HDMI, no devicetree line) — confirmed this is the safe baseline to leave the
 board in between investigation sessions.
 
+### Resolved (2026-08-29, later same day): the "hang" was never a hang — display works end to end
+
+**The earlier hang diagnosis was wrong, and it's important to say so
+plainly.** Root cause: the manual test that appeared to hang omitted
+`bootargs` entirely (no `console=`, no `earlycon`). The kernel was booting
+*fine* — it just had no configured console, so it produced zero UART output
+and looked identical to a real freeze. This was confirmed two ways before
+trusting it: (1) network reachability was checked immediately after the
+apparent "hang" and found genuinely down at the time (real hang, that
+specific run) but (2) a repeat with explicit `console=ttyS2,115200n8
+earlycon` added to `bootargs` booted completely cleanly with full output.
+**There is no SYSFW/TISCI resource-permission issue, no earlycon/pinmux
+mismatch, and no FDT-relocation bug** — all three candidate causes floated
+above were wrong. Flagging this misdiagnosis explicitly since it briefly
+looked like a strong argument for deferring Falcon further; it wasn't.
+
+**Verification method: manual interactive U-Boot boot over serial, driven
+entirely from the Mac.** Interrupting autoboot by hand (racing the 2-second
+countdown) is unreliable over a chat-driven session, so instead: trigger
+`reboot` over SSH from the Mac and *simultaneously* start sending repeated
+space characters over the serial TTY (`printf ' ' > /dev/cu.usbmodem102`)
+in a loop — fully software-timed, no human reaction time in the loop, lands
+in the autoboot window reliably. From the `=>` prompt: `load mmc 1:1
+${fdtaddr} k3-am67a-beagley-ai.dtb`, `load mmc 1:1 ${kernel_addr_r} Image`,
+`setenv bootargs '...'`, `booti ${kernel_addr_r} - ${fdtaddr}`. The dtb file
+itself was pushed onto the already-RW-mounted boot partition over `scp`
+while Linux was running (`/run/media/boot-mmcblk1p1/`, confirmed mounted rw
+by the stock image) — **no SD card was ever removed from the board for any
+of this**, including editing `grub.cfg` itself over SSH. Worth remembering
+for all future iteration on this board: the boot partition is writable live
+over the network, so a card pull is essentially never necessary once SSH is
+up.
+
+**Network boot (TFTP) was attempted first and is a dead end on this LAN —
+not a fix, don't retry it here.** Set up macOS's built-in `tftpd`
+(`/System/Library/LaunchDaemons/tftp.plist`, serves `/private/tftpboot`),
+confirmed it listening (`lsof -i UDP:69`), pushed `Image`/`.dtb` there. Board
+never got past ARP: `tcpdump -i en0 arp` during a live `tftpboot` attempt
+showed **zero** ARP request packets from the board's temporary static IP
+arriving at the Mac's NIC at all (confirmed via packet capture, not
+inferred) — while normal Linux-side traffic between the same two devices
+(SSH, ping) works fine in the other direction. Likely cause: this LAN is a
+mesh WiFi system (`zenwifi_axe7800`) and the board's wired Ethernet port may
+be landing on a different mesh node/segment with client/AP isolation
+between it and the Mac — environmental, not fixable from the Mac side.
+Fell back to loading via `load mmc` from the SD card instead (see above),
+which is nearly as convenient since the card never has to leave the board.
+
+**The actual fix, now permanent in `grub.cfg`:**
+```
+serial --unit=0 --speed=115200 --word=8 --parity=no --stop=1
+default=boot
+timeout=3
+menuentry 'boot'{
+devicetree /k3-am67a-beagley-ai.dtb
+linux /Image root=PARTUUID=076c4a2a-02 rootwait rootfstype=ext4 ro console=ttyS2,115200n8 earlycon
+}
+```
+Two changes from stock: the `devicetree` line (so the kernel gets the real
+`main_i2c1`/`it66122`-enabled tree instead of U-Boot's stripped internal
+one — see above), and `console=ttyS2,115200n8 earlycon` (without which the
+correct boot is silent and looks hung, per the misdiagnosis above). Rootfs
+kept `ro`, matching this project's standard read-only-root convention — the
+one manual test run used `rw` by mistake, not carried forward.
+`systemd.mask=...` for `ultima-app`/`ultima-splash` **removed** — no longer
+needed, both units now succeed.
+
+**Confirmed end to end, twice, including one fully unattended reboot (no
+manual U-Boot intervention, autoboot straight through) with the permanent
+`grub.cfg` in place:**
+- `main_i2c1` registers: `omap_i2c 20010000.i2c: bus 3 rev0.12 at 400 kHz`
+- `it66121 3-004c: IT66121 revision 0 probed` — HDMI bridge chip alive
+- `tidss 30220000.dss: [drm] Initialized tidss 1.0.0` and `[drm] fb0:
+  tidssdrmfb frame buffer device` — `/dev/fb0` exists, `/dev/dri/card0`
+  and `renderD128` also present
+- `ultima-splash.service` succeeds (previously failed every time)
+- `ultima-app.service` starts clean and **renders real frames**:
+  `[6.82] first frame rendered (afterRendering)`, `first frame swapped`,
+  total app startup ~1.2s — running on `linuxfb` (not yet flipped to
+  `eglfs`, see below), stable for the full observed runtime, zero crashes,
+  zero `sig=6` audit lines in the fresh boot's log
+- Board recovered from every earlier scare (real hang from the accidental
+  no-`bootargs` test, the actual crash loop) with nothing worse than a
+  power cycle each time — no repeat of the eMMC-corruption-style scare
+  from BeaglePlay's history
+
+**This is milestone 1's actual finish line**: `ultima-app` runs and renders
+on real BeagleY-AI hardware for the first time, unattended boot, no masks,
+no manual steps. Not done as part of this: flipping `QT_QPA_PLATFORM` from
+`linuxfb` to `eglfs`/`eglfs_kms` now that `/dev/dri/card0` is confirmed
+present (the GPU driver risk flagged earlier in this section didn't
+materialize at build time; runtime is now worth trying since the DRM/KMS
+side is proven working) — worthwhile next step, not required for a working
+dash.
+
+**Falcon status, revisited**: the specific reason cited earlier for
+deferring Falcon — "given a board isn't even in hand yet" and "wait for a
+confirmed stock hardware boot" — no longer applies; both conditions are now
+met. The underlying difficulty assessment from the feasibility check
+earlier in this section (bb.org's tree has zero Falcon code at all, HS-FS
+is separately untested territory, real transplant work not a small config
+change) is unaffected by anything found this session and still stands as
+the actual scope estimate for that work.
+
 ### Falcon boot mode for BeagleY-AI — feasibility check (2026-08-28, later same day)
 
 Went looking at what a Falcon fork for j722s would actually involve, before
