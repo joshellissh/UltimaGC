@@ -86,16 +86,16 @@ bool SystemClock::setTime(int year, int month, int day, int hour, int minute)
 bool SystemClock::timeIsValid() const
 {
 #ifdef __linux__
-    // Same signal ultima-hwclock-load.service itself waits on (see
-    // beagleplay-falcon/NOTES.md "Dash clock doesn't persist a manual
+    // Same signal an RTC-to-system-clock load waits on (see
+    // GAUGE-CLUSTER.md "Dash clock doesn't persist a manual
     // set"): the system clock is still the kernel's stale boot-default
-    // until that unit runs `hwclock --hctosys`. First attempt at this
+    // until something runs `hwclock --hctosys`. First attempt at this
     // compared against this binary's own compile-time build timestamp
     // instead — broke the moment the Docker build container's clock
     // turned out to be hours off (a real, observed OrbStack VM clock-drift
     // case), which made the point that no build machine's clock is
     // trustworthy ground truth either. Reading the RTC directly sidesteps
-    // that: it's the same clock hwclock-load itself trusts.
+    // that: it's the same RTC a `hwclock --hctosys` sync reads from.
     //
     // Fails closed (reports invalid) whenever /dev/rtc0 isn't there yet or
     // can't be read — including the brief window right after boot where

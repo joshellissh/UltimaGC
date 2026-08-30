@@ -49,7 +49,7 @@ CameraFeed::CameraFeed(const QString &device, QObject *parent)
 {
     m_fpsLogEnabled = qEnvironmentVariableIsSet("ULTIMA_CAM_FPS_LOG");
     // Zero-copy display is the default on the real capture path — see the
-    // class comment and NOTES.md "Camera framerate". ULTIMA_CAM_ZEROCOPY=0
+    // class comment and GAUGE-CLUSTER.md "Camera framerate". ULTIMA_CAM_ZEROCOPY=0
     // is the escape hatch that forces everything through the converted-
     // QImage path (useful A/B lever, and the fallback if this ever runs on
     // a GPU stack without dma-buf import).
@@ -120,8 +120,8 @@ void CameraFeed::setFailed(bool on)
 }
 
 // A permanently-absent/non-streaming feed (e.g. a camera the current
-// hardware/driver setup can't actually enable — see beagleplay-falcon/
-// NOTES.md's "Still open" note on simultaneous multi-camera capture) used
+// hardware/driver setup can't actually enable, since only one camera
+// channel is isolable at a time) used
 // to retry tryOpen() every flat 1s forever. With multiple such feeds active
 // at once (the camera screens activate all 4 unconditionally, regardless
 // of which cameras currently work), that's several failed
@@ -224,8 +224,8 @@ void CameraFeed::resetBufferMailbox()
 #if defined(__linux__) && !defined(ULTIMA_SIMULATE)
 
 // Decode/expose converted frames at 1/kDecimation the driver-granted
-// capture size — real-hardware profiling (2026-08-17, see beagleplay-falcon/
-// NOTES.md) found full-res conversion+upload spending most of its cost on
+// capture size — real-hardware profiling (2026-08-17, see GAUGE-CLUSTER.md
+// "Camera frame paths") found full-res conversion+upload spending most of its cost on
 // pixels thrown away by the eventual on-screen downscale. Only affects the
 // converted-QImage path; the zero-copy path displays the full capture
 // resolution (the GPU minifies while sampling).
@@ -396,7 +396,7 @@ static void deinterleaveUYVYto422(const uchar *src, int width, int height, int b
 class CameraCaptureThread : public QThread {
 public:
     // Real capture rate the mycam004m driver negotiates today (see
-    // beagleplay-falcon NOTES.md "Camera framerate" / this file's
+    // GAUGE-CLUSTER.md "Camera framerate" / this file's
     // kRequestedWidth comment) — the phase-accumulator decimation below
     // decimates FROM this, not from whatever wall-clock rate frames happen
     // to arrive at.
@@ -741,8 +741,7 @@ void CameraFeed::tryOpen()
     }
     // Read back what was actually granted — notably bytesperline: assuming
     // it always equals width*2 (tightly packed) was flagged as a real risk
-    // during the original UVC-grabber bring-up (see beagleplay-falcon/
-    // NOTES.md "Live camera feed") — reading past a stride the driver
+    // during the original UVC-grabber bring-up — reading past a stride the driver
     // actually padded would walk off the end of the capture buffer.
     m_captureWidth = int(fmt.fmt.pix.width);
     m_captureHeight = int(fmt.fmt.pix.height);

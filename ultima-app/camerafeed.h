@@ -12,12 +12,12 @@
 
 // Captures live video from a V4L2 capture node. Originally a USB UVC capture
 // card (a MacroSilicon MS210x AV-to-USB grabber, confirmed via its USB
-// descriptors — see beagleplay-falcon/NOTES.md); now one of 4 instances
+// descriptors — see beagley-ai/NOTES.md); now one of 4 instances
 // pointed at /dev/mycam/cam1..4, the mycam004m driver's stable symlinks
 // (fake or real backend — see ~/code/mycam004m/docs/ultima-app-integration.md).
 //
 // Frames reach the two consumers over two parallel paths (see
-// beagleplay-falcon/NOTES.md "Camera framerate" for the 2026-08-26
+// GAUGE-CLUSTER.md "Camera framerate" for the 2026-08-26
 // hardware profiling that shaped this):
 //
 // 1. ZERO-COPY (the display path — CameraView's grid tiles and mirror
@@ -46,7 +46,7 @@
 //
 // Lazily opened: the device is only opened while active is true, driven by
 // the camera screens' open()/close(). This project measures first-Qt-frame
-// to the millisecond (see NOTES.md's measure-boot.sh); opening a capture
+// to the millisecond (see beagley-ai/NOTES.md's boot-time work); opening a capture
 // device and negotiating a streaming format at construction would regress
 // that for a screen most drives never open.
 class CameraFeed : public QObject
@@ -175,7 +175,7 @@ private:
     // 6 buffers on the zero-copy path: 1 being DMA-written + 1 ready in
     // the driver + 1 pending in the mailbox + display/prev held by the
     // renderer + 1 margin. (4x cameras x 6 x 4MB = 96MB of the 128MB CMA
-    // pool — see NOTES.md before raising this.) kMaxBuffers just bounds
+    // pool — see GAUGE-CLUSTER.md "Camera framerate" before raising this.) kMaxBuffers just bounds
     // the arrays.
     static constexpr int kMaxBuffers = 8;
 

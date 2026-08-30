@@ -12,11 +12,11 @@
 #   p3  ext4 "data"  the only persistent writable partition (odometer etc.),
 #                    mounted by ultima-data-mount
 #
-# History: until 2026-08-30 this was a copy of ultima-beagleplay.wks.in's
-# bootimg-efi layout (GRUB via U-Boot's EFI loader, `dtb=` sourceparam and
-# `console=ttyS2,115200n8 earlycon` on the bootloader line were the two fixes
-# that got this board's display working — see beagleplay-falcon/NOTES.md
-# "Resolved: the hang was never a hang"). Falcon makes all of that moot: the
+# History: until 2026-08-30 this used a bootimg-efi layout (GRUB via U-Boot's
+# EFI loader, `dtb=` sourceparam and `console=ttyS2,115200n8 earlycon` on the
+# bootloader line were the two fixes that got this board's display working —
+# see the BeagleY-AI notes "display works end to end"). Falcon
+# makes all of that moot: the
 # DTB is chosen and the cmdline set at build time in the FIT, so the wks has
 # nothing bootloader-related left to say. The stock (GRUB) chain from a
 # pre-falcon build remains the fallback on the bench — see NOTES.md "Falcon

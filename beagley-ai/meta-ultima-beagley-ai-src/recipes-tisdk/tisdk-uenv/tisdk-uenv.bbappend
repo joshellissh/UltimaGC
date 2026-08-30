@@ -2,9 +2,8 @@
 # unconditionally via arago.conf, not machine-scoped) ships a uEnv-sk.txt
 # only for TI's own EVM machine name (j722s-evm), never extended to
 # BeagleBoard.org's community machine name (beagley-ai) that meta-ti's
-# meta-beagle layer adds. Same class of gap as the Falcon wiring fixed for
-# beagleplay-ti in meta-falcon-beagleplay (see beagleplay-falcon/NOTES.md)
-# — a TI SDK convenience recipe wired to EVM names only.
+# meta-beagle layer adds — a TI SDK convenience recipe wired to EVM names
+# only.
 #
 # FILESEXTRAPATHS is NOT auto-extended just by this bbappend existing —
 # ${THISDIR} in meta-ti-foundational's own bbappend hardcodes to *its*

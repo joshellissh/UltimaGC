@@ -10,7 +10,7 @@
 // Compiles/links/caches QOpenGLShaderProgram instances from .vert/.frag
 // resource paths, prepending the right #version + precision header for
 // whichever GL dialect is actually current (desktop GL on macOS dev
-// builds, GLES on the real BeaglePlay/eglfs target) — callers write plain
+// builds, GLES on the real eglfs target) — callers write plain
 // GLSL body text with no #version line of their own.
 //
 // Ported from test/avm-benchmark/src/graphics/ShaderManager.{h,cpp}, with

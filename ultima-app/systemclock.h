@@ -8,8 +8,8 @@
 // needs no privilege escalation on target.
 //
 // Also best-effort writes through to a battery-backed hardware RTC at
-// /dev/rtc0 if one is present, so the new time survives a reboot. BeaglePlay
-// has one (onboard BQ32002). Probes for /dev/rtc0 at runtime and silently
+// /dev/rtc0 if one is present, so the new time survives a reboot on boards
+// that have one. Probes for /dev/rtc0 at runtime and silently
 // skips the write when it's absent — same pattern CanBus uses for can0.
 class SystemClock : public QObject
 {
@@ -26,10 +26,10 @@ public:
     Q_INVOKABLE bool setTime(int year, int month, int day, int hour, int minute);
 
     // False during the brief post-boot window where the system clock still
-    // holds its stale boot-default value rather than the BQ32002 RTC's real
-    // time (see beagleplay-falcon/NOTES.md "Dash clock doesn't persist a
-    // manual set" — ultima-hwclock-load.service hasn't won its race with
-    // ultima-app yet). Detected by reading /dev/rtc0 directly and comparing
+    // holds its stale boot-default value rather than the RTC's real time
+    // (see GAUGE-CLUSTER.md "Dash clock doesn't persist a manual set" —
+    // an RTC-to-system-clock load hasn't run yet). Detected by reading
+    // /dev/rtc0 directly and comparing
     // against the system clock — not by comparing against a build
     // timestamp, which seemed simpler but isn't reliable (a build
     // machine's own clock can drift; see systemclock.cpp). Always true on

@@ -20,7 +20,7 @@ CONFIG += c++17
 # build was configured to produce. Fixing it for real would mean adding a
 # PACKAGECONFIG to meta-qt5's qtdeclarative recipe to build qmlcachegen for
 # -native, not attempted since the expected win here was already small
-# (tens of ms — see NOTES.md "Boot-time investigation" Candidate 4) next to
+# (tens of ms) next to
 # this newly-discovered cost/risk. If revisited, first confirm
 # qmlcachegen actually gets produced in recipe-sysroot-native before
 # re-enabling this — don't just flip the CONFIG line again.

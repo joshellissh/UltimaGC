@@ -1,17 +1,13 @@
-# ultima-app.bb itself lives in meta-ultima-beagleplay (shared, board-agnostic
-# recipe) — this bbappend only exists to let this layer contribute a
-# beagley-ai-specific ultima-app.service without touching that layer.
+# ultima-app.bb lives in this same layer (recipes-ultima/ultima-app/). This
+# bbappend adds the beagley-ai-specific ultima-app.service and boot-time
+# pieces (below), kept separate from the board-agnostic base recipe.
 #
-# FILESEXTRAPATHS is NOT auto-extended just by a bbappend existing for a
-# recipe in another layer — ${THISDIR} immediate-expands (`:=`) to *this*
-# layer's own directory, so we have to add it explicitly. (Learned the hard
-# way fixing the tisdk-uenv gap — see beagleplay-falcon/NOTES.md "BeagleY-AI
-# bring-up" for the full story.) This makes bitbake's automatic per-override
-# subdirectory search also cover
-# ultima-app/beagley-ai/ultima-app.service (added alongside this file),
-# which then wins over meta-ultima-beagleplay's own
-# recipes-ultima/ultima-app/files/ultima-app.service for MACHINE=beagley-ai
-# builds specifically.
+# FILESEXTRAPATHS:prepend adds this recipe's ${PN} subdir to FILESPATH so
+# bitbake's automatic per-override subdirectory search covers
+# ultima-app/beagley-ai/ultima-app.service (added alongside this file), which
+# then wins over the base recipe's own files/ultima-app.service for
+# MACHINE=beagley-ai builds specifically. (Learned the hard way fixing the
+# tisdk-uenv gap — see the BeagleY-AI notes "Yocto build / app port".)
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 # Boot-time pieces (2026-08-30), beagley-ai only — see the comments in each

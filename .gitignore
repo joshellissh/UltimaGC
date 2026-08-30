@@ -1,9 +1,8 @@
 output/
 build/
-beagleplay-falcon/deploy/
-beagleplay-falcon/deploy-falcon/
-beagleplay-falcon/deploy-beagley-ai/
-beagleplay-falcon/boot-logs/
+beagley-ai/deploy/
+beagley-ai/deploy-beagley-ai/
+beagley-ai/boot-logs/
 .DS_Store
 **/.DS_Store
 .smbdelete*
@@ -12,4 +11,3 @@ beagleplay-falcon/boot-logs/
 **/.qtcreator/
 .tmp.driveupload/
 test/
-beagleplay-falcon/meta-ultima-beagleplay-src/recipes-avm/

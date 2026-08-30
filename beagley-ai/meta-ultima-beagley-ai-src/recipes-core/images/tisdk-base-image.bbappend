@@ -1,31 +1,23 @@
-# BeagleY-AI (AM67A/J722S) bring-up (2026-08-28), milestone 1 (Yocto
-# build/app bring-up, no board in hand yet — see docs/BEAGLEY-AI-EVAL.md and
-# beagleplay-falcon/NOTES.md "BeagleY-AI bring-up"). Split into this separate
-# layer from meta-ultima-beagleplay (2026-08-28) — same "unrelated concerns"
-# reasoning meta-falcon-beagleplay already used to stay apart from the app
-# layer, applied here so this directory isn't misleadingly named after the
-# other board. meta-ultima-beagleplay's own tisdk-base-image.bbappend still
-# carries the machine-agnostic image-hardening bits (read-only-rootfs,
-# ROOTFS_POSTPROCESS_COMMAND and friends) that apply to both machines
-# unconditionally — only the beagleplay-ti/beagley-ai-scoped IMAGE_INSTALL
-# and WKS_FILE lines split out.
+# BeagleY-AI (AM67A/J722S) image customizations. This bbappend carries the
+# machine-scoped IMAGE_INSTALL / WKS_FILE / boot-files lines below, plus the
+# machine-agnostic image hardening (read-only-rootfs + the unit-mask
+# functions) folded in at the bottom of this file. See the BeagleY-AI notes.
 #
-# Deliberately narrower than the beagleplay-ti set:
-# - ultima-hwclock-load dropped: it hardcodes /dev/rtc0 = the onboard
-#   BQ32002, BeaglePlay-specific hardware. This board's KERNEL_DEVICETREE
-#   (see meta-beagle's beagley-ai.conf) has an *optional* RV3028 RTC overlay
+# The install set deliberately excludes some things:
+# - ultima-hwclock-load dropped: it hardcodes /dev/rtc0 = an onboard BQ32002,
+#   which this board doesn't have. This board's KERNEL_DEVICETREE (see
+#   meta-beagle's beagley-ai.conf) has an *optional* RV3028 RTC overlay
 #   (k3-am67a-beagley-ai-i2c1-rtc-rv3028.dtbo) — not applied here, revisit
 #   if/when that hardware is actually present.
-# - WiFi (wpa-supplicant/wl18xx-firmware) and mycam004m: skipped,
-#   BeaglePlay-specific hardware (WL1807) / a later milestone (camera port),
-#   not this one.
+# - WiFi (wpa-supplicant/wl18xx-firmware) and mycam004m: skipped — hardware
+#   this board doesn't have (WL1807) / a later milestone (camera port), not
+#   this one.
 IMAGE_INSTALL:append:beagley-ai = " ultima-app ultima-splash can-utils mmc-utils ultima-data-mount volatile-binds"
 
-# Same GPU smoke-test packages as beagleplay-ti's own copy of this line —
-# this board's BXS-4-64 Rogue stack is genuinely unproven (no board in hand
-# yet as of 2026-08-28), so keeping kmscube/mesa-demos here for the same
-# verify-before-blaming-the-app reason, doubly so on unproven hardware.
-# Remove alongside the beagleplay-ti copy once both are confirmed working.
+# GPU smoke-test packages for this board's BXS-4-64 Rogue stack — keep
+# kmscube/mesa-demos here for the verify-the-GPU-before-blaming-the-app
+# reason. Remove once the GPU stack is confirmed working; they don't belong
+# in a shipped image.
 IMAGE_INSTALL:append:beagley-ai = " ti-img-rogue-driver ti-img-rogue-umlibs kmscube mesa-demos"
 
 # Boot-time work (2026-08-30): ultima-readahead replays the recorded startup
@@ -34,12 +26,9 @@ IMAGE_INSTALL:append:beagley-ai = " ti-img-rogue-driver ti-img-rogue-umlibs kmsc
 # instead of reconstructing the unit timeline from the journal by hand.
 IMAGE_INSTALL:append:beagley-ai = " ultima-readahead systemd-analyze"
 
-# See wic/ultima-beagley-ai.wks.in (this layer) for the full reasoning —
-# straight copy of ultima-beagleplay.wks.in, nothing AM625-specific in it.
-# WKS_SEARCH_PATH covers this layer's own wic/ dir the same way it already
-# covers meta-ultima-beagleplay's (confirmed via `bitbake -e
-# tisdk-base-image` after the split, same check meta-ultima-beagleplay's
-# own comment on this line already used).
+# See wic/ultima-beagley-ai.wks.in (this layer) for the full reasoning.
+# WKS_SEARCH_PATH covers this layer's own wic/ dir (confirmed via `bitbake -e
+# tisdk-base-image`).
 WKS_FILE:beagley-ai = "ultima-beagley-ai.wks.in"
 
 # Falcon boot (2026-08-30, hardware-verified): the boot partition carries only
@@ -53,9 +42,9 @@ IMAGE_BOOT_FILES:beagley-ai = "tiboot3.bin tifalcon.bin"
 do_image_wic[depends] += "${@bb.utils.contains('MACHINE', 'beagley-ai', 'ultima-falcon-fit:do_deploy', '', d)}"
 
 # Boot-time trim (2026-08-30): services the dash has no use for, masked in
-# the finished rootfs the same way meta-ultima-beagleplay's
-# ultima_mask_timesyncd does it (a /dev/null symlink wins over any enable
-# pass). None of these run before the app, but every one of them was
+# the finished rootfs the same /dev/null-symlink way as ultima_mask_timesyncd
+# (defined at the bottom of this file) — a /dev/null symlink wins over any
+# enable pass. None of these run before the app, but every one of them was
 # starting in the same window as the app's first frame, and the unit files
 # are parsed by systemd at every boot regardless. Networking itself
 # (systemd-networkd, dropbear) stays: wired SSH is the bench path.
@@ -94,4 +83,76 @@ ultima_beagley_drop_generators () {
              systemd-debug-generator systemd-run-generator; do
         rm -f ${IMAGE_ROOTFS}${nonarch_libdir}/systemd/system-generators/$g
     done
+}
+
+# --- Machine-agnostic image hardening (folded in when BeagleY-AI became the
+# sole board, 2026-08-30 — previously an unconditional block in a shared
+# layer that has since been retired). read-only rootfs plus a handful of
+# surgical unit masks; none of it is board-specific.
+# The WL1807 WiFi enablement that used to ride the same
+# ROOTFS_POSTPROCESS_COMMAND line was dropped in the move: this board has no
+# wpa-supplicant / wl18xx-firmware installed (see IMAGE_INSTALL above), so it
+# only ever wrote dead config and a dangling wpa_supplicant@wlan0 symlink.
+
+# read-only-rootfs: root (p2) becomes mount-time read-only. oe-core's
+# rootfs-postcommands.bbclass does most of the work once the feature is on: it
+# appends "ro" to the kernel cmdline, rewrites /etc/fstab's /dev/root line to
+# ro, empties /etc/machine-id at build time so systemd's transient-ID support
+# takes over, and redirects dropbear to generate its host key under
+# /var/lib/dropbear. The one thing that mechanism assumes and this distro
+# doesn't provide on its own is somewhere writable for that state to land --
+# volatile-binds (stock oe-core, in IMAGE_INSTALL above) bind-mounts tmpfs
+# over /var/lib, /var/cache, /var/spool and /srv for exactly that. Accepted
+# consequence: machine-id and the dropbear host key become transient,
+# regenerated every boot, since nothing here persists /var/lib across reboots.
+IMAGE_FEATURES += "read-only-rootfs"
+
+# Surgical tweaks to the finished rootfs. Each runs after all package
+# postinsts (including systemd's own "enable" pass), so a symlink-to-/dev/null
+# mask wins regardless of how a unit would otherwise be pulled in.
+ROOTFS_POSTPROCESS_COMMAND += "ultima_mask_timesyncd; ultima_journald_volatile; ultima_coredump_disable; ultima_mask_resize_rootfs; ultima_mask_getty_tty1; "
+
+# systemd-timesyncd silently overwrites whatever SetTimeScreen just wrote via
+# SystemClock::setTime() any time the board has network. It ships inside the
+# base "systemd" package in this build (not a split systemd-timesyncd
+# sub-package), so SYSTEMD_AUTO_ENABLE has no package to attach to -- masking
+# the unit directly is the surgical way to disable exactly it.
+ultima_mask_timesyncd () {
+    rm -f ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/multi-user.target.wants/systemd-timesyncd.service
+    ln -sf /dev/null ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/systemd-timesyncd.service
+}
+
+# meta-ti-foundational's resize_rootfs.service grows partition 2 (hardcoded
+# `sfdisk -N 2 ... echo ",+"`) into whatever free space follows it on first
+# boot. The image adds /data as a real partition 3 after root (see
+# wic/ultima-beagley-ai.wks.in), so that free-space grab would race /data for
+# the same space. Masking removes the collision, and a bounded root size is
+# the actual goal of the read-only-rootfs setup this supports.
+ultima_mask_resize_rootfs () {
+    rm -f ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/multi-user.target.wants/resize_rootfs.service
+    ln -sf /dev/null ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/resize_rootfs.service
+}
+
+# Keep the journal on tmpfs (/run), never flushing to disk -- write
+# amplification a read-only root is meant to avoid, and the documented cause
+# of a real SD-card I/O-error incident during an early crash-loop.
+ultima_journald_volatile () {
+    install -d ${IMAGE_ROOTFS}${sysconfdir}/systemd/journald.conf.d
+    printf '[Journal]\nStorage=volatile\n' > ${IMAGE_ROOTFS}${sysconfdir}/systemd/journald.conf.d/ultima-volatile.conf
+}
+
+# Companion to ultima_journald_volatile: drop core dumps instead of writing
+# them to /var/lib/systemd/coredump. Harmless no-op if systemd-coredump isn't
+# installed; kept so it isn't a gap if that changes later.
+ultima_coredump_disable () {
+    install -d ${IMAGE_ROOTFS}${sysconfdir}/systemd/coredump.conf.d
+    printf '[Coredump]\nStorage=none\n' > ${IMAGE_ROOTFS}${sysconfdir}/systemd/coredump.conf.d/ultima-disable.conf
+}
+
+# getty@tty1 writes a login prompt onto tty1 -- the same VT fbcon and the
+# fbdev splash draw into -- a couple seconds into boot, overwriting the splash
+# pixels. The only interactive access here is serial (serial-getty@, a
+# separate template unit this doesn't touch) or SSH, so mask the tty1 getty.
+ultima_mask_getty_tty1 () {
+    ln -sf /dev/null ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/getty@tty1.service
 }

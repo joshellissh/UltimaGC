@@ -7,7 +7,7 @@ import Ultima 1.0
 // (cameraFeed1..cameraFeed4 context properties, see main.cpp) stitched into
 // one top-down birds-eye view via SurroundView (surroundview.h) — a
 // precomputed per-camera fisheye/ground-plane warp mesh + feather blend,
-// the architecture test/avm-benchmark validated on real BeaglePlay hardware
+// the architecture test/avm-benchmark validated on real target hardware
 // (see that project's docs/measurement-notes.md). Calibration is currently
 // a placeholder rig (cameracalibration.cpp's defaultCalibration()) — seams
 // and ground-plane scale will only be exactly right once real measured

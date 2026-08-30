@@ -1,1 +1,0 @@
-hostname:beagleplay-ti = "ultimagc"

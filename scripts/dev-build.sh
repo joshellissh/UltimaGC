@@ -1,6 +1,6 @@
 #!/bin/sh
-# --boot: simulate the on-target boot splash (see beagleplay-falcon/NOTES.md
-# "Boot splash implemented") ahead of the app's own startup self-test sweep,
+# --boot: simulate the on-target boot splash (see GAUGE-CLUSTER.md
+# "Boot splash") ahead of the app's own startup self-test sweep,
 # so the whole boot flow can be screen-recorded in one shot without hardware.
 set -e
 

@@ -13,8 +13,8 @@
 //
 // Was a QQuickPaintedItem (QPainter::drawImage() into a FramebufferObject
 // render target) until real-hardware profiling (2026-08-17, see
-// beagleplay-falcon/NOTES.md and test/avm-benchmark/docs/measurement-notes.md)
-// found CameraGridScreen running at 2-3 FPS on the real BeaglePlay/PowerVR
+// beagley-ai/NOTES.md and test/avm-benchmark/docs/measurement-notes.md)
+// found CameraGridScreen running at 2-3 FPS on the target's PowerVR
 // target: strace on the render thread showed it ~90% saturated, dominated by
 // ioctl (39%) + mmap (17%) — the GPU driver allocating a brand-new texture
 // every single paint, because QPainter's GL paint engine keys its texture

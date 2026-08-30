@@ -14,11 +14,11 @@ class CameraFeed;
 // reads the UYVY directly (and applies the BT.601 limited-range transfer
 // the camera actually emits, which the CPU path approximates as full-range).
 //
-// Hardware-verified 2026-08-26 on the BeaglePlay's PowerVR (Mesa-based DDK
+// Hardware-verified 2026-08-26 on the target's PowerVR (Mesa-based DDK
 // 25.2, EGL_EXT_image_dma_buf_import + GL_OES_EGL_image_external_essl3):
 // with 4 grid quadrants at 1080p25 the render thread sits at ~22% where the
 // glTexSubImage2D upload path saturated it at ~9.5fps — see
-// beagleplay-falcon/NOTES.md "Camera framerate".
+// GAUGE-CLUSTER.md "Camera framerate".
 //
 // One instance per (renderer, feed). Every method runs on the render
 // thread: sync() during the scene-graph sync phase (GUI thread blocked, GL

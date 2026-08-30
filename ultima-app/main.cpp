@@ -54,7 +54,7 @@ static double readUptime() {
 // networking) be ordered *after* the dash is on screen instead of competing
 // with it for the SD card and the cores — see
 // beagley-ai/meta-ultima-beagley-ai-src/recipes-ultima/ultima-app/. A
-// no-op when NOTIFY_SOCKET is unset (dev builds, the BeaglePlay's
+// no-op when NOTIFY_SOCKET is unset (dev builds, or a
 // Type=simple unit), so it costs nothing anywhere else.
 static void notifySystemd(const char *state)
 {
@@ -144,7 +144,7 @@ int main(int argc, char *argv[])
     // surroundview.h) only renders anything when the scene graph runs on
     // the OpenGL RHI backend — under Metal its Renderer::render() is never
     // invoked, silently leaving the item blank with no warning. Must be set
-    // before the first QQuickWindow is created. The BeaglePlay target's Qt5
+    // before the first QQuickWindow is created. The target's Qt5
     // build has no RHI concept at all (always real GL/GLES via eglfs), so
     // this is a macOS/Qt6-dev-build-only concern — ported from the same fix
     // in test/avm-benchmark/src/main.cpp, which hit this identical failure
@@ -157,7 +157,7 @@ int main(int argc, char *argv[])
     // "#version 330 core" header for desktop GL. Must be set before the
     // first window. On Linux/eglfs this states explicitly what's already
     // implicitly granted (GLES 3.1, confirmed via the PowerVR/mesa-pvr
-    // hardware bring-up — see beagleplay-falcon/NOTES.md), so it changes
+    // hardware bring-up — see beagley-ai/NOTES.md), so it changes
     // nothing there; it's load-bearing only for the macOS dev build.
     QSurfaceFormat surroundFormat;
 #if defined(__linux__)
@@ -252,8 +252,8 @@ int main(int argc, char *argv[])
     // app.exec() even starts the event loop — it's not a frame. These hooks
     // catch the actual first paint, logged to both the journal (stderr) and
     // /dev/kmsg (level 3, so it survives the `quiet` kernel cmdline falcon
-    // boot appends and still lands on the serial console for
-    // measure-boot.sh to pick up in the same timeline as power-on).
+    // boot appends and still lands on the serial console for a
+    // serial boot-timing capture to pick up in the same timeline as power-on).
     auto rootWindow = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
     std::atomic<bool> renderedOnce{false};
     std::atomic<bool> swappedOnce{false};
@@ -317,7 +317,7 @@ int main(int argc, char *argv[])
         // Debug-only on-device screenshot capture. eglfs_kms has no
         // screenshot tooling on this image (no modetest/ffmpeg/fbgrab), and
         // /dev/fb0 doesn't reflect live GPU output once Qt takes over (see
-        // beagleplay-falcon/NOTES.md's boot-splash investigation) — so this
+        // GAUGE-CLUSTER.md's "Boot splash" section) — so this
         // is the only way to pull a frame off real hardware short of
         // photographing the panel. Triggered by touching
         // /tmp/ultima-screenshot.request (optionally containing an output

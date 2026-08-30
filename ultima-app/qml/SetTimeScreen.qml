@@ -293,7 +293,7 @@ Item {
 
     // Up/down triangle drawn on a Canvas rather than a Text glyph — neither
     // bundled font (bahnschrift, range) contains U+25B2/U+25BC, and this app
-    // has no guaranteed system fallback font to borrow them from (BeaglePlay's
+    // has no guaranteed system fallback font to borrow them from (the target's
     // Yocto image ships none at all), so the glyphs rendered as missing-glyph
     // boxes on target. Canvas is proven to render here already (see
     // boostRing in main.qml, same QT_QUICK_BACKEND=software path).

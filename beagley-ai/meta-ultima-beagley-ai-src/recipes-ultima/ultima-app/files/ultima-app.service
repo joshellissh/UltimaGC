@@ -1,0 +1,120 @@
+[Unit]
+Description=Ultima gauge cluster
+# Tried After=/Requires=dev-fb0.device here to stop ultima-app racing tidss
+# (boot log showed a SIGABRT before fb0 existed, then a RestartSec=1 wait
+# every boot) — reverted. Requires= on a .device unit does NOT make systemd
+# wait for it to appear: if it isn't active yet when this job runs, the
+# dependency just fails outright, and Restart=on-failure never retries a
+# unit that never started. That's strictly worse than the crash-loop it was
+# meant to fix (a cluster that never comes up at all, vs. one that
+# eventually does). The real fix for a race like this is udev pulling the
+# service in via SYSTEMD_WANTS when the device appears, not device-unit
+# ordering — not implemented, because forcing the display driver built into
+# the kernel should make fb0 exist before systemd even
+# starts, which likely makes this race moot. Re-open only if a boot log
+# still shows the SIGABRT after that change.
+#
+# DefaultDependencies=no + WantedBy=local-fs.target (2026-08-11): measured on
+# hardware that this unit's real prerequisites (systemd-udevd running, /data
+# mounted) are done by kernel_ts ~2.9s, but with the default WantedBy=
+# multi-user.target it didn't actually start until ~4.0s — waiting on
+# systemd-resolved and D-Bus finishing, neither of which this app touches
+# (see the BeagleY-AI notes "BeagleY-AI boot-time work"). Mirrors
+# ultima-data-mount.service's own already-hardware-proven pattern, and
+# WantedBy=local-fs.target specifically (not some other early target) keeps
+# both units in the same boot transaction — load-bearing, not stylistic: see
+# that unit's own comment for the ordering-cycle this project already hit
+# once from a similar DefaultDependencies change.
+#
+# Wants= (not just After=) on ultima-data-mount.service is also
+# load-bearing: After= alone only orders against a unit if something else
+# pulls it into the same transaction, and nothing else does once this unit
+# stops being reachable from multi-user.target. Without it, a boot could
+# start this app before /data is mounted, and OdoStore would silently fall
+# back to its hardcoded default odometer value — see main.cpp.
+#
+# Deliberately Wants=, not Requires=: Requires= means a failed
+# ultima-data-mount.service (a real possibility — /data is the one
+# partition still mounted rw, see "Read-only rootfs" above, and this board
+# loses power with zero warning in the car) takes this unit down with it —
+# no cluster at all, not just a wrong odometer reading. That directly
+# contradicts this project's own design goal that a torn /data write "can't
+# take the whole board down with it." Wants= still pulls the mount unit
+# into the same transaction (so the After= ordering below has something to
+# resolve against — the actual bug this whole comment is about), but a
+# mount failure only degrades to "cluster starts, OdoStore uses its
+# default, autosave fails" rather than no dash at all.
+#
+# Conflicts=/Before=shutdown.target are re-added explicitly because
+# DefaultDependencies=no also drops the automatic version of these, which is
+# what normally makes this unit's SIGTERM handler (saves the odometer, see
+# sigHandler in main.cpp) run before /data gets unmounted on shutdown.
+#
+# Dropped After=/Wants=systemd-udevd.service (2026-08-11): hardware-measured
+# that systemd-udevd doesn't finish starting until kernel_ts ~2.7s, but this
+# unit doesn't actually need anything from it — /dev/fb0 comes from devtmpfs
+# at kernel driver-probe time (tidss is kernel-built-in, see the dev-fb0.device
+# comment above), and CAN self-retries (CanBus::tryConnect(), see
+# GAUGE-CLUSTER.md). Same stale-holdover pattern as that fb0 trap, just never
+# acted on for udevd specifically until ultima-data-mount.service's own
+# equivalent dependency was proven unnecessary (see that unit's comment) —
+# saved ~1.1s on hardware once removed here too. The remaining
+# After=/Wants=ultima-data-mount.service is real and load-bearing (see above).
+DefaultDependencies=no
+After=ultima-data-mount.service
+Wants=ultima-data-mount.service
+# GPU enablement spike (2026-08-12): pvrsrvkm.ko is out-of-tree (unlike
+# built-in tidss), so it has to actually be loaded before this unit starts —
+# see /etc/modules-load.d/pvrsrvkm.conf, installed by ultima-app.bb.
+# systemd-modules-load.service is itself DefaultDependencies=no and orders
+# only against sysinit.target, which this unit (also DefaultDependencies=no,
+# WantedBy=local-fs.target) has no relationship to — so the .conf file alone
+# is a per-boot race, not a fix. This explicit After= is the actual fix. If
+# the GPU still isn't up by the time this starts, restore
+# After=/Wants=systemd-udevd.service instead (the ~1.1s boot cost this
+# project removed once already) rather than assuming this ordering alone is
+# sufficient.
+After=systemd-modules-load.service
+Conflicts=shutdown.target
+Before=shutdown.target
+StartLimitIntervalSec=0
+
+[Service]
+ExecStartPre=/bin/mkdir -p /tmp/runtime
+# GPU boot-time investigation (2026-08-12): Qt's own shader-binary disk cache
+# (QOpenGLProgramBinaryCache, built into Qt since 5.9, glProgramBinary-based
+# — unrelated to Mesa's disk cache, which this same investigation confirmed
+# this driver stack doesn't honor) only activates when
+# QStandardPaths::CacheLocation is writable. Neither HOME nor XDG_CACHE_HOME
+# was ever set here, so on this read-only rootfs it was almost certainly
+# resolving to a location it couldn't write and silently never caching
+# anything, on every boot, since GPU enablement. /data is the only partition
+# that survives a power cycle (see "Read-only rootfs" above), so that's
+# where the cache has to live for it to ever warm up. mkdir here rather than
+# relying on it being pre-created by ultima-app.bb: this directory is
+# runtime state on the persistent data partition, not part of the rootfs
+# image, same reasoning as /tmp/runtime above.
+ExecStartPre=/bin/mkdir -p /data/qt-shader-cache
+ExecStart=/usr/bin/ultima-app
+# GPU enablement spike (2026-08-12): eglfs/kms instead of linuxfb+software.
+# Revert is BOTH of these lines back
+# to Environment=QT_QPA_PLATFORM=linuxfb + Environment=QT_QUICK_BACKEND=software,
+# not just the platform line: qtbase is now built -opengl es2, so linuxfb
+# alone still leaves Quick trying the GL scenegraph with no GL context.
+Environment=QT_QPA_PLATFORM=eglfs
+Environment=QT_QPA_EGLFS_INTEGRATION=eglfs_kms
+Environment=XDG_RUNTIME_DIR=/tmp/runtime
+# Hardware-verified (2026-08-12, two independent real reboots, not just
+# systemctl restart — see NOTES.md): recovers ~0.2s of the GPU-enablement
+# regression via Qt's shader/QML disk cache, see comment on the ExecStartPre
+# above. Modest, not the full ~1.1s the cache mechanism could theoretically
+# cover — most likely because not every built-in Qt Quick scenegraph
+# material routes through the cacheable shader path in this Qt version.
+Environment=XDG_CACHE_HOME=/data/qt-shader-cache
+Restart=on-failure
+RestartSec=1
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=local-fs.target

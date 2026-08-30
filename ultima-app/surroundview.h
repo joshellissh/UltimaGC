@@ -17,7 +17,7 @@
 // QQuickFramebufferObject — the same GPU-backed-Qt-Quick-item pattern this
 // project already uses for CameraView (see cameraview.h's class comment on
 // the two hardware-verified crashes a hand-managed QSGTexture approach hit
-// on this exact BeaglePlay/PowerVR target) — rendering synchronously on the
+// on this exact PowerVR target) — rendering synchronously on the
 // render thread rather than a second GL context/thread (the benchmark's
 // TEST 20 measured an async variant as *worse* on this non-preemptive GPU,
 // not better).

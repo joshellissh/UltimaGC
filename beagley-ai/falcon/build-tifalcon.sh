@@ -7,7 +7,7 @@
 # Usage:  beagley-ai/falcon/build-tifalcon.sh [outdir]
 #   BOOTARGS="..."  override the kernel cmdline baked into the DTB
 #
-# Outputs (outdir, default beagleplay-falcon/deploy-beagley-ai/falcon/):
+# Outputs (outdir, default beagley-ai/deploy-beagley-ai/falcon/):
 #   tifalcon.bin               the FIT the falcon R5 SPL loads instead of tispl.bin
 #   tiboot3-falcon.bin         R5 SPL built with am67a_beagley_ai_r5_falcon.config
 #   k3-am67a-beagley-ai-falcon.dtb  the patched DTB embedded in the FIT (for inspection)
@@ -15,7 +15,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-OUT="${1:-$HERE/../../beagleplay-falcon/deploy-beagley-ai/falcon}"
+OUT="${1:-$HERE/../deploy-beagley-ai/falcon}"
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
 

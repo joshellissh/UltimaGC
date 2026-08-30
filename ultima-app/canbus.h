@@ -120,7 +120,7 @@ public:
 
     // Debug-only keyboard trigger (see main.qml's 'L'/'R' Keys.onPressed) —
     // fully functional on every build, real hardware included. Confirmed on
-    // real BeaglePlay hardware (2026-08-17) that a plugged-in USB keyboard's
+    // real target hardware (2026-08-17) that a plugged-in USB keyboard's
     // key events reach Keys.onPressed just fine (kernel/evdev/Qt input all
     // work on this image). An earlier version gated the actual toggle logic
     // to simulate builds only, on the theory that a real board's turn

@@ -4,7 +4,7 @@ tispl.bin: ATF (firmware) + OP-TEE + DM firmware + kernel Image + DTB as \
 loadables, at the addresses the falcon-address TF-A jumps to. The DTB gets the \
 two fixups U-Boot proper would otherwise apply at runtime (kernel cmdline in \
 /chosen, and the tfa reserved-memory node moved to where ATF really is). See \
-beagleplay-falcon/NOTES.md 'Falcon on BeagleY-AI' and files/tifalcon.its.in."
+the BeagleY-AI notes ('Falcon on BeagleY-AI') and files/tifalcon.its.in."
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 

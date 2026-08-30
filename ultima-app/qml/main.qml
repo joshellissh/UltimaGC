@@ -38,7 +38,7 @@ Window {
     // Splash-to-cluster intro: plays once at launch, after splashDone (see
     // below) — i.e. immediately on real hardware, or after the dev-only
     // boot-splash simulation if that's active. Shows splash_screen.png
-    // (the same art beagleplay-falcon's pre-Qt ultima-splash already
+    // (the same art beagley-ai's pre-Qt ultima-splash already
     // painted to the framebuffer) with splash_car_start.png overlaid at
     // the exact offset it occupies within that image — confirmed by
     // pixel-diffing the two source PNGs, not eyeballed — so Qt's first
@@ -68,8 +68,8 @@ Window {
 
     // Boot splash simulation — dev-build only, opt-in via ULTIMA_SPLASH_IMAGE
     // (set by `scripts/dev-build.sh --boot`), empty/unset otherwise. Mimics
-    // the on-target timeline from beagleplay-falcon/NOTES.md's "Boot splash
-    // implemented" section: ~2.1s black, then the splash art for ~5.1s,
+    // the on-target timeline from GAUGE-CLUSTER.md's "Boot splash"
+    // section: ~2.1s black, then the splash art for ~5.1s,
     // then a hard cut — real hardware's handoff is a single abrupt modeset,
     // not a fade — straight into the self-test sweep below. Gating that
     // sweep on splashDone (instead of starting it immediately) matters: on
@@ -804,9 +804,9 @@ Window {
     // right-aligned against the mirror of its x=1087 left edge (center 800).
     // Shows "--:--" instead of a real time until systemClock.timeIsValid()
     // (see systemclock.h) — right after boot the system clock still holds
-    // its stale boot-default value until ultima-hwclock-load.service pulls
-    // the real time from the RTC, which otherwise flashes briefly (see
-    // beagleplay-falcon/NOTES.md "Dash clock doesn't persist a manual set").
+    // its stale boot-default value until the RTC's real time is loaded into
+    // the system clock, which otherwise flashes briefly (see
+    // GAUGE-CLUSTER.md "Dash clock doesn't persist a manual set").
     Text {
         id: clockText
         property date now: new Date()
@@ -868,7 +868,7 @@ Window {
     // Trip reset button - a circular-arrow icon drawn on a Canvas rather
     // than the U+21BA Text glyph this used to be. Neither bundled font
     // (bahnschrift, range) contains that glyph, and this app has no
-    // guaranteed system fallback font to borrow it from (BeaglePlay's
+    // guaranteed system fallback font to borrow it from (the target's
     // Yocto image ships none at all), so it rendered as a missing-glyph
     // box on target. Canvas is proven to render here already (see
     // boostRing above, same QT_QUICK_BACKEND=software path).

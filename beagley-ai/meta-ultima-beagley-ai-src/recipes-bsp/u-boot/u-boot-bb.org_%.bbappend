@@ -6,8 +6,7 @@
 # u-boot-ti.inc -> u-boot-mergeconfig.inc merges UBOOT_CONFIG_FRAGMENTS via
 # `make <defconfig> <fragment>`, which resolves fragment names against
 # ${S}/configs/. A file fetched through SRC_URI lands in ${WORKDIR}, not
-# there (see meta-falcon-beagleplay's u-boot-ti-staging bbappend for the
-# same lesson), so copy it into place before configure runs.
+# there, so copy it into place before configure runs.
 FILESEXTRAPATHS:prepend := "${THISDIR}/u-boot-bb.org:"
 
 SRC_URI:append:beagley-ai-k3r5 = " file://am67a_beagley_ai_r5_falcon.config"

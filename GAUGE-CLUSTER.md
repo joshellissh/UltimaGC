@@ -3,7 +3,7 @@
 Board-agnostic reference for the Qt5/QML app itself (`ultima-app/`)
 and the live CAN data it displays. This content applies regardless of which board is
 running the dash. For board-specific build/boot/flash instructions, see
-`beagleplay-falcon/NOTES.md`.
+`beagley-ai/NOTES.md`.
 
 ## Qt App Structure
 
@@ -32,7 +32,7 @@ change as the app evolves and a stale copy is worse than no copy.
 - **`odostore.h` / `odostore.cpp`** — `OdoStore` is a `QObject` with `totalOdo` and
   `tripOdo` properties. Reads `/data/odometer.json` on construction (defaults to
   0.0 / 0.0 if missing — was 2347.0 / 0.0 until the odometer was reset
-  2026-08-19, see `beagleplay-falcon/NOTES.md`). `save()` slot writes JSON.
+  2026-08-19, see `beagley-ai/NOTES.md`). `save()` slot writes JSON.
   `main.qml`'s periodic save
   timer calls `sim.save()`, which is `CanBus::save()` — it flushes into `OdoStore`
   before persisting (see below).
@@ -52,16 +52,16 @@ change as the app evolves and a stale copy is worse than no copy.
 - **`systemclock.h` / `systemclock.cpp`** — lets the QML time-set screen
   (`SetTimeScreen.qml`) push a new wall-clock time to the kernel via
   `clock_settime()`, with a best-effort write-through to a battery-backed hardware
-  RTC at `/dev/rtc0` if one is present (BeaglePlay has one, onboard BQ32002). No-op
+  RTC at `/dev/rtc0` if one is present. No-op
   on non-Linux dev builds. Also exposes `timeIsValid()`, which the dash clock
   (`main.qml`) uses to show `--:--` instead of a stale boot-default time during the
-  brief post-boot window before the RTC's real time lands — see
-  `beagleplay-falcon/NOTES.md` "Dash clock doesn't persist a manual set".
+  brief post-boot window before the RTC's real time lands — see "Dash clock
+  doesn't persist a manual set" under [Startup & Clock Behavior](#startup--clock-behavior) below.
 ### QML Files
 
 The app consists of 11 QML files, all in `ultima-app/qml/`:
 
-- **`main.qml`** — Root layout: 4 gauge needles over the Bavarian background layers, boost gauge (trapezoid black overlay with PSI readout), turn signal indicators, top indicator row (oil, check engine, beams, battery, coolant — warn icons flash at 300ms), a separate low-fuel badge (`icon_fuel_low.png`, turns the fuel-pump icon red under 1/4 tank — see `sim.lowFuelWarn`), gear indicator (Bahnschrift SemiBold font, P/R/N/1-7), odometer + trip odometer with reset button, touch feedback dot. Tapping the car (either lights state) opens `Camera360Screen` — this used to be a dedicated `icon_360.png` tap target; that icon and the binding were removed (2026-08-18) in favor of tapping the car itself. While a turn signal is active (and hazards aren't), `leftCamOverlay`/`rightCamOverlay` pop up a bordered `CameraView` fed by `cameraFeed3`/`cameraFeed4` respectively, reprojected through `mirror.frag`'s virtual-mirror view (see `CameraView`'s `mirrorViewSide` property below) — a live blind-spot mirror replacement, gone the instant the signal (a static level, not a blink waveform — see the CAN section) drops or hazards latch on. On startup, a ~1s splash-to-cluster intro (`introFrac`/`introTransitionDone`) shows `splash_screen.png` with `splash_car_start.png` overlaid at the exact offset it occupies in that art (262,167,1104x364 — pixel-matched against the source PNGs, not eyeballed), then fades the splash background out while the car cutout shrinks/moves onto `car_lights_off`'s alpha-bbox rect (627,479,346x128) and fades away, handing off to the real car artwork underneath. This exists so Qt's first frame is pixel-identical to what `beagleplay-falcon`'s pre-Qt `ultima-splash` framebuffer splash already painted (see that project's NOTES.md), keeping the modeset handoff invisible. Only once that finishes does the ~2s self-test (`startupActive`/`startupFrac`/`startupFlash`) sweep every needle to max and back and flash every icon before handing off to live `sim.*` values — real gauge/warning bindings are `startupActive ? <test value> : sim.<prop>`. Includes a periodic (30s) save timer for odometer persistence via `sim.save()`. All gauge values bind to the `sim` context property, which is the `CanBus` C++ object, not this file's `SimEngine.qml`. Hosts `SetTimeScreen`, `DiagnosticScreen`, `CameraGridScreen`, `Camera360Screen`, and `RearCameraScreen` as overlays; a swipe left/right on the main dash opens `DiagnosticScreen`/`CameraGridScreen` respectively — `PageIndicator` (below) shows dots for that 3-screen swipe layout.
+- **`main.qml`** — Root layout: 4 gauge needles over the Bavarian background layers, boost gauge (trapezoid black overlay with PSI readout), turn signal indicators, top indicator row (oil, check engine, beams, battery, coolant — warn icons flash at 300ms), a separate low-fuel badge (`icon_fuel_low.png`, turns the fuel-pump icon red under 1/4 tank — see `sim.lowFuelWarn`), gear indicator (Bahnschrift SemiBold font, P/R/N/1-7), odometer + trip odometer with reset button, touch feedback dot. Tapping the car (either lights state) opens `Camera360Screen` — this used to be a dedicated `icon_360.png` tap target; that icon and the binding were removed (2026-08-18) in favor of tapping the car itself. While a turn signal is active (and hazards aren't), `leftCamOverlay`/`rightCamOverlay` pop up a bordered `CameraView` fed by `cameraFeed3`/`cameraFeed4` respectively, reprojected through `mirror.frag`'s virtual-mirror view (see `CameraView`'s `mirrorViewSide` property below) — a live blind-spot mirror replacement, gone the instant the signal (a static level, not a blink waveform — see the CAN section) drops or hazards latch on. On startup, a ~1s splash-to-cluster intro (`introFrac`/`introTransitionDone`) shows `splash_screen.png` with `splash_car_start.png` overlaid at the exact offset it occupies in that art (262,167,1104x364 — pixel-matched against the source PNGs, not eyeballed), then fades the splash background out while the car cutout shrinks/moves onto `car_lights_off`'s alpha-bbox rect (627,479,346x128) and fades away, handing off to the real car artwork underneath. This exists so Qt's first frame is pixel-identical to what the pre-Qt `ultima-splash` framebuffer splash already painted (see `beagley-ai/NOTES.md`), keeping the modeset handoff invisible. Only once that finishes does the ~2s self-test (`startupActive`/`startupFrac`/`startupFlash`) sweep every needle to max and back and flash every icon before handing off to live `sim.*` values — real gauge/warning bindings are `startupActive ? <test value> : sim.<prop>`. Includes a periodic (30s) save timer for odometer persistence via `sim.save()`. All gauge values bind to the `sim` context property, which is the `CanBus` C++ object, not this file's `SimEngine.qml`. Hosts `SetTimeScreen`, `DiagnosticScreen`, `CameraGridScreen`, `Camera360Screen`, and `RearCameraScreen` as overlays; a swipe left/right on the main dash opens `DiagnosticScreen`/`CameraGridScreen` respectively — `PageIndicator` (below) shows dots for that 3-screen swipe layout.
 - **`CircularGauge.qml`** — Reusable needle gauge component: rotates `needle.png` over a transparent item positioned at the gauge center. Configurable start/end angles, counter-clockwise mode, needle size/pivot, optional debug arc overlay
 - **`SetTimeScreen.qml`** — Time-set overlay that calls into `SystemClock` (the `systemClock` context property) to push a new wall-clock time
 - **`DiagnosticScreen.qml`** — Full-screen grid of every CAN2 signal this build actually decodes today (ECU + MCE18 — see below), showing the raw decoded value/enum behind each dash gauge or icon rather than just its needle position or lit/unlit state. Opened by swiping left anywhere on the main dash, closed by swiping right
@@ -86,7 +86,7 @@ Images are in `ultima-app/assets/images/`, fonts in
 | `background_overlay.png` | Gauge/dial face overlay (tick marks, TOTAL/TRIP text area, mini fuel/coolant arcs; alpha) |
 | `car_lights_off.png` | Centered car render (alpha) |
 | `car_lights_on.png` | Same, headlights lit — `visible: sim.lowBeams \|\| sim.highBeams`, loaded `asynchronous: true` so the off-state boot path isn't blocked decoding it |
-| `splash_screen.png` | Full 1600x720 "ULTIMA RS" splash art — a copy of repo-root `splash screen.png` (which also feeds `beagleplay-falcon`'s pre-Qt framebuffer splash; keep both in sync when the art changes). Shown full-bleed for the startup intro, then faded out — see `main.qml`'s intro section above |
+| `splash_screen.png` | Full 1600x720 "ULTIMA RS" splash art — a copy of repo-root `splash screen.png` (which also feeds the pre-Qt `ultima-splash` framebuffer splash; keep both in sync when the art changes). Shown full-bleed for the startup intro, then faded out — see `main.qml`'s intro section above |
 | `splash_car_start.png` | 1104x364 cutout of the splash art's car, tightly cropped to its alpha bbox — pixel-identical to the region at (262,167) in `splash_screen.png`. Overlaid there at launch, then animated onto `car_lights_off`'s rect as part of the startup intro |
 | `needle.png` | Gauge needle image (rotated by CircularGauge) |
 | `left_indicator.png` | Turn signal arrow icon (mirrored for right) |
@@ -121,17 +121,112 @@ scripts/dev-build.sh   # qmake6 + make in ./build/, then opens ultima-app.app
 
 WSL2 has an equivalent script, `scripts/dev-build-wsl.sh` — see the comment at the top of that file for setup.
 
+## Startup & Clock Behavior
+
+### Boot splash (pre-Qt framebuffer splash)
+
+Before the Qt app's first frame, a tiny userspace program paints a static splash
+straight to the framebuffer, so the panel shows the ULTIMA art within ~2s of
+power-on instead of staying black until Qt comes up (~5s later). It's a separate
+component from the Qt app — `ultima-splash`, a board-layer recipe — but the app is
+written to hand off from it invisibly, so the mechanism is documented here alongside
+the app-side intro it pairs with.
+
+Why userspace and not the kernel's built-in fbcon boot logo (`CONFIG_LOGO`): on the
+DRM-fbdev-emulation display stack this project runs, the kernel's `fb_show_logo()`
+never actually fires — verified by dumping `/dev/fb0` after a clean boot (zero
+non-zero bytes until a console write forces one). The fbcon→fb0 pixel path itself
+works; only the dedicated boot-logo blit is dead. So the splash is a ~90-line C
+program (`ultima-splash.c`) that `mmap`s `/dev/fb0` and blits a raw image, rather
+than fighting that path.
+
+Key design choices, all load-bearing:
+
+- **Plain `/dev/fb0`, never `/dev/dri/card0`.** The program never opens the DRM
+  device and never takes DRM master, so it can't contend with the Qt app's
+  `eglfs_kms` display. The fbdev→eglfs handoff happens on every boot regardless of
+  the splash; the splash only changes which pixels sit in the buffer when that
+  handoff occurs, it doesn't add one. (With this stack's legacy KMS the app's first
+  `drmModeSetCrtc` does force one real modeset — but Qt issues it only when it's
+  already about to render, so the single blank frame lands in a sub-200ms window
+  immediately followed by real content, not as its own visible flash.)
+- **Ships as a headerless raw pixel blob, not a PNG.** Decoding PNG on-target would
+  mean adding libpng/zlib to a deliberately dependency-light read-only rootfs, for
+  one static build-time-known image. The art is converted once, host-side, to the
+  exact in-memory byte order the panel wants (`PIL:
+  Image.convert("RGB").tobytes("raw", "BGRX")` — on a little-endian target, bytes
+  `[B,G,R,pad]` read back as native `0x00RRGGBB` / XRGB8888), so the on-target code
+  is a plain stride-aware `read()` loop with zero pixel-format conversion.
+- **Refuses to guess.** It draws only if the blob's byte count matches `xres*yres*4`
+  for whatever panel is actually attached; a mismatch aborts rather than
+  scaling/cropping — the same "refuse to guess" stance as its bpp check.
+- **Runs as a `oneshot` systemd unit** ordered before the app
+  (`DefaultDependencies=no`, `WantedBy=sysinit.target`, `Before=ultima-app.service`
+  — ordering only, not a dependency). It draws once and exits; the image persists
+  because the display holds the last-committed buffer, not because a process keeps
+  running — so there's no long-running process or DRM master to synchronize the
+  app's start against.
+
+App-side handoff: `main.qml`'s startup intro (`introFrac`/`introTransitionDone`) is
+authored so Qt's very first frame is pixel-identical to what `ultima-splash` already
+painted (same art — the `splash_screen.png` app asset is a copy of the same source
+art the framebuffer splash uses; keep them in sync), then animates from there into
+the live cluster. That's what makes the framebuffer→Qt modeset handoff read as one
+continuous splash rather than a black blink. `scripts/dev-build.sh --boot` replays
+this whole timeline on the desktop dev build (opt-in via `ULTIMA_SPLASH_IMAGE`) so
+the boot flow can be screen-recorded without hardware.
+
+### Dash clock doesn't persist a manual set
+
+Two app-side behaviors around the wall clock, both worth knowing when touching
+`SystemClock` (`systemclock.h`/`.cpp`) or the dash clock in `main.qml`:
+
+**A manual time-set can be silently overwritten by NTP on a networked bench.**
+`SystemClock::setTime()` calls `clock_settime()` directly (plus a best-effort
+write-through to a hardware RTC at `/dev/rtc0`) — it does *not* go through
+`org.freedesktop.timedate1`. So if an NTP daemon like `systemd-timesyncd` is
+running, it never learns a manual override happened and re-syncs the clock out from
+under it, the way `timedatectl set-time` would have prevented. This only bites on
+the bench, where the board has wired Ethernet; the deployed car has no network, so
+NTP was never a legitimate clock source there anyway. The shipped image disables
+`systemd-timesyncd` for exactly this reason (`ultima_mask_timesyncd` in the image
+recipe), so on a real car the RTC is the only thing that sets the clock.
+
+**The dash shows `--:--` until the clock is known-good, to hide the boot-default
+blip.** At power-on the system clock holds a stale boot-default until an
+RTC-to-system-clock load runs (`hwclock --hctosys` or equivalent), so for a brief
+window the app is up but the time is wrong. Rather than flash that wrong time, the
+clock binding in `main.qml` shows `--:--` until `SystemClock::timeIsValid()` flips
+true, on the same per-second `Timer` tick that already re-reads the time.
+
+`timeIsValid()` reads `/dev/rtc0` directly (`RTC_RD_TIME`) and compares it against
+`time(nullptr)`; it **fails closed** — reports invalid if the RTC device isn't
+present yet or the read fails — which correctly covers both a board with no
+battery-backed RTC at all and the brief post-boot window before the RTC driver has
+registered `/dev/rtc0`.
+
+That RTC comparison replaced a first attempt that compared the wall clock against
+the binary's own build timestamp (`__DATE__`/`__TIME__`), on the theory that the
+stale boot-default is always earlier than build time. It regressed to a permanent
+`--:--`: the build container's clock had drifted hours *ahead* of real time (an
+OrbStack VM clock-drift case), so the embedded "build time" was itself in the future
+and the real clock could never catch up to it. The lesson generalizes past the
+drift — **no build machine's clock is trustworthy ground truth**, so a sanity check
+should compare against a value already proven live on the *target* (here, the same
+RTC that's supposed to set the clock in the first place), never against anything
+baked in at build time.
+
 ## CAN Bus Integration (Syvecs S7+)
 
 The dash gets live engine/vehicle data from the car's Syvecs S7+ ECU over CAN, decoded by `CanBus` (`canbus.h`/`canbus.cpp`) and exposed to QML as the `sim` context property.
 
 ### Hardware
 
-- **Adapter**: MikroE CAN SPI 3.3V click (MCP2515 CAN controller + SN65HVD230 transceiver), plugged into BeaglePlay's mikroBUS header. Screw terminals on the click board wire to the ECU's **B2 (CAN_H) / B3 (CAN_L)** pins. Replaced an earlier ODrive USB-CAN adapter (`gs_usb`/candleLight) — retired in favor of this SPI click so the dash doesn't depend on a USB dongle.
+- **Adapter**: MikroE CAN SPI 3.3V click (MCP2515 CAN controller + SN65HVD230 transceiver), on the board's SPI bus. Screw terminals on the click board wire to the ECU's **B2 (CAN_H) / B3 (CAN_L)** pins. Replaced an earlier ODrive USB-CAN adapter (`gs_usb`/candleLight) — retired in favor of this SPI click so the dash doesn't depend on a USB dongle.
 - **Termination**: the click has a termination jumper (J2) — populate it since this board sits at one end of the Syvecs S7+'s CAN2 bus, which has **no on-board termination** of its own; without it (or an external 120 Ω resistor across CAN_H/CAN_L at the ECU end) the bus won't terminate correctly.
-- **Device tree**: BeaglePlay's stock dts enables the mikroBUS SPI/GPIO pinmux but has no CAN device node by default — one is added by a kernel-recipe patch (BeaglePlay: `beagleplay-falcon/meta-ultima-beagleplay-src/recipes-kernel/linux/linux-ti-staging/0001-arm64-dts-k3-am625-beagleplay-add-mikrobus-can-click.patch`), declaring the MCP2515 on `main_spi2` chip-select 0 with its 10 MHz crystal (`fixed-clock`) and INT wired to the mikroBUS INT pin (`main_gpio1` line 9). TI Falcon boot bakes the dtb in at kernel build time — there's no U-Boot-proper stage here to apply a runtime `.dtbo` overlay, so this has to be a compile-time change, not a cape-manager-style overlay.
-- **Kernel support**: `CONFIG_CAN`, `CAN_RAW`, `SPI_OMAP24XX`, `CAN_MCP251X` are enabled, all built in (`=y`, not `=m`) — this is a device-tree-instantiated SPI device, not a hotplugged USB one, and DT-platform-device module coldplug has bitten this project before (see `CONFIG_DRM_TIDSS` in `beagleplay-falcon/NOTES.md`) (BeaglePlay: `beagleplay-falcon/meta-ultima-beagleplay-src/recipes-kernel/linux/linux-ti-staging/ultima-can.cfg`).
-- **Bring-up**: a udev rule matches the mcp251x-driven SPI network device and runs `ip link set can0 type can bitrate 1000000 && ip link set up can0` automatically as soon as the driver registers the interface (BeaglePlay: `beagleplay-falcon/meta-ultima-beagleplay-src/recipes-ultima/ultima-app/files/70-can.rules`). `CanBus` doesn't assume `can0` exists at startup regardless — it retries `socket(PF_CAN)` + `bind()` every 1s until the interface appears, so app start never has to race udev.
+- **Device tree**: the CAN controller is a device-tree-instantiated SPI device — the MCP2515 is declared on the board's SPI bus (chip-select 0, its own 10 MHz crystal as a `fixed-clock`, INT on a GPIO line) by a kernel-recipe DT patch. Falcon boot bakes the dtb in at kernel build time — there's no U-Boot-proper stage here to apply a runtime `.dtbo` overlay, so this has to be a compile-time change, not a cape-manager-style overlay.
+- **Kernel support**: `CONFIG_CAN`, `CAN_RAW`, `SPI_OMAP24XX`, `CAN_MCP251X` are enabled, all built in (`=y`, not `=m`) via a kernel config fragment — this is a device-tree-instantiated SPI device, not a hotplugged USB one, and DT-platform-device module coldplug has bitten this project before, so building the CAN driver in avoids relying on it.
+- **Bring-up**: a udev rule matches the mcp251x-driven SPI network device and runs `ip link set can0 type can bitrate 1000000 && ip link set up can0` automatically as soon as the driver registers the interface (`beagley-ai/meta-ultima-beagley-ai-src/recipes-ultima/ultima-app/files/70-can.rules`). `CanBus` doesn't assume `can0` exists at startup regardless — it retries `socket(PF_CAN)` + `bind()` every 1s until the interface appears, so app start never has to race udev.
 
 ### ECU Configuration
 
@@ -243,9 +338,9 @@ confirmed 2026-08-18, ahead of the rest of this frame.
   `CanBus` Tx path, etc.) needs to send the AUX state periodically, not once.
 
 This bench test used the ODrive USB-CAN adapter (`gs_usb`, temporarily
-re-added alongside the MCP2515 SPI click — see `ultima-can.cfg`/
-`70-can.rules` — since the click isn't physically seated on the mikroBUS
-header yet) and confirmed real MCE18 traffic end-to-end: `0x700`/`0x701`/
+re-added alongside the MCP2515 SPI click — see `70-can.rules` — since the
+click isn't physically seated on the SPI header yet) and confirmed real MCE18
+traffic end-to-end: `0x700`/`0x701`/
 `0x702` all present, byte 7 of `0x702` (`version`) read `0x74` (116),
 consistent with a real unit on firmware past the internal-mapper cutoff
 (104) mentioned in the manual.
@@ -259,11 +354,98 @@ to confirm the AIN0 empty/full direction and calibration.
 
 - `candump can0` (can-utils is included in the image) to watch raw traffic.
 - `ip -details link show can0` to check bitrate/link state.
-- `CanBus` logs `[canbus] ...` lines to stderr on connect/bind failures and reconnects — check `journalctl -u ultima-app` (BeaglePlay logs to journald, see `ultima-app.service`).
+- `CanBus` logs `[canbus] ...` lines to stderr on connect/bind failures and reconnects — check `journalctl -u ultima-app` (the app logs to journald, see `ultima-app.service`).
 - `main.cpp` polls for a handful of trigger files under `/tmp` every frame or so (dev/debug only, works over SSH on real hardware too, not just the dev-sim build): `/tmp/ultima-screenshot.request` (optionally containing an output path, default `/tmp/ultima-screenshot.png`) grabs a frame; `/tmp/ultima-camtest.request` containing `open`/`close`/`360open`/... drives the camera overlays without touching CAN; `/tmp/ultima-indicator.request` containing `left`/`right`/`hazard` toggles turn signals the same way the debug L/R/H keys do. Each trigger file is deleted after being read.
 - `CameraFeed` supports `ULTIMA_CAM_IMAGE_DIR` (env var) to serve real static photos instead of synthetic test bars from the fake mycam004m backend — useful for eyeballing `CameraView`'s mirror-view reprojection (`mirror.frag`) against real-world content instead of a test pattern.
-- Camera performance env vars (all real-hardware; see `beagleplay-falcon/NOTES.md` "Camera framerate" for the 2026-08-26 investigation that added them): `ULTIMA_CAM_FPS_LOG=1` prints per-feed arrived/published/decoded rates + convert times and per-`CameraView` render stats every ~2s; `ULTIMA_CAM_ZEROCOPY=0` disables the default zero-copy dma-buf display path (`dmabuftexture.h`) and forces the converted-QImage path everywhere; `ULTIMA_CAM_FANOUT=1` points `cameraFeed2..4` at `cameraFeed1`'s object so every camera surface renders the one attached camera — a 4-camera load proxy for a single-camera bench.
+- Camera performance env vars (all real-hardware; see "Camera framerate: root cause found" below for the 2026-08-26 investigation that added them): `ULTIMA_CAM_FPS_LOG=1` prints per-feed arrived/published/decoded rates + convert times and per-`CameraView` render stats every ~2s; `ULTIMA_CAM_ZEROCOPY=0` disables the default zero-copy dma-buf display path (`dmabuftexture.h`) and forces the converted-QImage path everywhere; `ULTIMA_CAM_FANOUT=1` points `cameraFeed2..4` at `cameraFeed1`'s object so every camera surface renders the one attached camera — a 4-camera load proxy for a single-camera bench.
 
 ### Camera frame paths (zero-copy vs converted)
 
-Two parallel paths carry frames out of `CameraFeed` (full rationale + measured numbers in `beagleplay-falcon/NOTES.md` "Camera framerate: root cause found"): the **zero-copy path** (default on target) exports each V4L2 capture buffer as a dma-buf and renderers (`CameraView` — grid tiles, rear screen, mirror overlays) import it as a `GL_TEXTURE_EXTERNAL_OES` via `DmaBufTextureSet`, the GPU sampling UYVY directly — no CPU convert, no upload; and the **converted path** (`SurroundView`'s stitch, plus the whole macOS/sim build) where a per-feed capture thread NEON-decodes UYVY→RGBA8888 at half resolution into `currentFrame()` QImages, but only while a consumer is registered (`CameraFeed::addFrameConsumer()`, driven by `SurroundView`'s visibility). `ShaderManager::ExternalSampler` lets `blit.frag`/`mirror.frag` serve both paths from one source file. The capture buffers themselves are requested CPU-cacheable (`V4L2_MEMORY_FLAG_NON_COHERENT`) — reading the default uncached mapping is what made the original 2026-08-25 "3fps grid" bug.
+Two parallel paths carry frames out of `CameraFeed` (full rationale + measured numbers in "Camera framerate: root cause found" below): the **zero-copy path** (default on target) exports each V4L2 capture buffer as a dma-buf and renderers (`CameraView` — grid tiles, rear screen, mirror overlays) import it as a `GL_TEXTURE_EXTERNAL_OES` via `DmaBufTextureSet`, the GPU sampling UYVY directly — no CPU convert, no upload; and the **converted path** (`SurroundView`'s stitch, plus the whole macOS/sim build) where a per-feed capture thread NEON-decodes UYVY→RGBA8888 at half resolution into `currentFrame()` QImages, but only while a consumer is registered (`CameraFeed::addFrameConsumer()`, driven by `SurroundView`'s visibility). `ShaderManager::ExternalSampler` lets `blit.frag`/`mirror.frag` serve both paths from one source file. The capture buffers themselves are requested CPU-cacheable (`V4L2_MEMORY_FLAG_NON_COHERENT`) — reading the default uncached mapping is what made the original 2026-08-25 "3fps grid" bug.
+
+### Camera framerate: root cause found (4 fps → 25 fps)
+
+This is the investigation behind the two-path design above. On the first real
+cameras the 4-up grid ran at ~4 fps, and the obvious fixes (decode at lower
+resolution, back off failed-feed retries) barely moved it — the real cost was
+somewhere else entirely.
+
+**Root cause of the ~4 fps: uncached V4L2 buffer reads.** Per-stage timers split one
+frame into DQBUF-drain / UYVY→RGBA convert / GPU upload / render — the convert alone
+was **~240 ms/frame**, everything else 0.05–5 ms. The `videobuf2-dma-contig` MMAP
+capture buffers are mapped **uncached** (dma-coherent, Normal-NC), and the scalar
+converter did ~1M single-byte loads per frame from that mapping — every load a full
+DRAM round-trip (~240 ns). The GUI thread sat ~240 ms inside each convert, so it only
+serviced the capture socket-notifier ~4×/s; the driver was delivering 25 fps all
+along, the surplus buffers just got dropped for lack of a free one. ("Not CPU-bound,
+72% idle" was a busybox `top` misread — one core was pegged in stalled loads, the
+other three idle.)
+
+The fix is two independent halves:
+
+1. **Ask V4L2 for CPU-cacheable buffers** — `VIDIOC_REQBUFS` with
+   `V4L2_MEMORY_FLAG_NON_COHERENT` (kernel ≥5.15). Needs no driver change *if* the
+   capture driver advertises the capability (`V4L2_BUF_CAP_SUPPORTS_MMAP_CACHE_HINTS`,
+   and the flag echoes back set); vb2 cache-invalidates on DQBUF, and the CPU only
+   ever reads the buffers, so there's no dirty-line hazard.
+2. **NEON UYVY→RGBA convert** (`vld4q_u8`, one 64-byte de-interleaving load per 16
+   pixels) instead of byte-at-a-time scalar.
+
+Cached buffers are by far the bigger lever — measured convert cost, same 960×540
+frame:
+
+| variant | convert ms/frame | decoded fps |
+|---|---|---|
+| scalar, uncached (the original shipping code) | 240 | 4.1 |
+| NEON, uncached | 64 | 15 |
+| scalar, **cached** | 8.9 | 25 |
+| NEON, **cached** | **3.6** | **25** |
+
+(That's the basis for the "never byte-scan an uncached DMA buffer" rule — wide loads
+help, but *cached* is the real fix.)
+
+**Second bottleneck (4-camera scaling): the render thread.** With one camera fixed
+at 25 fps, a 4-camera load proxy (`ULTIMA_CAM_FANOUT=1`) saturated the render thread
+at ~9.5 fps/quadrant, 104% of a core: 4× `glTexSubImage2D` of ~2 MB RGBA each plus 4
+FBO passes. Nothing upload-shaped reached 25. The fix that ends the category is the
+**zero-copy path**: export each V4L2 buffer as a dma-buf (`VIDIOC_EXPBUF`), import it
+as an EGLImage (`eglCreateImageKHR` with `EGL_LINUX_DMA_BUF_EXT`, `DRM_FORMAT_UYVY`,
+BT.601 limited-range hints) bound to a `GL_TEXTURE_EXTERNAL_OES`, and let the GPU
+sampler do UYVY→RGB — no CPU convert, no upload at all. The PowerVR stack here
+supports it (`EGL_EXT_image_dma_buf_import` + `GL_OES_EGL_image_external_essl3` + a
+UYVY pipe format). Measured, 4 quadrants:
+
+| path | per-quadrant fps | render thread |
+|---|---|---|
+| convert + `glTexSubImage2D` | 9.5 | 104% (saturated) |
+| **zero-copy external texture** | **25.0** | **22%** |
+
+What shipped (see the code comments for the load-bearing detail): capture+convert
+moved off the GUI thread onto a per-feed capture thread; cached buffers; NEON; a
+zero-copy buffer-lending mailbox with refcounts (`camerafeed.{h,cpp}`) — retired
+buffers re-`QBUF`'d on the capture thread. Converted QImages still exist but only
+while a consumer registers (`addFrameConsumer`, driven by `SurroundView`'s
+visibility). `dmabuftexture.{h,cpp}` does the EGLImage import (libEGL via `dlopen`,
+so the macOS/sim build has no link dependency), with session tracking so a stream
+restart drops stale imports — EGLImages pin CMA (≈6 buffers × 4 MB × 4 cams = 96 MB
+of a 128 MB pool), so a hidden view that misses the drop window self-heals on the
+1 s reconnect. `cameraview.cpp` renders the external texture when available and keeps
+the QImage path as the fallback; `ShaderManager::ExternalSampler` rewrites
+`sampler2D`→`samplerExternalOES` at shader load so `blit.frag`/`mirror.frag` serve
+both paths from one source. One color note: the GPU samples BT.601 **limited-range**
+(matching what the cameras actually emit), where the old CPU path assumed full-range
+— zero-copy frames look slightly higher-contrast, which is the *more correct*
+rendering, not a regression.
+
+**A hidden trap worth its own note: `QQuickFramebufferObject::update()` renders even
+when the item is invisible.** First full-app fanout runs came in at 17 fps, not the
+prototype's 25 — per-renderer logging showed **seven** `CameraView`s rendering, not
+four: the two hidden mirror overlays and the hidden rear-camera screen were
+re-rendering every frame, and the mirror views' per-fragment fisheye reprojection is
+GPU-heavy. `update()` schedules the FBO pass regardless of item visibility, so a
+`frameReady → update()` connection on a hidden item is a full wasted pass. Two fixes,
+both needed: the `frameReady`/`streamingChanged` handlers now check `isVisible()`
+before calling `update()`; and `CameraGridScreen.qml` — which "closes" by sliding to
+`x: -parent.width` while staying `visible: true` — now binds `visible: isOpen`, since
+the `isVisible()` guard alone still let all four off-screen tiles render whenever a
+feed streamed.

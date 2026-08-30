@@ -143,7 +143,7 @@ Verified identical structure (120 streams + 728-byte trailer) in all three
   *count* can probably leave this array untouched — untested).
 - **No confirmation this device will actually accept an edited `.mx`** —
   round-trip fidelity was validated against the original files only, not
-  against real hardware (target BeaglePlay/car hardware in this repo is
+  against real hardware (the target board / car hardware in this repo is
   unrelated to this AVM box; the BY-J unit itself hasn't been tested with a
   modified file).
 - **Camera rig / lighting parameters for the 120-frame orbit** (FOV,
