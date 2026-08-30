@@ -5106,6 +5106,103 @@ This is the actual, reproducible-from-clean-build finish line for milestone
 straight to a working gauge-cluster display, no manual grub.cfg surgery
 required.
 
+### Touchscreen didn't work — root cause was USB entirely disabled, not a touch driver problem (2026-08-29, later same day)
+
+With display working, the Waveshare USB-HID touchscreen (same panel/model as
+BeaglePlay's, see that board's boot logs — `hid-multitouch`, USB
+`0712:000A`) still didn't respond. First check ruled out the obvious: this
+isn't a touch-specific problem at all.
+
+**`/sys/bus/usb/devices` was completely empty — not even a root hub.** A
+merely-unplugged touchscreen still leaves a root hub; zero entries plus zero
+`xhci`/`dwc3`/`cdns` lines anywhere in `dmesg` means the SoC's USB
+controller itself never probed. `lsmod` and `/proc/config.gz` confirmed the
+driver support is all there (`CONFIG_USB_HID=y`, `CONFIG_HID_MULTITOUCH=m`,
+cdns3 built in) — this is a devicetree-enablement gap, not a missing driver.
+
+**Confirmed via the actual dts, not guessed:** BeagleY-AI's board dts
+(`k3-am67a-beagley-ai.dts`, upstream BeagleBoard.org kernel source, not this
+project's own) never references `usb0`/`usb1`/`&usb` anywhere. The SoC dtsi
+(`k3-j722s-main.dtsi`) defines the SoC's only USB3 host/OTG controller
+(`usbss1`/`usb1`, `cdns,usb3`, feeding this board's 4 physical USB-A ports
+via an onboard hub — see `docs/BEAGLEY-AI-EVAL.md`'s storage section) with
+`status = "disabled"`, and the board never turns it on.
+
+**Second layer, found by actually trying the obvious fix and watching it
+fail correctly:** enabling `usbss1`/`usb1` alone left the controller
+permanently stuck — `dmesg`: `platform 31200000.usb: deferred probe
+pending: cdns-usb3: Failed to get cdn3,usb3-phy`, confirmed non-transient
+via `/sys/kernel/debug/devices_deferred` after the board had been up over a
+minute. Root cause: `usb1`'s phy comes from `serdes0` (a SERDES lane
+already correctly configured for USB3 by this board's own dts —
+`serdes_ln_ctrl`'s `idle-states` already routes SERDES0 lane0 to USB, and
+`&serdes0 { status = "okay"; serdes0_usb_link { cdns,phy-type =
+<PHY_TYPE_USB3>; ...} }` is already present), but `serdes0`'s *parent* HW
+block, `serdes_wiz0` (the Cadence Torrent SerDes wrapper itself,
+`ti,am64-wiz-10g`), defaults to `status = "disabled"` in the SoC dtsi and —
+same pattern as usb1 — is never enabled by the board dts either. Nothing
+downstream of a disabled parent can probe no matter how correctly the child
+is configured. (`serdes_wiz1`, PCIe's copy of the same block, has the
+identical gap — confirmed via the pre-existing, harmless-looking `j721e-pcie:
+Failed to init phy` deferred-probe line present since this board's very
+first boot. Not fixed here, same root cause, out of scope — flagging for
+whoever picks up PCIe.)
+
+**The fix, both pieces, ported from TI's own reference:** TI's J722S EVM
+board dts (`k3-j722s-evm.dts`, same SoC) already carries the working
+pattern — enable `serdes_wiz0`, then `usbss1`/`usb1` with a dedicated
+`pinctrl-single` entry for `USB1_DRVVBUS` (`J722S_IOPAD(0x0258, PIN_INPUT,
+0)` — a **fixed SoC pin**, not board-routed, confirmed unused anywhere else
+in this board's own dts, so no BeagleY-AI-specific schematic lookup was
+needed) plus the already-present `serdes0_usb_link` phy reference. Ported
+verbatim, not invented.
+
+**Verified live on hardware before touching any Yocto source** (same
+discipline as the grub.cfg display fix — iterate on the live artifact, bake
+in only after proof): the board's own `k3-am67a-beagley-ai.dtb` already has
+a `__symbols__` table (confirmed: `usbss1`, `usb1`, `serdes0_usb_link`,
+`main_pmx0` all present as exported labels), so the fix was written as a
+standalone overlay (`/plugin/`, raw pinctrl cell values instead of the
+`J722S_IOPAD`/`PIN_INPUT` macros since a standalone `dtc` compile has no
+kernel-tree include path), applied to the deployed dtb with `fdtoverlay`
+(both `dtc`/`fdtoverlay` already available via Homebrew, no container
+needed), pushed over SSH, board rebooted. Confirmed working:
+
+```
+xhci-hcd xhci-hcd.5.auto: xHCI Host Controller
+xhci-hcd xhci-hcd.5.auto: Host supports USB 3.0 SuperSpeed
+hub 1-1:1.0: USB hub found
+hub 1-1:1.0: 4 ports detected
+usb 1-1.3: New USB device found, idVendor=0712, idProduct=000a
+input: Waveshare  Waveshare  Touchscreen as .../input/input0
+hid-multitouch 0003:0712:000A.0001: input,hiddev0,hidraw0: ...
+```
+
+`/dev/input/event0` present, `ultima-app` (still `linuxfb`) picked up touch
+with **no extra Qt configuration at all** — no `QT_QPA_GENERIC_PLUGINS`, no
+service env changes. `libqevdevtouchplugin.so` is already packaged
+(confirmed present at `/usr/lib/plugins/generic/` before assuming a rebuild
+would be needed), and Qt5's udev-based generic-plugin auto-detection loads
+it on its own regardless of platform backend — this turned out not to be
+the linuxfb-vs-eglfs gap it looked like it might be going in. Confirmed
+functionally, not just at the kernel level: tapping the car (see
+`main.qml`'s touch-feedback-dot / `Camera360Screen` binding in
+`GAUGE-CLUSTER.md`) produced `[camerafeed] open(/dev/mycam/cam4): No such
+file or directory` in `ultima-app`'s own log — the camera-open failure is
+expected (no physical cameras on this bench setup), but it proves the tap
+was received, routed through QML, and drove real app behavior.
+
+**Baked into the Yocto build**, same pattern as the kernel `.cfg` fragments
+this project already carries: a plain unified-diff patch
+(`beagley-ai/meta-ultima-beagley-ai-src/recipes-kernel/linux/linux-bb.org/0001-arm64-dts-k3-am67a-beagley-ai-enable-usb1-host.patch`)
+appending the four enable blocks to the end of the upstream board dts, wired
+via `linux-bb.org_%.bbappend`'s `SRC_URI:append` (mirrors
+`meta-ultima-beagleplay-src`'s own `linux-ti-staging_%.bbappend` pattern —
+no `KERNEL_CONFIG_FRAGMENTS` needed here since this is a dts patch, not a
+Kconfig fragment). Test-applied against the actual upstream source tree
+with `patch -p1 --dry-run` before wiring it in (clean, 2-line offset, no
+fuzz) — not assumed to apply just because it matched by inspection.
+
 ### Falcon boot mode for BeagleY-AI — feasibility check (2026-08-28, later same day)
 
 Went looking at what a Falcon fork for j722s would actually involve, before

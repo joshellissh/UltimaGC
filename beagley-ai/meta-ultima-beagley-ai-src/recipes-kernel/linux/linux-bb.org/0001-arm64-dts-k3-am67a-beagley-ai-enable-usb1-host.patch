@@ -1,0 +1,32 @@
+--- a/arch/arm64/boot/dts/ti/k3-am67a-beagley-ai.dts
++++ b/arch/arm64/boot/dts/ti/k3-am67a-beagley-ai.dts
+@@ -997,3 +997,29 @@
+ 	reset-gpios = <&mcu_gpio0 6 GPIO_ACTIVE_HIGH>;
+ 	enable-gpios = <&mcu_gpio0 8 GPIO_ACTIVE_HIGH>; /* Extra GPIO for pwr_en for BeagleY AI */
+ };
++
++&serdes_wiz0 {
++	status = "okay";
++};
++
++&main_pmx0 {
++	main_usb1_pins_default: main-usb1-default-pins {
++		pinctrl-single,pins = <
++			J722S_IOPAD(0x0258, PIN_INPUT, 0) /* (B27) USB1_DRVVBUS */
++		>;
++	};
++};
++
++&usbss1 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&main_usb1_pins_default>;
++	ti,vbus-divider;
++	status = "okay";
++};
++
++&usb1 {
++	dr_mode = "host";
++	maximum-speed = "super-speed";
++	phys = <&serdes0_usb_link>;
++	phy-names = "cdns3,usb3-phy";
++};
