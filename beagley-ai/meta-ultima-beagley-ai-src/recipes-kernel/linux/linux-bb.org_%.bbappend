@@ -35,3 +35,37 @@ SRC_URI:append = " file://0001-arm64-dts-k3-am67a-beagley-ai-enable-usb1-host.pa
 # and re-runs oldconfig, same mechanism meta-beagle's own no-fortify.cfg uses.
 SRC_URI:append = " file://ultima-boot.cfg"
 KERNEL_CONFIG_FRAGMENTS += "${WORKDIR}/ultima-boot.cfg"
+
+# Camera port (2026-08-30): wires the MYIR MY-CAM004M decoder (mycam004m.ko,
+# recipes-kernel/mycam004m/) onto the CSI0 connector — main_i2c2 plus
+# cdns_csi2rx0/dphy0/ti_csi2rx0. This board boots via Falcon (see the notes
+# above the USB1 patch, and beagley-ai/NOTES.md): there is no U-Boot proper,
+# no GRUB, no runtime devicetree-overlay mechanism at all — the R5 SPL loads
+# one FIT with the DTB already baked in. So, same as the USB1 fix, this is a
+# source patch against the base .dts, not a .dtbo applied at boot.
+#
+# Two things this patch does NOT resolve, both flagged inline in the patch
+# itself and in mycam004m's own README ("BeagleY-AI port" section):
+# 1. Which of J722S's four CSI2RX/D-PHY instances CSI0 is physically wired
+#    to. No schematic confirming it was found. Targets instance 0 as the
+#    natural first guess (`gh search code --repo beagleboard/linux` and
+#    TI's own upstream reference overlays came up empty on this specific
+#    fact) — if probe succeeds (dmesg: "found N4 decoder: DEV_ID 0xb0") but
+#    video never locks with a real MY-CAM004M cabled in, instance 1
+#    (cdns_csi2rx1/dphy1/ti_csi2rx1) is the thing to try next.
+# 2. reset-gpios/pwren-gpios are omitted — CSI0 appears to expose no spare
+#    GPIOs (unlike BeaglePlay's J17, which routes two directly on the
+#    connector). Both are optional in the driver, and BeaglePlay's own
+#    hardware-verified single-camera capture worked with both unset too, so
+#    there's real precedent this doesn't block a signal lock — but it's
+#    unconfirmed on this board specifically.
+#
+# Verified before landing: the driver builds clean (W=1) against this exact
+# kernel tree, and — the strongest check available without hardware — this
+# patch applied and the FULL board .dts (not just a standalone overlay)
+# compiles clean through this tree's own cpp + scripts/dtc/dtc, decompiling
+# back to confirm camera@30 lands under i2c@20020000 (main_i2c2) with its
+# endpoint correctly cross-linked to cdns_csi2rx0's port@0. Not verified,
+# and can't be without real MY-CAM004M hardware cabled to CSI0: whether a
+# signal actually locks. See mycam004m's own README for the full trail.
+SRC_URI:append = " file://0002-arm64-dts-k3-am67a-beagley-ai-add-mycam004m-csi0.patch"

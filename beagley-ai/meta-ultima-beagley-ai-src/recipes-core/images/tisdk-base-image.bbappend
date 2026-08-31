@@ -9,10 +9,30 @@
 #   meta-beagle's beagley-ai.conf) has an *optional* RV3028 RTC overlay
 #   (k3-am67a-beagley-ai-i2c1-rtc-rv3028.dtbo) — not applied here, revisit
 #   if/when that hardware is actually present.
-# - WiFi (wpa-supplicant/wl18xx-firmware) and mycam004m: skipped — hardware
-#   this board doesn't have (WL1807) / a later milestone (camera port), not
-#   this one.
+# - WiFi (wpa-supplicant/wl18xx-firmware): skipped — hardware this board
+#   doesn't have (WL1807).
 IMAGE_INSTALL:append:beagley-ai = " ultima-app ultima-splash can-utils mmc-utils ultima-data-mount volatile-binds"
+
+# Camera port (2026-08-30, real backend default since 2026-08-31):
+# mycam004m.ko (real, CSI0 — see recipes-kernel/linux/linux-bb.org_%.bbappend
+# for the devicetree side) plus mycam004m-fake.ko (static test images). Real
+# MY-CAM004M hardware is cabled to CSI0 and bench-verified streaming, so
+# recipes-kernel/mycam004m/mycam004m.bb now boots the real backend by default
+# (echo fake > /data/camera-backend to switch back) and ships
+# mycam004m-configure-pipeline.service, the media-ctl bring-up the real
+# backend needs before any STREAMON works.
+IMAGE_INSTALL:append:beagley-ai = " mycam004m"
+
+# Dashcam recording, storage side (2026-08-30): auto-mounts a USB drive
+# labeled ULTIMA_DVR to /mnt/dvr whenever one is plugged in — see
+# recipes-ultima/ultima-dvr-mount. CONFIG_EXFAT_FS=m is already in this
+# kernel's .config and kernel-module-exfat is already pulled onto this image
+# (confirmed via buildhistory, neither added by this layer) — exFAT chosen
+# for cross-platform (Mac/Windows/Linux) browsability of the recorded files,
+# per the dashcam-recording proposal. The recording pipeline itself
+# (Wave5 encode, segment rotation) is later work — this is storage plumbing
+# only, and doesn't depend on it.
+IMAGE_INSTALL:append:beagley-ai = " ultima-dvr-mount"
 
 # GPU smoke-test packages for this board's BXS-4-64 Rogue stack — keep
 # kmscube/mesa-demos here for the verify-the-GPU-before-blaming-the-app
