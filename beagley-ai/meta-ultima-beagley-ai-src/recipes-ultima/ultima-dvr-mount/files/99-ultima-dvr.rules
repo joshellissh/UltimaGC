@@ -1,0 +1,27 @@
+# Auto-mount/unmount the dashcam recording USB drive by filesystem LABEL.
+#
+# Unlike ultima-data-mount.sh's /data (every SD card dd'd from this
+# project's own image shares one UUID/LABEL, so that mount is deliberately
+# NOT identified that way — see that unit's own comment), this drive is the
+# only removable disk on the system, so its own LABEL genuinely,
+# unambiguously identifies it. Deliberately matches on LABEL alone, not
+# filesystem type — reformatting the labeled drive to something other than
+# exFAT still mounts (systemd-mount auto-detects the type); an unlabeled or
+# differently-labeled drive is left completely alone, no auto-format.
+#
+# Numbered 99- so it runs after systemd/udev's own built-in blkid probing
+# (the rules that populate ID_FS_LABEL in the first place, typically in the
+# 60-series) within the same uevent pass — that ordering is load-bearing,
+# not cosmetic: this rule reading ID_FS_LABEL before it's populated would
+# just never match.
+#
+# noatime: avoid touching exFAT metadata on every read (flash wear/write
+# amplification — same wear-conscious reasoning as this project's
+# read-only-rootfs work). nosuid,nodev,noexec: standard hardening for a
+# removable, physically-accessible-in-the-car filesystem — nothing on it
+# should ever be treated as executable or a device node.
+ACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_LABEL}=="ULTIMA_DVR", \
+    RUN+="/usr/bin/systemd-mount --no-block --collect -o noatime,nosuid,nodev,noexec $env{DEVNAME} /mnt/dvr"
+
+ACTION=="remove", SUBSYSTEM=="block", ENV{ID_FS_LABEL}=="ULTIMA_DVR", \
+    RUN+="/usr/bin/systemd-umount /mnt/dvr"
