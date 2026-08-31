@@ -12,11 +12,14 @@ import QtQuick 2.15
 // a needle position or a lit/unlit icon — this screen exists to show the
 // actual decoded number or enum behind that, which is what you want when
 // verifying a signal is wired correctly rather than just glancing at it.
-// Every value here reads directly off the `sim` (CanBus) context property —
-// see canbus.h's Q_PROPERTY list for what backs each key. Channels flagged
-// `unconfirmed: true` come from the MCE18 (datasheet defaults, no unit on
-// the bench yet) or rely on an assumed-not-confirmed polarity
-// (`transmissionAuto`) — everything else is SCal-verified.
+// Every value here reads off the `sim` (CanBus) context property by
+// default — see canbus.h's Q_PROPERTY list for what backs each key — except
+// channels marked `source: "sysStats"`, which read off the `SystemStats`
+// context property instead (board stats that aren't CAN signals at all; see
+// systemstats.h). Channels flagged `unconfirmed: true` come from the MCE18
+// (datasheet defaults, no unit on the bench yet) or rely on an
+// assumed-not-confirmed polarity (`transmissionAuto`) — everything else is
+// SCal-verified.
 Item {
     id: root
     y: 0
@@ -80,11 +83,21 @@ Item {
         { label: "Hazard", key: "hazard", bool: true, unconfirmed: true },
         { label: "Axle Lift", key: "axleLift", bool: true, unconfirmed: true },
         { label: "Low Beams", key: "lowBeams", bool: true, unconfirmed: true },
-        { label: "High Beams", key: "highBeams", bool: true, unconfirmed: true }
+        { label: "High Beams", key: "highBeams", bool: true, unconfirmed: true },
+        // Board stat, not a CAN signal — see systemstats.h. No critAt/warnAt:
+        // this SoC's real thermal-throttle point hasn't been confirmed, so a
+        // red/amber zone here would be a guess dressed up as a spec.
+        { label: "CPU Temp", key: "cpuTempC", unit: "°C", dec: 0, max: 110, source: "sysStats" }
     ]
 
+    // Which context property backs a channel — "sim" (CanBus) unless the
+    // channel names a different one (currently only "sysStats").
+    function dataFor(cfg) {
+        return cfg.source === "sysStats" ? sysStats : sim
+    }
+
     function fmtVal(cfg) {
-        var v = sim[cfg.key]
+        var v = root.dataFor(cfg)[cfg.key]
         if (cfg.bool) {
             if (v === undefined) return "--"
             if (cfg.boolText) return v ? cfg.boolText[1] : cfg.boolText[0]
@@ -96,7 +109,7 @@ Item {
     }
 
     function barFrac(cfg) {
-        var v = Number(sim[cfg.key]) * (cfg.mult !== undefined ? cfg.mult : 1)
+        var v = Number(root.dataFor(cfg)[cfg.key]) * (cfg.mult !== undefined ? cfg.mult : 1)
         if (isNaN(v)) return 0
         var lo = cfg.min !== undefined ? cfg.min : 0
         var hi = cfg.max !== undefined ? cfg.max : 100
@@ -140,7 +153,7 @@ Item {
 
     function tileState(cfg) {
         if (cfg.bool || cfg.text) return "normal"
-        var v = Number(sim[cfg.key])
+        var v = Number(root.dataFor(cfg)[cfg.key])
         if (cfg.critAt !== undefined && v >= cfg.critAt) return "crit"
         if (cfg.warnAt !== undefined && v >= cfg.warnAt) return "warn"
         return "normal"

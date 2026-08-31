@@ -33,6 +33,7 @@
 #include "odostore.h"
 #include "canbus.h"
 #include "systemclock.h"
+#include "systemstats.h"
 #include "camerafeed.h"
 #include "cameraview.h"
 #include "surroundview.h"
@@ -184,6 +185,7 @@ int main(int argc, char *argv[])
     g_canBus = &canBus;
 
     SystemClock systemClock;
+    SystemStats systemStats;
 
     // 4 independent feeds, one per /dev/mycam/camN — the mycam004m driver's
     // stable symlinks over whichever backend (fake or real) is currently
@@ -223,6 +225,7 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty("calibrationStore", &calibrationStore);
     engine.rootContext()->setContextProperty("sim", &canBus);
     engine.rootContext()->setContextProperty("systemClock", &systemClock);
+    engine.rootContext()->setContextProperty("sysStats", &systemStats);
     engine.rootContext()->setContextProperty("cameraFeed1", &cameraFeed1);
     // EXPERIMENT (2026-08-26): ULTIMA_CAM_FANOUT=1 points cameraFeed2..4 at
     // cameraFeed1's object, so every grid quadrant renders the one attached

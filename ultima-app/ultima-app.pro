@@ -25,10 +25,10 @@ CONFIG += c++17
 # qmlcachegen actually gets produced in recipe-sysroot-native before
 # re-enabling this — don't just flip the CONFIG line again.
 TARGET = ultima-app
-HEADERS += odostore.h canbus.h systemclock.h camerafeed.h cameraview.h \
+HEADERS += odostore.h canbus.h systemclock.h systemstats.h camerafeed.h cameraview.h \
     cameracalibration.h warpmesh.h shadermanager.h surroundtexture.h surroundview.h \
     calibrationstore.h dmabuftexture.h
-SOURCES += main.cpp odostore.cpp canbus.cpp systemclock.cpp camerafeed.cpp cameraview.cpp \
+SOURCES += main.cpp odostore.cpp canbus.cpp systemclock.cpp systemstats.cpp camerafeed.cpp cameraview.cpp \
     cameracalibration.cpp warpmesh.cpp shadermanager.cpp surroundtexture.cpp surroundview.cpp \
     calibrationstore.cpp dmabuftexture.cpp
 RESOURCES += qml.qrc
