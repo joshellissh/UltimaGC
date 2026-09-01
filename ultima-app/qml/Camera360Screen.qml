@@ -3,7 +3,7 @@ import Ultima 1.0
 
 // Full-screen camera overlay, opened by tapping car_lights_off on the main
 // dash and closed by tapping anywhere on this overlay (see main.qml's
-// toggleCamera360()). Shows the 4 feeds from the mycam004m driver
+// toggleCamera360()). Shows the 4 camera feeds
 // (cameraFeed1..cameraFeed4 context properties, see main.cpp) stitched into
 // one top-down birds-eye view via SurroundView (surroundview.h) — a
 // precomputed per-camera fisheye/ground-plane warp mesh + feather blend,

@@ -187,17 +187,15 @@ int main(int argc, char *argv[])
     SystemClock systemClock;
     SystemStats systemStats;
 
-    // 4 independent feeds, one per /dev/mycam/camN — the mycam004m driver's
-    // stable symlinks over whichever backend (fake or real) is currently
-    // selected via its own select-camera-backend.sh, run outside this app
-    // (see ~/code/mycam004m/docs/ultima-app-integration.md). Devices are
-    // not opened here — CameraFeed stays lazy (see camerafeed.h) until
-    // Camera360Screen actually opens, so a screen most drives never visit
-    // costs nothing at boot.
-    CameraFeed cameraFeed1("/dev/mycam/cam1");
-    CameraFeed cameraFeed2("/dev/mycam/cam2");
-    CameraFeed cameraFeed3("/dev/mycam/cam3");
-    CameraFeed cameraFeed4("/dev/mycam/cam4");
+    // 4 independent feeds. No camera driver is wired up yet (see
+    // beagley-ai/NOTES.md) — each just shows a placeholder image labeled
+    // with its name (see camerafeed.h). Not shown here — CameraFeed stays
+    // lazy until Camera360Screen actually opens, so a screen most drives
+    // never visit costs nothing at boot.
+    CameraFeed cameraFeed1("cam1");
+    CameraFeed cameraFeed2("cam2");
+    CameraFeed cameraFeed3("cam3");
+    CameraFeed cameraFeed4("cam4");
     qmlRegisterType<CameraView>("Ultima", 1, 0, "CameraView");
     qmlRegisterType<SurroundView>("Ultima", 1, 0, "SurroundView");
     {
@@ -238,9 +236,9 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty("splashImagePath", splashImageUrl);
     // Debug: ULTIMA_DEFAULT_CAMERA=grid (or "360") makes the app boot straight
     // into that camera overlay instead of the plain gauge cluster — for
-    // bench-watching the camera (e.g. the N4 lock/warp) without triggering it
-    // by hand each boot. Empty/unset (the default) = normal dash boot, so this
-    // is production-safe and opt-in. main.qml opens the screen once the window
+    // bench-watching the camera without triggering it by hand each boot.
+    // Empty/unset (the default) = normal dash boot, so this is
+    // production-safe and opt-in. main.qml opens the screen once the window
     // is shown (see its onVisibleChanged).
     engine.rootContext()->setContextProperty(
         "defaultCameraScreen", qEnvironmentVariable("ULTIMA_DEFAULT_CAMERA"));

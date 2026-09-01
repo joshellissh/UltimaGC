@@ -2,9 +2,9 @@ import QtQuick 2.15
 import Ultima 1.0
 
 // Camera grid screen — reached by swiping right from the main cluster (mirror
-// image of DiagnosticScreen, which owns swipe-left). Shows the 4 raw feeds
-// from the mycam004m driver (cameraFeed1..cameraFeed4 context properties, see
-// main.cpp) as a plain 2x2 grid, one quadrant per physical camera, no
+// image of DiagnosticScreen, which owns swipe-left). Shows the 4 raw camera
+// feeds (cameraFeed1..cameraFeed4 context properties, see main.cpp) as a
+// plain 2x2 grid, one quadrant per physical camera, no
 // stitching — same content Camera360Screen shows on tap/reverse-gear, but
 // reached as a persistent swipeable screen instead of a tap-triggered
 // overlay. Deliberately a separate screen/file rather than sharing
@@ -13,8 +13,7 @@ import Ultima 1.0
 // DiagnosticScreen's swipe convention instead.
 //
 // Decoding + converting 4x 1920x1080 UYVY frames every tick is real CPU/GPU
-// work (see ~/code/mycam004m/docs/ultima-app-integration.md's GUI-thread
-// conversion cost note) — feeds[i].active only goes true while this screen
+// work — feeds[i].active only goes true while this screen
 // is actually open, same lazy-open contract CameraFeed already uses for
 // Camera360Screen, so a drive that never swipes here costs nothing.
 Item {

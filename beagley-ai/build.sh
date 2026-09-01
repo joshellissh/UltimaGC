@@ -17,10 +17,6 @@
 # copies it into WORKDIR before building rather than building in place, so the
 # mount can stay read-only and the shared source tree is never touched by the
 # Yocto build.
-#
-# Same pattern for the mycam004m camera driver (~/code/mycam004m — a
-# separate repo, not vendored here) — see
-# meta-ultima-beagley-ai-src/recipes-kernel/mycam004m/mycam004m.bb.
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -30,10 +26,6 @@ VOLUME=falcon-yocto-build
 BUILD_SUBDIR=build-beagley-ai
 ULTIMA_APP_SRC="$(cd ../ultima-app && pwd)"
 BEAGLEY_AI_SRC="$(cd meta-ultima-beagley-ai-src && pwd)"
-# mycam004m is a separate repo (not vendored into UltimaGC) — see
-# recipes-kernel/mycam004m/mycam004m.bb, which bind-mounts it the same way
-# ultima-app's own source is bind-mounted just below.
-MYCAM004M_SRC="$(cd "$HOME/code/mycam004m" && pwd)"
 TARGET="${1:-tisdk-base-image}"
 
 # Stage the layer to a local scratch dir before bind-mounting, excluding
@@ -84,7 +76,6 @@ TTY_ARGS=()
 docker run --rm ${TTY_ARGS[@]+"${TTY_ARGS[@]}"} --cap-add SYS_PTRACE \
   -v "$VOLUME:/home/builder/yocto" \
   -v "$ULTIMA_APP_SRC:/home/builder/yocto/ultima-app-src:ro" \
-  -v "$MYCAM004M_SRC:/home/builder/yocto/mycam004m-src:ro" \
   "$IMAGE" bash -c "
     source /home/builder/yocto/tisdk/sources/oe-core/oe-init-build-env /home/builder/yocto/tisdk/$BUILD_SUBDIR
     bitbake $TARGET

@@ -13,16 +13,6 @@
 #   doesn't have (WL1807).
 IMAGE_INSTALL:append:beagley-ai = " ultima-app ultima-splash can-utils mmc-utils ultima-data-mount volatile-binds"
 
-# Camera port (2026-08-30, real backend default since 2026-08-31):
-# mycam004m.ko (real, CSI0 — see recipes-kernel/linux/linux-bb.org_%.bbappend
-# for the devicetree side) plus mycam004m-fake.ko (static test images). Real
-# MY-CAM004M hardware is cabled to CSI0 and bench-verified streaming, so
-# recipes-kernel/mycam004m/mycam004m.bb now boots the real backend by default
-# (echo fake > /data/camera-backend to switch back) and ships
-# mycam004m-configure-pipeline.service, the media-ctl bring-up the real
-# backend needs before any STREAMON works.
-IMAGE_INSTALL:append:beagley-ai = " mycam004m"
-
 # Dashcam recording, storage side (2026-08-30): auto-mounts a USB drive
 # labeled ULTIMA_DVR to /mnt/dvr whenever one is plugged in — see
 # recipes-ultima/ultima-dvr-mount. CONFIG_EXFAT_FS=m is already in this
