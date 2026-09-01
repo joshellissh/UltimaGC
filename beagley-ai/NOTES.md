@@ -142,7 +142,7 @@ tasks, all succeeded, mostly served from warm sstate).
   `KERNEL_DEVICETREE` list — that's an add-on RTC module overlay (different
   chip, RV-3028, presumably a pluggable I2C1 module), unrelated to the built-in
   DS1340), WiFi (`wpa-supplicant`/`wl18xx-firmware`, hardware this board doesn't
-  have), `mycam004m` (camera port is a later milestone).
+  have), the camera driver (camera port is a later milestone).
 - `WKS_FILE:beagley-ai = "ultima-beagley-ai.wks.in"` — three partitions (boot
   vfat, ext4 root, ext4 `/data`); see the file's own header for the Falcon
   boot-partition details.
@@ -655,8 +655,8 @@ it on its own regardless of platform backend — this turned out not to be
 the linuxfb-vs-eglfs gap it looked like it might be going in. Confirmed
 functionally, not just at the kernel level: tapping the car (see
 `main.qml`'s touch-feedback-dot / `Camera360Screen` binding in
-`GAUGE-CLUSTER.md`) produced `[camerafeed] open(/dev/mycam/cam4): No such
-file or directory` in `ultima-app`'s own log — the camera-open failure is
+`GAUGE-CLUSTER.md`) produced a `[camerafeed] open(...): No such file or
+directory` line in `ultima-app`'s own log — the camera-open failure is
 expected (no physical cameras on this bench setup), but it proves the tap
 was received, routed through QML, and drove real app behavior.
 
@@ -813,7 +813,7 @@ serial capture.
 ### Deferred (not this milestone)
 
 Falcon boot (see feasibility check just above — bigger than expected, defer/
-proceed is a call for the user), the MY-CAM004M camera driver port (open
+proceed is a call for the user), the camera driver port (open
 question: J722S CSI-2 receiver multi-virtual-channel demux for 4 simultaneous
 1080p streams — the same open question already flagged for this exact board),
 CAN bring-up (Waveshare

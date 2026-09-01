@@ -7,15 +7,6 @@ DEPENDS = "qtbase qtdeclarative libjpeg-turbo"
 # that list changes later — same reasoning this project already used once
 # for kernel-module-tidss before tidss went built-in. See pvrsrvkm.conf below.
 #
-# kernel-module-uvcvideo (2026-08-14): CONFIG_USB_VIDEO_CLASS=m
-# was already =m in arago's own base defconfig — confirmed against the built
-# .config, nothing in this layer's own .cfg fragments requested it — and udev
-# already autoloads it with no modules-load.d entry needed (unlike pvrsrvkm,
-# which is out-of-tree; uvcvideo is in-tree and coldplugs fine, verified on
-# hardware with the grabber plugged in). Pinned here for the same
-# can't-silently-drop-out-of-the-image reason as ti-img-rogue-driver above,
-# not because it's currently missing.
-#
 # libjpeg-turbo (2026-08-26, dashcam-recording encode spike): already built
 # for qtbase's own jpeg image plugin (libqjpeg.so, confirmed present at
 # runtime), but that's qtbase's DEPENDS, not this recipe's — ultima-app needs
@@ -30,7 +21,7 @@ DEPENDS = "qtbase qtdeclarative libjpeg-turbo"
 # target at 1080p, ~3.5x slower than the turbojpeg path above. Not viable
 # on this SoC's Cortex-A53 cores; see git history if revisiting with a
 # different library or hardware.
-RDEPENDS:${PN} = "qtbase-plugins qtdeclarative-qmlplugins iproute2 ti-img-rogue-driver kernel-module-uvcvideo libjpeg-turbo"
+RDEPENDS:${PN} = "qtbase-plugins qtdeclarative-qmlplugins iproute2 ti-img-rogue-driver libjpeg-turbo"
 
 inherit qmake5 systemd
 
