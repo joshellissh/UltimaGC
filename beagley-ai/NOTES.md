@@ -1398,12 +1398,17 @@ AHD inputs.
 Picture quality is a separate, unresolved **hardware** problem: an A/B test
 (same camera + decoder + coax + FFC ribbon moved to the old BeaglePlay bench)
 decodes clean there and destroyed here, isolating the analog degradation to
-the BeagleY host side — one of two electrical faults that appeared on this
-board between 08-29 and 08-31 (the other: the USB2.0 hub half dying, taking
-the touchscreen with it). Pending test: power the board from a known-good 5V
-supply before blaming the board itself. A third suspected fault turned out
-not to be the board at all — see the first-boot follow-up below. None of
-that changes the software story, which is correct regardless.
+the BeagleY host side. This is the board's *only* standing electrical fault.
+The same 5V supply feeds the clean BeaglePlay bench (upstream 5V proven good,
+supply swap moot); the recurring I2C dropout was a loose camera-power
+connector; and the USB2/touchscreen death was self-inflicted by an earlier
+bench experiment (per the user) — not board-health evidence, and unrelated to
+the camera. So the warp stands on its A/B result alone. The analog input path
+(camera → decoder) is identical between hosts and a decoder-side register/EQ
+sweep changed nothing, so the one host-dependent variable left is the AI's own
+3V3/ground to the decoder over the CSI FFC — scope it AI vs BeaglePlay while
+streaming. None of that changes the software story, which is correct
+regardless.
 
 Everything the bench session had to do by hand is now baked into the layer
 (`recipes-kernel/mycam004m/`):
@@ -1455,6 +1460,10 @@ the same boots:
   exactly why the pipeline service re-resolves.
 - **The shear/warp survives the power fix** (picture is live but still
   sheared), and the USB2.0 hub half is still dead every boot (`usb 1-1 ...
-  error -71`; touchscreen out). So the host-side analog fault and the hub
-  fault remain the two open board problems, and the known-good-supply swap
-  is still the decisive next test for both.
+  error -71`; touchscreen out) — but that USB2 fault is a **red herring** for
+  the camera question: per the user the USB2 controller was killed by an
+  earlier bench experiment (self-inflicted, unrelated to the CSI path). So the
+  warp is the board's one standing host-side fault, resting on its own A/B
+  evidence (same rig clean on BeaglePlay off the same supply). The one
+  host-dependent variable left is the AI's 3V3/ground to the decoder over the
+  CSI FFC — next: scope that rail AI vs BeaglePlay while streaming.
