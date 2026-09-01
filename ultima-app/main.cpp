@@ -236,6 +236,14 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty("cameraFeed3", camFanout ? &cameraFeed1 : &cameraFeed3);
     engine.rootContext()->setContextProperty("cameraFeed4", camFanout ? &cameraFeed1 : &cameraFeed4);
     engine.rootContext()->setContextProperty("splashImagePath", splashImageUrl);
+    // Debug: ULTIMA_DEFAULT_CAMERA=grid (or "360") makes the app boot straight
+    // into that camera overlay instead of the plain gauge cluster — for
+    // bench-watching the camera (e.g. the N4 lock/warp) without triggering it
+    // by hand each boot. Empty/unset (the default) = normal dash boot, so this
+    // is production-safe and opt-in. main.qml opens the screen once the window
+    // is shown (see its onVisibleChanged).
+    engine.rootContext()->setContextProperty(
+        "defaultCameraScreen", qEnvironmentVariable("ULTIMA_DEFAULT_CAMERA"));
     {
         double t = readUptime();
         fprintf(stderr, "[%6.2f] QML engine ready (+%.2fs)\n", t, t-t1);

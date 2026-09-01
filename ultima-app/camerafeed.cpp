@@ -28,6 +28,7 @@
 #include <turbojpeg.h>
 #include <QFile>
 #include <QDir>
+#include <algorithm>
 #endif
 
 // Requested capture format — mycam004m's contract (both fake and real
@@ -393,6 +394,73 @@ static void deinterleaveUYVYto422(const uchar *src, int width, int height, int b
 // rather than a queued signal per frame: if the GUI thread is blocked
 // (e.g. waiting on the render thread's sync), frames overwrite each other
 // here instead of piling up in the event queue as 2MB QImages.
+
+// --- Decoder horizontal-lock quality (mycam004m N4 on BeagleY) ----------
+//
+// The N4's H-PLL locks stochastically on this board: clean, or with a
+// stable ~2px/line horizontal slip that shears the picture, with H_LOCK
+// asserted either way (see mycam004m.c mycam004m_relock_afe()). Nothing on
+// the decoder flags the bad lock, so the picture itself is the only signal:
+// this measures the median absolute horizontal shift between adjacent luma
+// rows over a central band, and the capture thread pokes the driver's
+// "relock" sysfs attr until it reads clean. A clean lock reads ~0; the bad
+// lock reads ~2. Cheap: ~40 row-pairs x a small SAD search (luma byte for
+// pixel x is at 2*x+1 in UYVY), run every few frames.
+static int measureRowSlip(const uchar *src, int width, int height, int bytesPerLine)
+{
+    const int x0 = width / 4, x1 = width * 3 / 4;
+    const int maxShift = 8;
+    if (x1 - x0 <= 2 * maxShift || height < 16 || bytesPerLine < 2 * (x1 + maxShift) + 2)
+        return 0;
+    const int wantPairs = 40;
+    const int step = height / (wantPairs + 2);
+    if (step < 1)
+        return 0;
+    int mags[wantPairs];
+    int n = 0;
+    for (int p = 1; p <= wantPairs; ++p) {
+        const int y = p * step;
+        if (y + 1 >= height)
+            break;
+        const uchar *r0 = src + size_t(y) * bytesPerLine;
+        const uchar *r1 = src + size_t(y + 1) * bytesPerLine;
+        long best = 1L << 30;
+        int bestS = 0;
+        for (int s = -maxShift; s <= maxShift; ++s) {
+            long sad = 0;
+            for (int x = x0; x < x1; x += 2) {
+                const int a = r0[2 * x + 1];
+                const int b = r1[2 * (x + s) + 1];
+                sad += a > b ? a - b : b - a;
+            }
+            if (sad < best) { best = sad; bestS = s; }
+        }
+        mags[n++] = bestS < 0 ? -bestS : bestS;
+    }
+    if (n == 0)
+        return 0;
+    std::nth_element(mags, mags + n / 2, mags + n);
+    return mags[n / 2];
+}
+
+// Resolve the mycam004m "relock" sysfs trigger. Stable across boots: the N4
+// sits at I2C 0x31, so its device dir ends "-0031". Empty when absent --
+// the fake backend, another board, or a kernel without this attr -- which
+// disables the shear-recovery path (a harmless no-op everywhere but this
+// decoder).
+static QByteArray findRelockSysfsPath()
+{
+    QDir base(QStringLiteral("/sys/bus/i2c/devices"));
+    const QStringList entries =
+        base.entryList(QStringList() << QStringLiteral("*-0031"), QDir::Dirs);
+    for (const QString &e : entries) {
+        const QString p = base.filePath(e) + QStringLiteral("/relock");
+        if (QFile::exists(p))
+            return p.toLocal8Bit();
+    }
+    return QByteArray();
+}
+
 class CameraCaptureThread : public QThread {
 public:
     // Real capture rate the mycam004m driver negotiates today (see
@@ -401,6 +469,13 @@ public:
     // decimates FROM this, not from whatever wall-clock rate frames happen
     // to arrive at.
     static constexpr int kRecordSourceFps = 25;
+
+    // Decoder H-lock shear check/recovery tunables (see measureRowSlip()).
+    static constexpr int kSlipCheckEvery = 5;      // ~5 checks/s at 25fps
+    static constexpr int kWarpSlipThreshold = 2;   // median |row shift| px; clean ~0
+    static constexpr int kWarpHysteresis = 2;      // consecutive warped checks before a poke (ignore a lone fluke frame)
+    static constexpr int kSettleMs = 3500;         // don't re-poke for this long after a relock: a PD_VCH power-cycle needs ~4s undisturbed to settle a fresh H lock (bench-measured 2026-09-01); the driver's ~1.2s in-write sleep is on top of this
+    static constexpr int kMaxRelocks = 12;         // cap per sustained-warp streak (reset on clean); ~70-80% of pokes land clean, so this is deep headroom
 
     CameraCaptureThread(CameraFeed *feed, int fd, bool fpsLog)
         : m_feed(feed), m_fd(fd), m_fpsLog(fpsLog)
@@ -417,6 +492,13 @@ public:
         m_recordDir = qEnvironmentVariable("ULTIMA_CAM_RECORD_DIR");
         if (m_recordFps > 0 && !m_recordDir.isEmpty())
             QDir().mkpath(m_recordDir);
+
+        // Decoder H-lock shear recovery: on if the driver exposes the relock
+        // trigger (real mycam004m backend) and not disabled for A/B testing.
+        m_relockPath = findRelockSysfsPath();
+        m_relockEnabled = !m_relockPath.isEmpty()
+            && !qEnvironmentVariableIsSet("ULTIMA_CAM_NORELOCK");
+        m_relockClock.start();
     }
 
     ~CameraCaptureThread()
@@ -486,6 +568,62 @@ protected:
             const bool complete = pending.index < quint32(m_feed->m_numBuffersMapped)
                 && m_feed->m_bytesPerLine > 0
                 && pending.bytesused >= quint32(m_feed->m_bytesPerLine) * quint32(m_feed->m_captureHeight);
+
+            // Decoder H-lock check + recovery (see measureRowSlip()). Only
+            // the real capture path delivers complete frames; the fake
+            // backend and empty inputs never reach here. relockAfe() blocks
+            // ~1.25s while the AFE re-acquires — fine on the capture thread,
+            // and the frames it costs were sheared garbage anyway.
+            if (complete && ++m_framesSinceSlipCheck >= kSlipCheckEvery) {
+                m_framesSinceSlipCheck = 0;
+                const uchar *src = static_cast<const uchar *>(
+                    m_feed->m_buffers[pending.index].start);
+                const int slip = measureRowSlip(src, m_feed->m_captureWidth,
+                                                m_feed->m_captureHeight,
+                                                m_feed->m_bytesPerLine);
+                // Measurement is decoupled from the poke: log slip on every
+                // check when fps-logging (production observability, and lets a
+                // bench sweep watch slip(t) with recovery disabled), then poke
+                // only if the relock path is enabled.
+                if (m_fpsLog)
+                    fprintf(stderr, "[camerafeed] %s: slip=%d px/line\n",
+                            qPrintable(m_feed->m_device), slip);
+                if (m_relockEnabled) {
+                    if (slip >= kWarpSlipThreshold) {
+                        // Warped. Poke only once the streak is real
+                        // (kWarpHysteresis consecutive warped checks, so a
+                        // lone fluke frame doesn't trigger one) AND the
+                        // post-poke settle window has expired. The AFE needs
+                        // ~4s undisturbed to settle a fresh lock after a
+                        // PD_VCH power-cycle; re-poking sooner just restarts
+                        // the settle and it never converges (that was the
+                        // original "15/15 warped" failure). ~70-80% of pokes
+                        // land clean, so this converges in 1-2 tries, then
+                        // holds (no more pokes while slip stays < threshold).
+                        ++m_consecWarp;
+                        const qint64 now = m_relockClock.elapsed();
+                        if (m_consecWarp >= kWarpHysteresis
+                            && now >= m_settleUntilMs
+                            && m_relockCount < kMaxRelocks) {
+                            if (m_fpsLog)
+                                fprintf(stderr, "[camerafeed] %s: sheared lock (slip=%d px/line) -> relock #%d\n",
+                                        qPrintable(m_feed->m_device), slip, m_relockCount + 1);
+                            relockAfe();               // blocks ~1.25s (driver PD_VCH cycle)
+                            ++m_relockCount;
+                            m_consecWarp = 0;
+                            m_settleUntilMs = m_relockClock.elapsed() + kSettleMs;
+                        }
+                    } else {
+                        // Clean (< threshold): hold. Reset the streak and the
+                        // retry budget so a later mid-drive glitch gets a
+                        // fresh set of attempts. Reset on "< threshold" not
+                        // "== 0" so a lock that settles a hair off (slip 1)
+                        // still counts as clean.
+                        m_consecWarp = 0;
+                        m_relockCount = 0;
+                    }
+                }
+            }
 
             if (complete && wantImage) {
                 stage.start();
@@ -625,6 +763,26 @@ private:
     unsigned char *m_jpegBuf = nullptr;
     unsigned long m_jpegBufSize = 0;
     QByteArray m_yPlane, m_uPlane, m_vPlane;
+
+    // Decoder H-lock recovery — see measureRowSlip()/findRelockSysfsPath()
+    // and mycam004m.c's "relock" sysfs attr. Capture-thread-local.
+    QByteArray m_relockPath;
+    bool m_relockEnabled = false;
+    int m_framesSinceSlipCheck = 0;
+    int m_relockCount = 0;
+    int m_consecWarp = 0;          // consecutive warped checks (hysteresis)
+    qint64 m_settleUntilMs = 0;    // don't poke again until m_relockClock passes this
+    QElapsedTimer m_relockClock;
+
+    void relockAfe()
+    {
+        const int fd = ::open(m_relockPath.constData(), O_WRONLY | O_CLOEXEC);
+        if (fd < 0)
+            return;
+        const ssize_t w = ::write(fd, "1", 1); // blocks ~1.25s in the driver
+        (void)w;
+        ::close(fd);
+    }
 };
 
 void CameraFeed::onWorkerFrame()

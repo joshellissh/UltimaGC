@@ -139,6 +139,31 @@ Window {
     property int _fpsFrameCount: 0
     onFrameSwapped: _fpsFrameCount++
 
+    // Debug: boot straight into a camera overlay when ULTIMA_DEFAULT_CAMERA is
+    // set (defaultCameraScreen context property, see main.cpp) — "360" opens
+    // the surround view, anything else non-empty opens the 4-cam grid (which
+    // shows cam1, the attached camera). Empty/unset means normal dash boot, so
+    // this is production-safe and opt-in.
+    //
+    // Deferred to the end of the startup self-test (startupActive -> false)
+    // rather than the first window show: opening the grid while the intro
+    // overlay (z:8500) still occludes it leaves the grid's CameraViews
+    // unregistered as frame consumers, so they never start rendering — the
+    // feed streams but the quadrants stay black (verified on the board). Once
+    // the intro is gone and the scene is fully live, this behaves exactly like
+    // a normal camtest/swipe open. Fires once (startupActive only ever goes
+    // true -> false).
+    property bool _defaultCamOpened: false
+    onStartupActiveChanged: {
+        if (startupActive || _defaultCamOpened || defaultCameraScreen === "")
+            return
+        _defaultCamOpened = true
+        if (defaultCameraScreen === "360")
+            toggleCamera360()
+        else
+            cameraGridScreen.open()
+    }
+
     // Declared before everything else on purpose: Qt serves asynchronous
     // Images from one reader thread in creation order, and these two are the
     // ones the first frame waits for (introAssetsReady) — everything below
