@@ -21,7 +21,10 @@ kernel config, or flashing — it's the reproduction/status doc for the Yocto bu
 including hardware gotchas worth knowing before touching the board again. **Read
 `GAUGE-CLUSTER.md`** for the Qt app's structure (source/QML/asset layout) and the CAN
 bus integration (ECU, frame map, debugging) — that content is board-agnostic and
-doesn't belong in the Yocto-specific notes.
+doesn't belong in the Yocto-specific notes. **Read `DASHCAM.md`** for the dash-cam
+recording feature — continuous Wave5 hardware-H.264 recording of the camera streams
+to an auto-mounted USB drive: its design, the on-hardware encoder bring-up
+(`beagley-ai/wave5-enc/`), and milestones.
 
 ## Repo layout
 
