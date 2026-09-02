@@ -25,6 +25,7 @@ IMAGE=falcon-yocto:latest
 VOLUME=falcon-yocto-build
 BUILD_SUBDIR=build-beagley-ai
 ULTIMA_APP_SRC="$(cd ../ultima-app && pwd)"
+CAMDRIVER_SRC="$(cd ../camdriver && pwd)"
 BEAGLEY_AI_SRC="$(cd meta-ultima-beagley-ai-src && pwd)"
 TARGET="${1:-tisdk-base-image}"
 
@@ -76,6 +77,7 @@ TTY_ARGS=()
 docker run --rm ${TTY_ARGS[@]+"${TTY_ARGS[@]}"} --cap-add SYS_PTRACE \
   -v "$VOLUME:/home/builder/yocto" \
   -v "$ULTIMA_APP_SRC:/home/builder/yocto/ultima-app-src:ro" \
+  -v "$CAMDRIVER_SRC:/home/builder/yocto/camdriver-src:ro" \
   "$IMAGE" bash -c "
     source /home/builder/yocto/tisdk/sources/oe-core/oe-init-build-env /home/builder/yocto/tisdk/$BUILD_SUBDIR
     bitbake $TARGET

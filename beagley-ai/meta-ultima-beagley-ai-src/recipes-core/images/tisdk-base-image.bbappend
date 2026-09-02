@@ -36,6 +36,27 @@ IMAGE_INSTALL:append:beagley-ai = " ti-img-rogue-driver ti-img-rogue-umlibs kmsc
 # instead of reconstructing the unit timeline from the journal by hand.
 IMAGE_INSTALL:append:beagley-ai = " ultima-readahead systemd-analyze"
 
+# NVP6324 / MY-CAM004M camera driver (out-of-tree module, recipes-kernel/nvp6324)
+# plus v4l-utils (media-ctl / v4l2-ctl) for CSI-2 pipeline setup and QA, and
+# i2c-tools (i2cdetect) for the first bring-up check (chip ACK at 0x31 on the
+# CSI0 bus). The driver source lives in ../../../../camdriver; see its PLAN.md.
+#
+# Install the recipe PN "nvp6324", NOT "kernel-module-nvp6324": OE creates a
+# runtime-reverse map entry only for real package names and the *versioned*
+# kernel-module name (kernel-module-nvp6324-<kver>), never for the versionless
+# provide — so IMAGE_INSTALL of "kernel-module-nvp6324" fails do_rootfs with
+# "Couldn't find anything to satisfy". The empty "nvp6324" PN package
+# auto-RDEPENDS the versioned kernel-module package (module.bbclass), so
+# installing it pulls the .ko in, kernel-version-agnostically — the same wrapper
+# pattern ti-img-rogue-driver uses above.
+IMAGE_INSTALL:append:beagley-ai = " nvp6324 v4l-utils i2c-tools"
+
+# The nvp6324 driver is hardware-proven (cold-boot: clean probe, full-frame
+# 1080p25 on VC0, CRC=0), so it now autoloads at boot — the recipe sets
+# KERNEL_MODULE_AUTOLOAD and there is no longer a blacklist here. If an
+# unattended boot ever regresses to a probe/pipeline hang, power-cycle and drop
+# a `blacklist nvp6324` back in modprobe.d to return to hand-loading.
+
 # See wic/ultima-beagley-ai.wks.in (this layer) for the full reasoning.
 # WKS_SEARCH_PATH covers this layer's own wic/ dir (confirmed via `bitbake -e
 # tisdk-base-image`).

@@ -18,8 +18,12 @@
  * bench iteration (fdtoverlay on the deployed DTB); baked into the Falcon FIT at
  * build time (Falcon has no runtime overlay stage).
  *
- * link-frequency (621 MHz => ~1.242 Gbps/lane) is provisional — confirm against
- * the N4 datasheet and a real D-PHY lock at bring-up (PLAN.md open item 3).
+ * link-frequency 300 MHz (DDR) => 600 Mbps/lane band, matching the driver's TX
+ * default mipi_mclk=594 (594 Mbps) and link_freq_idx=6. Confirmed at bring-up:
+ * clean 1080p25 with CRC=0. The Cadence RX actually configures its D-PHY band
+ * from the source subdev's V4L2_CID_LINK_FREQ control (driver default idx6), not
+ * this property, but they are kept in sync. A 4x1080p build needs mipi_mclk=1242
+ * / link_freq_idx=0 and this value back at 621000000.
  */
 
 /dts-v1/;
@@ -77,7 +81,7 @@
 					bus-type = <4>; /* CSI-2 D-PHY */
 					clock-lanes = <0>;
 					data-lanes = <1 2 3 4>;
-					link-frequencies = /bits/ 64 <621000000>;
+					link-frequencies = /bits/ 64 <300000000>;
 				};
 			};
 		};
@@ -98,7 +102,7 @@
 				bus-type = <4>; /* CSI-2 D-PHY */
 				clock-lanes = <0>;
 				data-lanes = <1 2 3 4>;
-				link-frequencies = /bits/ 64 <621000000>;
+				link-frequencies = /bits/ 64 <300000000>;
 			};
 		};
 	};

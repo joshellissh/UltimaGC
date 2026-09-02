@@ -28,6 +28,13 @@ ULTIMA_FALCON_BOOTARGS ?= "root=/dev/mmcblk1p2 rootwait rootfstype=ext4 console=
 ULTIMA_FALCON_DTB ?= "k3-am67a-beagley-ai.dtb"
 ULTIMA_FALCON_DM_FW ?= "ti-dm/j722s/ipc_echo_testb_mcu1_0_release_strip.xer5f"
 
+# NVP6324 / MY-CAM004M CSI0 camera overlay, merged into the DTB below. Falcon
+# boots a static DTB with no runtime overlay stage, so the camera DT is baked
+# in here. Source of truth is the repo's camdriver/dts, bind-mounted read-only
+# into the container by build.sh (same pattern as the ultima-app source). See
+# ../../../../camdriver/PLAN.md.
+ULTIMA_FALCON_DTBO_SRC ?= "/home/builder/yocto/camdriver-src/dts/k3-am67a-beagley-ai-nvp6324.dtso"
+
 # All inputs come from DEPLOY_DIR_IMAGE (the kernel Image and bl31 are never
 # staged into a sysroot), so depend on the producers' deploy tasks...
 do_compile[depends] += " \
@@ -46,6 +53,7 @@ do_compile[file-checksums] += " \
     ${DEPLOY_DIR_IMAGE}/bl31.bin:False \
     ${DEPLOY_DIR_IMAGE}/optee/bl32.bin:False \
     ${DEPLOY_DIR_IMAGE}/${ULTIMA_FALCON_DM_FW}:False \
+    ${ULTIMA_FALCON_DTBO_SRC}:False \
 "
 
 do_compile() {
@@ -55,6 +63,16 @@ do_compile() {
     cp "$D/${ULTIMA_FALCON_DM_FW}" dm.xer5f
     cp "$D/Image" Image
     cp "$D/${ULTIMA_FALCON_DTB}" falcon.dtb
+
+    # Bake the NVP6324 / MY-CAM004M CSI0 camera overlay into the DTB (Falcon has
+    # no runtime overlay stage). The overlay enables main_i2c2 (+ its pinmux),
+    # adds the nvp6324 node, and turns on CSI0's cdns_csi2rx0 / ti_csi2rx0 /
+    # dphy0. Raw pinctrl cells let a bare dtc -@ compile it; fdtoverlay merges it
+    # against the DTB's __symbols__ (present — the USB1-host overlay relied on the
+    # same). A malformed overlay fails the build here rather than at boot.
+    dtc -@ -I dts -O dtb -o nvp6324.dtbo "${ULTIMA_FALCON_DTBO_SRC}"
+    fdtoverlay -i falcon.dtb -o falcon.dtb.merged nvp6324.dtbo
+    mv falcon.dtb.merged falcon.dtb
 
     # DTB fixups U-Boot proper would otherwise do at runtime:
     # 1. kernel cmdline.

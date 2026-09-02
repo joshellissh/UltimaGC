@@ -35,3 +35,11 @@ SRC_URI:append = " file://0001-arm64-dts-k3-am67a-beagley-ai-enable-usb1-host.pa
 # and re-runs oldconfig, same mechanism meta-beagle's own no-fortify.cfg uses.
 SRC_URI:append = " file://ultima-boot.cfg"
 KERNEL_CONFIG_FRAGMENTS += "${WORKDIR}/ultima-boot.cfg"
+
+# NVP6324 / MY-CAM004M CSI-2 capture stack (CSI0) — pin the in-tree Cadence
+# CSI2RX + TI SHIM + Cadence D-PHY-RX + V4L2 media core the out-of-tree NVP6324
+# module (recipes-kernel/nvp6324) binds onto. Already =m/=y in the current
+# defconfig; asserted so it can't silently regress. See nvp6324.cfg and
+# ../../../../camdriver/PLAN.md.
+SRC_URI:append = " file://nvp6324.cfg"
+KERNEL_CONFIG_FRAGMENTS += "${WORKDIR}/nvp6324.cfg"
