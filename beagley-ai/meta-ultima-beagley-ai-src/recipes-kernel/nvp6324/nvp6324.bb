@@ -36,10 +36,24 @@ do_unpack[nostamp] = "1"
 # Autoload at boot. The driver is now hardware-proven: from a cold boot it probes
 # cleanly and brings up a full-frame 1080p25 CSI pipeline on VC0 (CRC=0) with its
 # module-param defaults (mipi_mclk=594, vc_mask=0x1, link_freq_idx=6,
-# program_at_probe=1). KERNEL_MODULE_AUTOLOAD drops a modules-load.d entry so
-# systemd-modules-load loads it by name early; the image bbappend no longer
-# blacklists it (udev coldplug would also match the DT `nextchip,nvp6324`
-# modalias). To override a param at boot without a rebuild, drop an
+# program_at_probe=1). The image bbappend no longer blacklists it.
+#
+# Autoload mechanism, confirmed from hardware (not assumed): KERNEL_MODULE_AUTOLOAD
+# writes /usr/lib/modules-load.d/nvp6324.conf (the vendor modules-load.d dir,
+# NOT /etc — verified present on the running rootfs), and systemd-modules-load
+# inserts the module early at boot — journal shows `systemd-modules-load:
+# Inserted module 'nvp6324'` and the probe lands at ~1.8s, before this image's
+# udev coldplug (which is deliberately deferred until after the dash renders,
+# see ultima-app's udev-trigger-after-dash.conf). The DT `nextchip,nvp6324`
+# modalias (MODULE_DEVICE_TABLE(of, ...) in nvp6324.c) is a redundant fallback —
+# udev coldplug would also match it — but modules-load wins the race here.
+#
+# The companion nvp6324-csi-setup oneshot (recipes-ultima) then propagates the
+# CSI-2 pipeline format so a plain STREAMON on /dev/video2 works — without it
+# the un-propagated pipeline fails link validation with -EPIPE (not a driver
+# bug; see camdriver/nvp6324-framing-findings.md).
+#
+# To override a param at boot without a rebuild, drop an
 # /etc/modprobe.d/nvp6324.conf `options nvp6324 ...` (e.g. mipi_mclk=1242 +
 # link_freq_idx=0 for a 4x1080p build). See ../../../../camdriver/PLAN.md.
 KERNEL_MODULE_AUTOLOAD += "nvp6324"

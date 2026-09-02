@@ -273,6 +273,71 @@ saturation) or just scene/lighting; deprioritized — luma is clean.
 **4-camera caveat:** 4x1080p25 needs ~829 Mbps/lane, so a 4-cam build needs mipi_mclk=1242
 (idx0) — where the eye may again be marginal; revisit signal integrity then (or run 4ch at 720p).
 
+## ★ SOLVED (2026-09-02) — the autoload "EPIPE" was missing format propagation, NOT a probe race
+
+After baking the driver into the image with autoload, a cold boot autoloads it correctly
+(chip: PLL 0xCC/594, arb 0x11/VC0, camera locked 0xA0=0x0E, link_freq idx6) — but
+`v4l2-ctl -d /dev/video2 --stream-mmap` fails **VIDIOC_STREAMON = -EPIPE**. The identical
+driver streamed clean pre-flash when insmod'd by hand.
+
+**A probe-time race was hypothesized and then DISPROVEN by direct measurement.** On a clean
+cold boot (graph intact — verified `/dev/video2` = ticsi2rx context 0, no phantom nodes):
+- `dmesg`: probe at 1.83s, "MIPI TX brought up at probe" at 1.96s.
+- Forced i2c read (driver holds 0x31, so `i2cget -f -y 4 0x31 ...`): `0xA0 = 0x0E`
+  (ch0 present), bank 0x21 `0x40=0xCC 0x41=0x10` (the 594-Mbps PLL block). **Chip state is
+  exactly correct.** Yet STREAMON EPIPE'd persistently (3/3), with the camera long since
+  locked — so a corrupted-at-probe chip state is ruled out (a corrupt state would NOT stream
+  after any userspace fix that doesn't touch the chip).
+
+**Actual root cause: no userspace format propagation.** Dumping every subdev pad showed the
+mismatch:
+- nvp6324 source (subdev2 pad4): **1920×1080** (driver default — correct).
+- cdns bridge (subdev1 pad0/pad1) and ti-csi2rx (subdev0 pad0): **640×480** (V4L2 pad default).
+
+V4L2 link validation compares adjacent pad formats at STREAMON, so the 1920×1080↔640×480 link
+is rejected with **-EPIPE**. Two `media-ctl -V` calls pushing 1920×1080 down the chain
+(bridge sink `:0/0`, ti-csi2rx sink `:0/0`; the bridge propagates to its own source pad
+internally) → STREAMON succeeds, **25.00 fps, CRC=0**. The pre-flash "manual insmod worked"
+runs had always run that media-ctl setup by hand first; the autoloaded boot never did.
+Routing was already correct at boot (all routes `ENABLED,IMMUTABLE` from driver+DT), so ONLY
+the format needed setting. Format persists in each subdev's active state across
+STREAMOFF/STREAMON, so a boot-time one-shot suffices (verified: fresh STREAMON after the
+setup, with no re-set, still 25fps).
+
+The `program_at_probe` ordering fix stays valid and is NOT implicated: the AHD decoder
+re-locks continuously as the camera ISP comes up (that is exactly why `0xA0=0x0E` and frames
+are clean now), so programming at 1.96s against a not-yet-locked input does not durably
+corrupt anything. **Do NOT add a probe-time 0xA0 poll / hw_running gate — it would fix a
+non-bug.**
+
+**Fix shipped:** `recipes-ultima/nvp6324-csi-setup` — a systemd oneshot (`WantedBy
+multi-user.target`, after modules-load/udev-trigger) that waits (bounded ~20s) for the media
+graph to complete (the Cadence bridge async-probes at ~6.5s, well after the nvp6324 i2c probe
+at ~1.8s), then applies the VC0 format with media-ctl. Lives in the board layer, not the
+board-agnostic ultima-app, because the entity names are SoC/DT-specific. Deliberately NOT
+`Before=ultima-app.service`: the app renders camera placeholders today and does not open
+/dev/video2, so gating the boot-optimized dash on it would only add latency; revisit when the
+app grows live feeds (add Before= + Wants, or have the app retry-open the node). The setup
+script was validated live end-to-end: break pipeline to 640×480 → STREAMON EPIPE → run script
+→ 1920×1080 → STREAMON 25fps.
+
+CAUTION LEARNED (still true): unbind/rebind the nvp6324 i2c driver CORRUPTS the media graph
+(video2→ENOTTY, new video8-13) — same as a module reload. Do NOT re-probe to test.
+
+**camqa node-mapping bug (open):** camqa defaults to `/dev/video0..3`, but on this SoC
+`video0`=Wave5 VPU decoder, `video1`=VPU encoder; the CSI capture contexts are `video2..7`
+(VC0=`video2`). `camqa --probe` will misreport unless pointed at the right base node. The
+gauge app's camera bring-up needs the same mapping.
+
+**Build housekeeping (non-blocking, addressed in this commit):** the falcon-fit FIT didn't
+rebuild on a dtso edit — `do_compile[file-checksums]` on a bind-mounted path doesn't
+invalidate sstate; `do_compile[nostamp] = "1"` on ultima-falcon-fit.bb (same trap nvp6324.bb
+fixed with do_unpack[nostamp]). `KERNEL_MODULE_AUTOLOAD` emits no modules-load.d entry for
+an out-of-tree module.bbclass recipe... — WRONG, corrected from hardware: KERNEL_MODULE_AUTOLOAD
+DOES write `/usr/lib/modules-load.d/nvp6324.conf`, and `systemd-modules-load` inserts the
+module early (~1.8s, journal `Inserted module 'nvp6324'`), before this image's deferred udev
+coldplug. The DT modalias is a redundant fallback. Recipe comment corrected to match.
+
 ## CRC-floor hunt (2026-09-01) — datasheet register map + what does NOT fix it
 
 Got the **N4 datasheet register map** (`docs/MY-CAM004M/Datasheet-N4.pdf`, §5.1.17/5.2.7,

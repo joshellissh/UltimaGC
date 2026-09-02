@@ -1,0 +1,32 @@
+[Unit]
+Description=Propagate NVP6324 CSI-2 pipeline format (media-ctl)
+# The nvp6324 driver is inserted early by systemd-modules-load (~1.8s on
+# hardware; KERNEL_MODULE_AUTOLOAD drops /usr/lib/modules-load.d/nvp6324.conf),
+# but the Cadence CSI2RX bridge async-probes ~6.5s in, so the media graph is
+# not complete when this unit is likely pulled. Ordering here is therefore only
+# a hint; the real gate is in the script, which waits (bounded ~20s) for
+# /dev/media0 and the nvp6324 entity to appear before applying formats. Do NOT
+# add a ConditionPathExists=/dev/media0 — unit conditions are evaluated once at
+# job-start and never retried, so a not-yet-created media0 would silently SKIP
+# the unit and defeat that wait.
+After=systemd-modules-load.service systemd-udev-trigger.service
+Wants=systemd-udev-trigger.service
+# Deliberately NOT Before=ultima-app.service. ultima-app currently renders
+# camera *placeholders* and does not open /dev/video2, so gating the (highly
+# boot-time-optimized) dash on a pipeline nothing reads yet would only cost
+# startup latency. When the app grows live feeds, either add Before= here and
+# a Wants= there, or — better — have the app retry-open the node (cameras are
+# inherently late/hot-pluggable). For now the only consumer is camqa, run by
+# hand, and this unit just guarantees the pipeline is ready by multi-user.
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/nvp6324-csi-setup.sh
+# The script exits 0 when the camera is simply absent (logged), and non-zero
+# only on a real media-ctl format rejection — so no SuccessExitStatus override
+# is needed, and a genuine failure stays visible as a failed unit without
+# taking anything else down (nothing depends on this unit yet).
+
+[Install]
+WantedBy=multi-user.target

@@ -49,13 +49,20 @@ IMAGE_INSTALL:append:beagley-ai = " ultima-readahead systemd-analyze"
 # auto-RDEPENDS the versioned kernel-module package (module.bbclass), so
 # installing it pulls the .ko in, kernel-version-agnostically — the same wrapper
 # pattern ti-img-rogue-driver uses above.
-IMAGE_INSTALL:append:beagley-ai = " nvp6324 v4l-utils i2c-tools"
+IMAGE_INSTALL:append:beagley-ai = " nvp6324 v4l-utils i2c-tools nvp6324-csi-setup"
 
 # The nvp6324 driver is hardware-proven (cold-boot: clean probe, full-frame
 # 1080p25 on VC0, CRC=0), so it now autoloads at boot — the recipe sets
 # KERNEL_MODULE_AUTOLOAD and there is no longer a blacklist here. If an
 # unattended boot ever regresses to a probe/pipeline hang, power-cycle and drop
 # a `blacklist nvp6324` back in modprobe.d to return to hand-loading.
+#
+# nvp6324-csi-setup is the companion boot-time oneshot that propagates the
+# CSI-2 pipeline format with media-ctl. Without it, a plain STREAMON on
+# /dev/video2 fails with -EPIPE: the driver sources 1080p but the downstream
+# Cadence/TI CSI2RX pads default to 640x480 and V4L2 rejects the link. It is
+# NOT a driver bug — the chip streams fine once the format is pushed down the
+# chain. See recipes-ultima/nvp6324-csi-setup.
 
 # See wic/ultima-beagley-ai.wks.in (this layer) for the full reasoning.
 # WKS_SEARCH_PATH covers this layer's own wic/ dir (confirmed via `bitbake -e

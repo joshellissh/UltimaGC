@@ -56,6 +56,15 @@ do_compile[file-checksums] += " \
     ${ULTIMA_FALCON_DTBO_SRC}:False \
 "
 
+# The file-checksums above are necessary but not sufficient for the overlay
+# source: ULTIMA_FALCON_DTBO_SRC is a bind-mounted path (build.sh mounts the
+# repo's camdriver/dts read-only into the container), and an edit to it did NOT
+# re-assemble the FIT — the same stale-sstate trap nvp6324.bb documents at
+# do_unpack[nostamp]. Force this task to always run so a DT overlay edit
+# actually lands in the deployed tifalcon.bin. The FIT assembly is cheap
+# (dtc + fdtoverlay + mkimage), so the rebuild cost is negligible.
+do_compile[nostamp] = "1"
+
 do_compile() {
     D="${DEPLOY_DIR_IMAGE}"
     cp "$D/bl31.bin" bl31.bin
