@@ -187,15 +187,19 @@ int main(int argc, char *argv[])
     SystemClock systemClock;
     SystemStats systemStats;
 
-    // 4 independent feeds. No camera driver is wired up yet (see
-    // beagley-ai/NOTES.md) — each just shows a placeholder image labeled
-    // with its name (see camerafeed.h). Not shown here — CameraFeed stays
-    // lazy until Camera360Screen actually opens, so a screen most drives
+    // 4 independent feeds, one per NVP6324 virtual channel (VC0..3 = the
+    // decoder's four AHD inputs). Each resolves its /dev/videoN from the media
+    // graph by VC at open time (see camerafeed.h / mediagraph.h). Today only
+    // VC0 has a camera wired; VC1..3 sit in reconnect-backoff (streaming=false,
+    // failed=false) until their AHD inputs are populated. The cam1->VC0 mapping
+    // is placeholder wiring — the label->physical-camera assignment
+    // (front/rear/left/right) is set once the harness is finalized. CameraFeed
+    // stays lazy until Camera360Screen actually opens, so a screen most drives
     // never visit costs nothing at boot.
-    CameraFeed cameraFeed1("cam1");
-    CameraFeed cameraFeed2("cam2");
-    CameraFeed cameraFeed3("cam3");
-    CameraFeed cameraFeed4("cam4");
+    CameraFeed cameraFeed1("cam1", 0);
+    CameraFeed cameraFeed2("cam2", 1);
+    CameraFeed cameraFeed3("cam3", 2);
+    CameraFeed cameraFeed4("cam4", 3);
     qmlRegisterType<CameraView>("Ultima", 1, 0, "CameraView");
     qmlRegisterType<SurroundView>("Ultima", 1, 0, "SurroundView");
     {
