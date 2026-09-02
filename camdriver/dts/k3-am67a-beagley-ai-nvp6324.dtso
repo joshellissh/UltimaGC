@@ -1,0 +1,113 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * MY-CAM004M (Nextchip NVP6324 "N4") 4-channel AHD decoder on the BeagleY-AI
+ * CSI0 connector.
+ *
+ * The NVP6324 sits on main_i2c2 (the CSI0 camera I2C bus) at 7-bit address 0x31
+ * and drives all four analog cameras onto one 4-lane MIPI CSI-2 link as four
+ * virtual channels (UYVY / DT 0x1E). It manages its own power, reset and 27 MHz
+ * clock on-board, so this overlay wires only I2C + the CSI-2 link — no gpios,
+ * clocks or regulators.
+ *
+ * The base SoC dtsi already gives ti_csi2rx0 six DMA contexts (rx0..rx5), so
+ * enabling it exposes up to six /dev/videoN; the CSI2RX stack demuxes the four
+ * virtual channels into four of them (routing set at runtime with media-ctl).
+ *
+ * Modeled on the in-tree k3-am62x-sk-csi2-v3link-fusion.dtso (same "N sources ->
+ * VCs on one link" topology). See PLAN.md. Delivered here as an overlay for
+ * bench iteration (fdtoverlay on the deployed DTB); baked into the Falcon FIT at
+ * build time (Falcon has no runtime overlay stage).
+ *
+ * link-frequency (621 MHz => ~1.242 Gbps/lane) is provisional — confirm against
+ * the N4 datasheet and a real D-PHY lock at bring-up (PLAN.md open item 3).
+ */
+
+/dts-v1/;
+/plugin/;
+
+/*
+ * main_i2c2 is the CSI0 connector's camera I2C bus. Unlike I2C0/I2C1 it has no
+ * pinmux in the BeagleY-AI base dts, so the overlay must mux GPMC0_CSn2/CSn3 to
+ * I2C2 (mode 1) — the same balls BeagleBoard's own k3-am67a-beagley-ai-csi0-imx219
+ * overlay uses.
+ *
+ * Raw pinctrl cell values (not the J722S_IOPAD/PIN_INPUT_PULLUP macros) so this
+ * compiles with a bare `dtc -@` — no cpp / kernel include-prefixes needed, which
+ * keeps the Falcon-FIT bake (fdtoverlay in ultima-falcon-fit) simple. Same
+ * approach the USB1-host overlay used. The values are the exact expansion of
+ * J722S_IOPAD(0x00b{0,4}, PIN_INPUT_PULLUP, 1):
+ *   offset 0x00b0/0x00b4, conf 0x64001 = INPUT_EN(1<<18) | ST_ENABLE(1<<14)
+ *                                      | PULL_UP(1<<17) | muxmode 1.
+ */
+&main_pmx0 {
+	nvp6324_csi0_i2c2_pins: nvp6324-csi0-i2c2-pins {
+		pinctrl-single,pins = <
+			0x00b0 0x64001	/* (K22) GPMC0_CSn2.I2C2_SCL, PIN_INPUT_PULLUP, mux 1 */
+			0x00b4 0x64001	/* (K24) GPMC0_CSn3.I2C2_SDA, PIN_INPUT_PULLUP, mux 1 */
+		>;
+	};
+};
+
+&main_i2c2 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&nvp6324_csi0_i2c2_pins>;
+	clock-frequency = <400000>;
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+
+	nvp6324: camera@31 {
+		compatible = "nextchip,nvp6324";
+		reg = <0x31>;
+
+		/*
+		 * Source (MIPI CSI-2 output) pad. The driver exposes pads
+		 * 0..3 as the analog inputs (sinks, no DT link) and pad 4 as
+		 * this source, so the port is numbered @4 to map onto pad 4.
+		 */
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@4 {
+				reg = <4>;
+
+				nvp6324_out: endpoint {
+					remote-endpoint = <&csi0_in>;
+					bus-type = <4>; /* CSI-2 D-PHY */
+					clock-lanes = <0>;
+					data-lanes = <1 2 3 4>;
+					link-frequencies = /bits/ 64 <621000000>;
+				};
+			};
+		};
+	};
+};
+
+&cdns_csi2rx0 {
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		csi0_port0: port@0 {
+			reg = <0>;
+			status = "okay";
+
+			csi0_in: endpoint {
+				remote-endpoint = <&nvp6324_out>;
+				bus-type = <4>; /* CSI-2 D-PHY */
+				clock-lanes = <0>;
+				data-lanes = <1 2 3 4>;
+				link-frequencies = /bits/ 64 <621000000>;
+			};
+		};
+	};
+};
+
+&ti_csi2rx0 {
+	status = "okay";
+};
+
+&dphy0 {
+	status = "okay";
+};
