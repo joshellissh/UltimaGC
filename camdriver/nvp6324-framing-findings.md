@@ -321,6 +321,12 @@ app grows live feeds (add Before= + Wants, or have the app retry-open the node).
 script was validated live end-to-end: break pipeline to 640×480 → STREAMON EPIPE → run script
 → 1920×1080 → STREAMON 25fps.
 
+**VERIFIED on the flashed image (2026-09-02, commit c8ad234), cold boot, zero manual steps:**
+`nvp6324-csi-setup.service` = enabled/preset-enabled, `active (exited) status=0/SUCCESS`
+(142ms), journal shows `VC0 pipeline set to UYVY 1920x1080 (/dev/video2 ready)`; the cdns/ti
+subdev pads read 1920×1080 with no hand-run media-ctl; `v4l2-ctl --stream-mmap` on /dev/video2
+→ 25.00 fps straight off the boot. The autoload → oneshot → STREAMON path is fully hands-free.
+
 CAUTION LEARNED (still true): unbind/rebind the nvp6324 i2c driver CORRUPTS the media graph
 (video2→ENOTTY, new video8-13) — same as a module reload. Do NOT re-probe to test.
 
