@@ -1,0 +1,14 @@
+[Unit]
+Description=Periodic dashcam retention check (free-space ring buffer)
+
+[Timer]
+# First check a couple of minutes after boot (well after the dash is up and
+# recording has started), then every 5 minutes. A 45 MB/min single stream can't
+# outrun a 5-minute cadence on any realistically-sized drive; tighten if 4-cam
+# recording (M4) lands on a small stick. Not Persistent — missed runs while
+# powered off are irrelevant, the next boot re-checks.
+OnBootSec=2min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target

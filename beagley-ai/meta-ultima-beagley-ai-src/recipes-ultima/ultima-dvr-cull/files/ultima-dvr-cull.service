@@ -1,0 +1,13 @@
+[Unit]
+Description=Cull oldest dashcam recordings when the DVR drive is low on space
+# No RequiresMountsFor=/mnt/dvr: the drive is mounted by a transient
+# systemd-mount unit from the udev rule (ultima-dvr-mount), not a static mount
+# unit, so a dependency here would be unreliable. The script checks the mount
+# itself and exits 0 when absent — a no-drive run must not show as a failure.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ultima-dvr-cull.sh
+# Never compete with recording or the display: lowest-priority CPU and idle I/O.
+Nice=10
+IOSchedulingClass=idle

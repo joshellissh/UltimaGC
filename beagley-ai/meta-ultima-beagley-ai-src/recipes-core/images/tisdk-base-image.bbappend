@@ -13,16 +13,16 @@
 #   doesn't have (WL1807).
 IMAGE_INSTALL:append:beagley-ai = " ultima-app ultima-splash can-utils mmc-utils ultima-data-mount volatile-binds"
 
-# Dashcam recording, storage side (2026-08-30): auto-mounts a USB drive
-# labeled ULTIMA_DVR to /mnt/dvr whenever one is plugged in — see
-# recipes-ultima/ultima-dvr-mount. CONFIG_EXFAT_FS=m is already in this
-# kernel's .config and kernel-module-exfat is already pulled onto this image
-# (confirmed via buildhistory, neither added by this layer) — exFAT chosen
-# for cross-platform (Mac/Windows/Linux) browsability of the recorded files,
-# per the dashcam-recording proposal. The recording pipeline itself
-# (Wave5 encode, segment rotation) is later work — this is storage plumbing
-# only, and doesn't depend on it.
-IMAGE_INSTALL:append:beagley-ai = " ultima-dvr-mount"
+# Dashcam recording (see DASHCAM.md): ultima-dvr-mount auto-mounts a USB drive
+# labeled ULTIMA_DVR to /mnt/dvr whenever one is plugged in; ultima-dvr-cull is
+# the free-space retention janitor (a systemd timer) that rotates the oldest
+# recordings off it once the drive nears full. CONFIG_EXFAT_FS=m is already in
+# this kernel's .config and kernel-module-exfat is already pulled onto this
+# image (confirmed via buildhistory, neither added by this layer) — exFAT for
+# cross-platform (Mac/Windows/Linux) browsability of the recorded files. The
+# recorder itself lives in ultima-app (Wave5 hardware H.264 -> segmented .h264,
+# milestone M1 — hardware-validated).
+IMAGE_INSTALL:append:beagley-ai = " ultima-dvr-mount ultima-dvr-cull"
 
 # GPU smoke-test packages for this board's BXS-4-64 Rogue stack — keep
 # kmscube/mesa-demos here for the verify-the-GPU-before-blaming-the-app

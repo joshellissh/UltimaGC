@@ -248,7 +248,16 @@ firmware errors), and the dash rendered normally throughout. Filenames used the
 un-set RTC's date (May 2025) — the expected `unsynced/`-vs-dated behavior, real
 time is M3.
 
-**M2 — Retention janitor.** The `ultima-dvr-cull` timer/script above.
+**M2 — Retention janitor. DONE (2026-09-02).** The free-space ring buffer
+above, implemented as `recipes-ultima/ultima-dvr-cull` (a systemd `.timer`
+every 5 min firing a oneshot `ultima-dvr-cull.sh`, `Nice`/idle-I/O, separate
+from `ultima-app`), wired into `IMAGE_INSTALL`. The script deletes oldest
+`.h264` first under `/mnt/dvr/ULTIMA` while free space is below 10 %, reaps
+emptied day dirs, and is a clean no-op with no drive mounted. Hardware-
+validated: oldest-first order, threshold trigger + delete loop (with a filler
+to drop free below the target), only `.h264` touched (a non-recording file was
+left alone), empty dirs reaped, no-op when there's headroom; recipe builds and
+packages clean. Timer *firing* confirms on the next full-image flash.
 
 **M3 — Robustness pass.**
 - exFAT has **no journal**: abrupt power loss can corrupt the *filesystem*, not
