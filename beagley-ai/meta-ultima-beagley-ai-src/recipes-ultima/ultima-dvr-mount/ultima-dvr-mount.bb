@@ -10,12 +10,21 @@ LICENSE = "CLOSED"
 
 COMPATIBLE_MACHINE = "beagley-ai"
 
-SRC_URI = "file://99-ultima-dvr.rules"
+SRC_URI = "file://99-ultima-dvr.rules file://ultima-dvr-mount.sh"
 S = "${WORKDIR}"
+
+# fsck.exfat (from exfatprogs, meta-openembedded/meta-filesystems) for the
+# preen-before-mount step in ultima-dvr-mount.sh — exFAT has no journal and
+# this drive is power-cut constantly (DASHCAM.md M3). systemd-run/systemd-mount
+# come from systemd, always present.
+RDEPENDS:${PN} = "exfatprogs"
 
 do_install() {
     install -d ${D}${sysconfdir}/udev/rules.d
     install -m 0644 ${WORKDIR}/99-ultima-dvr.rules ${D}${sysconfdir}/udev/rules.d/99-ultima-dvr.rules
+
+    install -d ${D}${bindir}
+    install -m 0755 ${WORKDIR}/ultima-dvr-mount.sh ${D}${bindir}/ultima-dvr-mount
 
     # Baked into the rootfs at build time, same reasoning as ultima-app.bb's
     # /data mountpoint: systemd-mount (triggered by the udev rule above)
@@ -23,4 +32,4 @@ do_install() {
     install -d ${D}/mnt/dvr
 }
 
-FILES:${PN} += "${sysconfdir}/udev/rules.d/99-ultima-dvr.rules /mnt/dvr"
+FILES:${PN} += "${sysconfdir}/udev/rules.d/99-ultima-dvr.rules ${bindir}/ultima-dvr-mount /mnt/dvr"

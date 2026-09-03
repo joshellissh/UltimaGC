@@ -478,8 +478,14 @@ void SegmentWriter::write(const uint8_t *data, size_t size, bool keyframe)
         if (!openNewSegment())
             return;                // drive gone / unwritable — drop until it recovers
     }
-    if (m_file)
-        std::fwrite(data, 1, size, m_file);
+    if (m_file && std::fwrite(data, 1, size, m_file) != size) {
+        // Write failed — almost always the drive was yanked mid-segment. Close
+        // now so this handle stops pinning the (about-to-be-unmounted) mount;
+        // the recorder's mount poll then stops recording within a few seconds,
+        // and the next keyframe re-opens once a drive is back.
+        fprintf(stderr, "[dashcam] segment write failed (%s) — closing segment\n", strerror(errno));
+        close();
+    }
 }
 
 void SegmentWriter::close()

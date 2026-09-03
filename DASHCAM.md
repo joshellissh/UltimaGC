@@ -259,23 +259,30 @@ to drop free below the target), only `.h264` touched (a non-recording file was
 left alone), empty dirs reaped, no-op when there's headroom; recipe builds and
 packages clean. Timer *firing* confirms on the next full-image flash.
 
-**M3 — Robustness pass.**
-- exFAT has **no journal**: abrupt power loss can corrupt the *filesystem*, not
-  just the tail segment. Add an `fsck.exfat` before mount (confirm
-  `exfatprogs` is in the image — the current udev `systemd-mount` does no
-  fsck), `fsync` at each segment close, and keep segments short.
-- Hot unplug / replug handling (the recorder's poll follows it within ~3 s, but
-  a yanked drive while a segment is open needs the write path to fail
-  gracefully — it does; verify the unmount isn't blocked by an open file).
-- **CMA — already fine.** This board's pool is ~896 MB (`CmaTotal`, per
-  `camerafeed.h`); continuous 4-cam capture (~96 MB of EGLImages) plus encoder
-  buffers fit comfortably. No `cma=` change (correcting an earlier 128 MB note
-  carried from a different board).
-- **Clock / filenames.** The onboard DS1340 RTC exists but `ultima-hwclock-load`
-  isn't installed, so recordings before a valid time-set get a bogus epoch
-  date. Interim: use the app's existing `SystemClock::timeIsValid()` to write to
-  `unsynced/boot-N/` until the clock is good. Follow-up: bring up an
-  hwclock-load variant for the DS1340 so timestamps are real from boot.
+**M3 — Robustness pass. Software DONE (2026-09-02), build-validated; runtime
+validation needs a full-image flash (and, for the RTC, a coin cell).**
+- **exFAT fsck-on-mount — done.** exFAT has no journal and this drive is
+  power-cut constantly, so `ultima-dvr-mount` now preen-fscks (`fsck.exfat -p`,
+  from `exfatprogs` — added, builds) via a helper (`ultima-dvr-mount.sh`)
+  launched non-blocking (`systemd-run`) from the udev rule, then mounts. Segment
+  writes already `fsync` at each rotation.
+- **Hot unplug — done.** `SegmentWriter::write` now closes the file on a write
+  failure so a yanked drive's handle stops pinning the mount; the recorder's
+  poll (which checks `W_OK`) then stops recording within ~3 s.
+- **CMA — already fine** (~896 MB pool; correcting the earlier 128 MB note).
+- **RTC / real filenames — software done, hardware pending.** `rtc0` is the
+  onboard **DS1340** (`rtc-ds1307 2-0068`), present and in the DT, but its
+  oscillator is stopped (no valid time) — it needs a **coin cell** on its backup
+  connector and a **one-time set**. New `ultima-rtc-load` oneshot runs
+  `hwclock -u -s -f /dev/rtc0` early at boot (before the app) and is a clean
+  no-op until the RTC is valid. It replaces the excluded `ultima-hwclock-load`
+  (which hardcodes a BQ32002 this board lacks). One-time set, once a battery is
+  in and the system clock is correct: `hwclock -u -w -f /dev/rtc0`. Until then,
+  `SegmentWriter` keeps using the interim dated-vs-`unsynced/` behavior.
+
+Not yet on hardware: the fsck-on-mount and RTC-load only run from a flashed
+image (they're boot/udev units), so validating them means a full-image build +
+flash — deferred; the pieces build and package clean.
 
 **M4 — Scale to 4×1080p (hardware prerequisite for the target).** The
 NVP6324's 1242 Mbps "FHD x4ch" MIPI rate is a **marginal eye** on this board

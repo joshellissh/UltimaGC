@@ -20,8 +20,13 @@
 # read-only-rootfs work). nosuid,nodev,noexec: standard hardening for a
 # removable, physically-accessible-in-the-car filesystem — nothing on it
 # should ever be treated as executable or a device node.
+# The add path goes through ultima-dvr-mount (launched non-blocking as a
+# transient unit so a slow fsck never stalls the udev worker): it preen-fscks
+# the exFAT filesystem — no journal, and this drive is power-cut constantly —
+# then systemd-mounts it with the same hardening options. See
+# ultima-dvr-mount.sh and DASHCAM.md M3.
 ACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_LABEL}=="ULTIMA_DVR", \
-    RUN+="/usr/bin/systemd-mount --no-block --collect -o noatime,nosuid,nodev,noexec $env{DEVNAME} /mnt/dvr"
+    RUN+="/usr/bin/systemd-run --no-block --collect --unit=ultima-dvr-mount /usr/bin/ultima-dvr-mount $env{DEVNAME}"
 
 ACTION=="remove", SUBSYSTEM=="block", ENV{ID_FS_LABEL}=="ULTIMA_DVR", \
     RUN+="/usr/bin/systemd-umount /mnt/dvr"

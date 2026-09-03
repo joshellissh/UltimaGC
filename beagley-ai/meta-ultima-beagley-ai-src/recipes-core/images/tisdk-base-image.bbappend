@@ -13,16 +13,18 @@
 #   doesn't have (WL1807).
 IMAGE_INSTALL:append:beagley-ai = " ultima-app ultima-splash can-utils mmc-utils ultima-data-mount volatile-binds"
 
-# Dashcam recording (see DASHCAM.md): ultima-dvr-mount auto-mounts a USB drive
-# labeled ULTIMA_DVR to /mnt/dvr whenever one is plugged in; ultima-dvr-cull is
-# the free-space retention janitor (a systemd timer) that rotates the oldest
-# recordings off it once the drive nears full. CONFIG_EXFAT_FS=m is already in
-# this kernel's .config and kernel-module-exfat is already pulled onto this
-# image (confirmed via buildhistory, neither added by this layer) — exFAT for
-# cross-platform (Mac/Windows/Linux) browsability of the recorded files. The
-# recorder itself lives in ultima-app (Wave5 hardware H.264 -> segmented .h264,
-# milestone M1 — hardware-validated).
-IMAGE_INSTALL:append:beagley-ai = " ultima-dvr-mount ultima-dvr-cull"
+# Dashcam recording (see DASHCAM.md): ultima-dvr-mount preen-fscks then
+# auto-mounts a USB drive labeled ULTIMA_DVR to /mnt/dvr (exFAT fsck via
+# exfatprogs, pulled in by that recipe's RDEPENDS — exFAT has no journal and the
+# drive is power-cut constantly); ultima-dvr-cull is the free-space retention
+# janitor (a systemd timer) that rotates the oldest recordings off once the
+# drive nears full; ultima-rtc-load sets the clock from the onboard DS1340 RTC
+# at boot so filenames get a real date (a no-op until the RTC has a coin cell +
+# one-time set — M3). CONFIG_EXFAT_FS=m + kernel-module-exfat are already in
+# this image (confirmed via buildhistory, neither added by this layer) — exFAT
+# for cross-platform (Mac/Windows/Linux) browsability. The recorder itself
+# lives in ultima-app (Wave5 hardware H.264 -> segmented .h264, M1).
+IMAGE_INSTALL:append:beagley-ai = " ultima-dvr-mount ultima-dvr-cull ultima-rtc-load"
 
 # GPU smoke-test packages for this board's BXS-4-64 Rogue stack — keep
 # kmscube/mesa-demos here for the verify-the-GPU-before-blaming-the-app

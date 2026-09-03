@@ -1,0 +1,17 @@
+[Unit]
+Description=Load system clock from the onboard DS1340 RTC (rtc0)
+DefaultDependencies=no
+After=systemd-modules-load.service
+Before=sysinit.target ultima-splash.service ultima-app.service
+# Ordering only. The script no-ops cleanly when the RTC has no valid time, so
+# there is deliberately no ConditionPathExists=/dev/rtc0 — unit conditions are
+# evaluated once at job start and never retried, which would skip a not-yet-
+# probed rtc0 (same trap called out in nvp6324-csi-setup.service).
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/ultima-rtc-load.sh
+
+[Install]
+WantedBy=sysinit.target
