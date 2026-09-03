@@ -1,27 +1,18 @@
 SUMMARY = "Ultima fullscreen Qt5 QML gauge cluster"
 LICENSE = "CLOSED"
 
-DEPENDS = "qtbase qtdeclarative libjpeg-turbo"
+DEPENDS = "qtbase qtdeclarative"
 # ti-img-rogue-driver explicit here (not just via tisdk-base-image.bbappend's
 # IMAGE_INSTALL) so the GPU module can't silently drop out of the image if
 # that list changes later — same reasoning this project already used once
 # for kernel-module-tidss before tidss went built-in. See pvrsrvkm.conf below.
 #
-# libjpeg-turbo (2026-08-26, dashcam-recording encode spike): already built
-# for qtbase's own jpeg image plugin (libqjpeg.so, confirmed present at
-# runtime), but that's qtbase's DEPENDS, not this recipe's — ultima-app needs
-# its own explicit DEPENDS to get turbojpeg.h and libturbojpeg.so into ITS
-# recipe-sysroot (Yocto sysroots are per-recipe, not transitively shared).
-# RDEPENDS pinned too, same can't-silently-drop-out reasoning as the other
-# two entries here, even though qtbase-plugins likely already pulls the
-# runtime .so in transitively.
-#
-# openh264 was tried and reverted 2026-08-26 (dashcam H.264 encode spike) —
-# real hardware measured software H.264 at ~3.5fps/stream vs a 15fps
-# target at 1080p, ~3.5x slower than the turbojpeg path above. Not viable
-# on this SoC's Cortex-A53 cores; see git history if revisiting with a
-# different library or hardware.
-RDEPENDS:${PN} = "qtbase-plugins qtdeclarative-qmlplugins iproute2 ti-img-rogue-driver libjpeg-turbo"
+# No libjpeg-turbo / openh264 here: dashcam recording (DASHCAM.md) drives the
+# AM67A Wave5 hardware H.264 encoder directly over V4L2 mem2mem — no extra
+# build- or run-time libraries. The earlier software-encode spikes that pulled
+# those in were BeaglePlay/AM625 (a board with no hardware encoder) and have
+# been removed; see DASHCAM.md and beagley-ai/wave5-enc/.
+RDEPENDS:${PN} = "qtbase-plugins qtdeclarative-qmlplugins iproute2 ti-img-rogue-driver"
 
 inherit qmake5 systemd
 

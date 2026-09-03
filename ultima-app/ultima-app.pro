@@ -27,10 +27,10 @@ CONFIG += c++17
 TARGET = ultima-app
 HEADERS += odostore.h canbus.h systemclock.h systemstats.h camerafeed.h cameraview.h \
     cameracalibration.h warpmesh.h shadermanager.h surroundtexture.h surroundview.h \
-    calibrationstore.h dmabuftexture.h mediagraph.h
+    calibrationstore.h dmabuftexture.h mediagraph.h dashcamrecorder.h wave5encoder.h
 SOURCES += main.cpp odostore.cpp canbus.cpp systemclock.cpp systemstats.cpp camerafeed.cpp cameraview.cpp \
     cameracalibration.cpp warpmesh.cpp shadermanager.cpp surroundtexture.cpp surroundview.cpp \
-    calibrationstore.cpp dmabuftexture.cpp mediagraph.cpp
+    calibrationstore.cpp dmabuftexture.cpp mediagraph.cpp dashcamrecorder.cpp wave5encoder.cpp
 RESOURCES += qml.qrc
 
 # Off by default so the Buildroot/Pi build always uses real SocketCAN.
@@ -40,17 +40,12 @@ ultima_dev_sim {
     DEFINES += ULTIMA_SIMULATE
 }
 
-# turbojpeg (dashcam-recording encode spike, camerafeed.cpp's
-# CameraCaptureThread): only linked where that code actually compiles in —
-# same linux:!ultima_dev_sim condition as the C++ side's
-# `#if defined(__linux__) && !defined(ULTIMA_SIMULATE)` guard, so the
-# macOS/Qt6 Homebrew dev build (no libjpeg-turbo dev headers there) and the
-# WSL simulated-CAN dev build both stay unaffected.
-#
-# openh264 (H.264 encode spike) was tried and reverted 2026-08-26: real
-# hardware measured ~233ms/frame at 1080p (vs turbojpeg's ~67ms), ~3.5fps
-# achieved against a 15fps target — software H.264 isn't viable on this
-# SoC's Cortex-A53 cores. See git history for the full spike if revisiting.
-linux:!ultima_dev_sim {
-    LIBS += -lturbojpeg
-}
+# Dashcam recording (wave5encoder.cpp / dashcamrecorder.cpp) uses the AM67A
+# Wave5 hardware H.264 encoder directly over V4L2 mem2mem — no extra link
+# libraries. Both sources are self-guarding (wave5encoder.cpp compiles to an
+# empty TU on the macOS/simulated dev build), so they need no qmake condition.
+# History: the earlier software-encode spikes (turbojpeg MJPEG, openh264) were
+# BeaglePlay/AM625 measurements — that board had no hardware encoder — and are
+# gone; see DASHCAM.md and beagley-ai/wave5-enc/. Software H.264 at 1080p was
+# never viable on the A53s (~3.5 fps); the Wave5 path does 4x1080p25 with
+# headroom.

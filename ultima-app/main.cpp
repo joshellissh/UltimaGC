@@ -37,6 +37,7 @@
 #include "camerafeed.h"
 #include "cameraview.h"
 #include "surroundview.h"
+#include "dashcamrecorder.h"
 
 static double readUptime() {
     double t = 0;
@@ -200,6 +201,15 @@ int main(int argc, char *argv[])
     CameraFeed cameraFeed2("cam2", 1);
     CameraFeed cameraFeed3("cam3", 2);
     CameraFeed cameraFeed4("cam4", 3);
+
+    // Dashcam: continuously record every camera to the auto-mounted USB drive
+    // whenever it is present (see DASHCAM.md). Uses the real feed objects, not
+    // the ULTIMA_CAM_FANOUT display aliases below. start() only arms a poll
+    // timer, so recording begins a few seconds into the event loop — after the
+    // boot-critical first frames — and then follows the drive on hot-plug.
+    DashcamRecorder dashcam({ &cameraFeed1, &cameraFeed2, &cameraFeed3, &cameraFeed4 });
+    dashcam.start();
+
     qmlRegisterType<CameraView>("Ultima", 1, 0, "CameraView");
     qmlRegisterType<SurroundView>("Ultima", 1, 0, "SurroundView");
     {

@@ -215,13 +215,38 @@ panics this board; a module reload / unbind corrupts the media graph — see the
   1088, the 16-px-aligned height). Full bring-up story, incl. the VPU-wedge
   recovery and debugging aids, in `wave5-enc/README.md`.
 
-**M1 — Single-camera in-app recorder.** Continuous capture → convert → Wave5 →
-`.h264` segments on `/mnt/dvr`, from boot to power loss, proven on today's
-clean 1×1080p25 VC0. Recording holds a permanent frame-consumer reference so
-its camera stays streaming regardless of what's on screen (display screens add
-transient references on top). Service ordering gates on the mount
-(`RequiresMountsFor=/mnt/dvr`); no drive present = don't record, log it (and,
-later, surface a dash indicator).
+**M1 — In-app recorder. DONE (2026-09-02), hardware-validated.**
+Continuous capture → Wave5 → `.h264` segments on `/mnt/dvr`, from boot to power
+loss. Implemented:
+- **`wave5encoder.{h,cpp}`** — `Wave5Encoder` (the M0 harness logic as a class:
+  resolve by caps, UYVY→H.264, capture-first STREAMON, `submit()`/`stop()`) and
+  `SegmentWriter`, which **caches SPS/PPS and prepends them to every segment**
+  (the encoder emits them only once, so a rotated file otherwise wouldn't
+  decode) and rotates on a keyframe past the segment length so each `.h264` is
+  independently playable. Qt-free; compiles standalone.
+- **`dashcamrecorder.{h,cpp}`** — `DashcamRecorder` polls `/mnt/dvr` (via
+  `st_dev` vs `/mnt` + `W_OK`) every 3 s and toggles `setRecording()` on all
+  feeds; no drive → don't record, logged. Follows hot-plug/removal.
+- **`camerafeed.{h,cpp}`** — the device now opens on display **or** recording
+  (`updateOpenState()`), decoupled from the QML `active` property; the capture
+  thread starts a `Wave5Encoder` **lazily on the first real frame** (so a VC
+  with no camera never opens one), feeds each raw UYVY buffer, and tears down
+  cleanly on stop/close. The turbojpeg spike is gone.
+
+Recording starts a few seconds into the event loop (the recorder's poll timer),
+after the boot-critical first frames — the app stays lazy at boot.
+
+**Verified on hardware (2026-09-02)**, hot-deployed binary on the running board:
+the recorder detected the drive, opened VC0, started the Wave5 encoder, and
+wrote `/mnt/dvr/ULTIMA/<date>/<time>_cam1.h264` — **three clean ~61 s
+rotations** (44.8 / 44.8 / 20.2 MB), no dropped frames or encoder errors. Each
+segment **decodes standalone, 1525 frames, H.264 Baseline 1920×1080** (the crop
+signals 1080, not the coded 1088); a *rotated* segment's leading NALs are
+`SPS, PPS, AUD, IDR`, confirming the SPS/PPS-prepend that makes it independently
+playable. On stop the **VPU released cleanly** (`wave5` refcount → 0, no
+firmware errors), and the dash rendered normally throughout. Filenames used the
+un-set RTC's date (May 2025) — the expected `unsynced/`-vs-dated behavior, real
+time is M3.
 
 **M2 — Retention janitor.** The `ultima-dvr-cull` timer/script above.
 
@@ -230,12 +255,13 @@ later, surface a dash indicator).
   just the tail segment. Add an `fsck.exfat` before mount (confirm
   `exfatprogs` is in the image — the current udev `systemd-mount` does no
   fsck), `fsync` at each segment close, and keep segments short.
-- Hot unplug / replug handling.
-- **CMA sizing.** Continuous 4-camera capture + 4 encoder sessions (each with
-  reference frames + IO buffers) on top of the ~96 MB the display EGLImages
-  already pin will exceed the 128 MB CMA pool. Measure, then raise `cma=`.
-  Note: bootargs are baked into the Falcon FIT now, so this is a **rebuild**,
-  not a live cmdline edit (see `beagley-ai/NOTES.md`).
+- Hot unplug / replug handling (the recorder's poll follows it within ~3 s, but
+  a yanked drive while a segment is open needs the write path to fail
+  gracefully — it does; verify the unmount isn't blocked by an open file).
+- **CMA — already fine.** This board's pool is ~896 MB (`CmaTotal`, per
+  `camerafeed.h`); continuous 4-cam capture (~96 MB of EGLImages) plus encoder
+  buffers fit comfortably. No `cma=` change (correcting an earlier 128 MB note
+  carried from a different board).
 - **Clock / filenames.** The onboard DS1340 RTC exists but `ultima-hwclock-load`
   isn't installed, so recordings before a valid time-set get a bogus epoch
   date. Interim: use the app's existing `SystemClock::timeIsValid()` to write to
@@ -255,8 +281,19 @@ rewrite.
 ## Open risks, in one place
 
 - **MIPI 1242 Mbps eye** — the gate on 4×1080p (M4).
-- **CMA pool** — needs raising; a Falcon-FIT rebuild (M3).
+- **CMA pool** — *not* a concern (correcting an earlier note): this board's pool
+  is ~896 MB (`CmaTotal`, per `camerafeed.h`), comfortably covering continuous
+  4-cam capture + encoder buffers. No `cma=` change needed.
+- **VPU teardown on exit** — the capture thread `STREAMOFF`s the encoder on a
+  clean close; on process death (SIGTERM's `_exit`, or a crash) the kernel
+  closes the encoder fd and the driver's `.release` runs `stop_streaming` — a
+  clean teardown for a *healthy* encoder (the M0 wedge came from a failed
+  seq-init blocking release, not from unclean exit), so no signal-handler
+  surgery is needed. Residual risk: a crash *mid-encode* could still wedge the
+  VPU until the next power-cycle — rare, and the car power-cycles every drive.
 - **exFAT power-loss corruption** — no journal; fsck-on-mount + fsync + short
-  segments (M3).
-- **RTC not loaded** — bogus filename dates until the clock is valid; interim
-  `unsynced/` dir, real fix is DS1340 hwclock-load (M3 / follow-up).
+  segments (M3). `SegmentWriter` already `fsync`s at each rotation.
+- **RTC not loaded** — bogus filename dates until the clock is valid (confirmed
+  live: the board read May 2025). `SegmentWriter` routes to `unsynced/` only
+  when the year is implausible (< 2021); a merely-wrong-but-set clock still gets
+  a dated dir. Real fix is DS1340 hwclock-load (M3 / follow-up).

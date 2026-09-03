@@ -9,6 +9,7 @@
 #include <QMutex>
 #include <QVector>
 #include <QAtomicInt>
+#include <string>
 
 // Captures live video from a V4L2 capture node fed by the NVP6324 AHD->MIPI
 // CSI-2 decoder (MY-CAM004M) through the J722S CSI2RX stack. Four instances,
@@ -85,6 +86,16 @@ public:
     bool active() const { return m_active; }
     void setActive(bool on);
 
+    // --- Dashcam recording (see wave5encoder.h and dashcamrecorder.h) ------
+    // configureRecording() sets the output policy (called once, before
+    // enabling); setRecording() toggles continuous hardware-H.264 capture of
+    // this feed to disk. The device is opened whenever display OR recording
+    // wants it. Encoding + segment writing run on the capture thread; the
+    // encoder starts lazily on the first real frame, so a virtual channel with
+    // no camera connected never opens one.
+    void configureRecording(const QString &root, int bitrateBps, int gop, int segSeconds);
+    void setRecording(bool on);
+
     bool streaming() const { return m_streaming; }
     bool failed() const { return m_failed; }
     int frameWidth() const { return m_frameWidth; }
@@ -144,6 +155,9 @@ private slots:
 
 private:
     void closeDevice();
+    // Opens the device when display OR recording wants it, closes when neither
+    // does — the single place setActive()/setRecording() funnel through.
+    void updateOpenState();
     void setStreaming(bool on);
     void setFailed(bool on);
 
@@ -180,6 +194,18 @@ private:
 
     bool m_zeroCopy = false;
     QAtomicInt m_frameConsumers{0};
+
+    // Dashcam recording state. m_recordActive is toggled on the GUI thread
+    // (setRecording, driven by DashcamRecorder's mount polling) and read by the
+    // capture thread; the config below is set once via configureRecording()
+    // before recording is enabled, then read by the capture thread when it
+    // lazily starts the encoder. See camerafeed.cpp and wave5encoder.h.
+    QAtomicInt m_recordActive{0};
+    std::string m_recordRoot;
+    int m_recordSegSecs = 60;
+    int m_recordBitrate = 8000000;
+    int m_recordGop = 25;
+
     friend class CameraCaptureThread;
     class CameraCaptureThread *m_captureThread = nullptr;
 

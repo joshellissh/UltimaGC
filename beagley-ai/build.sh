@@ -29,15 +29,23 @@ CAMDRIVER_SRC="$(cd ../camdriver && pwd)"
 BEAGLEY_AI_SRC="$(cd meta-ultima-beagley-ai-src && pwd)"
 TARGET="${1:-tisdk-base-image}"
 
-# Stage the layer to a local scratch dir before bind-mounting, excluding
-# .smbdelete* — on an SMB-mounted checkout (e.g. a network share on macOS), a
-# stray .smbdeleteAAA* rename-then-unlink artifact left behind by an earlier
-# rm/mv can make the container's `cp -a` of the live path fail ("No such file
-# or directory") mid-traversal, a race between directory enumeration and file
-# access over the network share. These are gitignored and harmless to skip.
+# Stage everything the build reads from the host — the layer, the Qt app
+# source, and the camera driver source — into a local scratch dir before
+# bind-mounting it into the container. This matters on an SMB-mounted checkout
+# (a network share on macOS): the container reads a bind mount over a
+# virtiofs->SMB->host double hop that intermittently drops files mid-read, so
+# the app recipe's do_unpack (a copytree of the live mount) fails wholesale
+# with "No such file or directory" on real source files. A host-side rsync —
+# the Mac's own SMB client, which is reliable — into local scratch sidesteps
+# that; the container then only ever reads a fast local copy. Excludes drop SMB
+# rename-then-unlink ghosts (.smbdelete*, gitignored) and local build artifacts
+# (build/, .DS_Store) that don't belong in a source copy.
+RSYNC_EXCLUDES=(--exclude='.smbdelete*' --exclude='.DS_Store')
 STAGE_DIR="$(mktemp -d)"
 trap 'rm -rf "$STAGE_DIR"' EXIT
-rsync -a --exclude='.smbdelete*' "$BEAGLEY_AI_SRC/" "$STAGE_DIR/beagley-ai/"
+rsync -a "${RSYNC_EXCLUDES[@]}" "$BEAGLEY_AI_SRC/" "$STAGE_DIR/beagley-ai/"
+rsync -a "${RSYNC_EXCLUDES[@]}" --exclude='build/' "$ULTIMA_APP_SRC/" "$STAGE_DIR/ultima-app/"
+rsync -a "${RSYNC_EXCLUDES[@]}" "$CAMDRIVER_SRC/" "$STAGE_DIR/camdriver/"
 
 # Sync the layer into the volume — the volume is the only place bitbake
 # actually reads from (see run.sh for why it's not a host bind mount for the
@@ -76,8 +84,8 @@ TTY_ARGS=()
 # set -u (fixed upstream in bash 4.4) — the standard portable guard for that.
 docker run --rm ${TTY_ARGS[@]+"${TTY_ARGS[@]}"} --cap-add SYS_PTRACE \
   -v "$VOLUME:/home/builder/yocto" \
-  -v "$ULTIMA_APP_SRC:/home/builder/yocto/ultima-app-src:ro" \
-  -v "$CAMDRIVER_SRC:/home/builder/yocto/camdriver-src:ro" \
+  -v "$STAGE_DIR/ultima-app:/home/builder/yocto/ultima-app-src:ro" \
+  -v "$STAGE_DIR/camdriver:/home/builder/yocto/camdriver-src:ro" \
   "$IMAGE" bash -c "
     source /home/builder/yocto/tisdk/sources/oe-core/oe-init-build-env /home/builder/yocto/tisdk/$BUILD_SUBDIR
     bitbake $TARGET
