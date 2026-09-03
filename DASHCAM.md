@@ -257,7 +257,8 @@ emptied day dirs, and is a clean no-op with no drive mounted. Hardware-
 validated: oldest-first order, threshold trigger + delete loop (with a filler
 to drop free below the target), only `.h264` touched (a non-recording file was
 left alone), empty dirs reaped, no-op when there's headroom; recipe builds and
-packages clean. Timer *firing* confirms on the next full-image flash.
+packages clean. Timer *firing* now confirmed on the flashed image (2026-09-03) —
+see "Flashed-image validation" below.
 
 **M3 — Robustness pass. Software DONE (2026-09-02), build-validated; runtime
 validation needs a full-image flash (and, for the RTC, a coin cell).**
@@ -280,9 +281,37 @@ validation needs a full-image flash (and, for the RTC, a coin cell).**
   in and the system clock is correct: `hwclock -u -w -f /dev/rtc0`. Until then,
   `SegmentWriter` keeps using the interim dated-vs-`unsynced/` behavior.
 
-Not yet on hardware: the fsck-on-mount and RTC-load only run from a flashed
-image (they're boot/udev units), so validating them means a full-image build +
-flash — deferred; the pieces build and package clean.
+Runtime-validated on the flashed image (2026-09-03) — see "Flashed-image
+validation" just below. The udev fsck-on-mount and the RTC-load oneshot both run
+and succeed from a clean flash; only the RTC **coin cell + one-time set** remain
+(hardware).
+
+**Flashed-image validation (2026-09-03) — M1–M3 confirmed end to end on the
+shipped image.** Built the full `tisdk-base-image` with all three dashcam recipes
+wired into `IMAGE_INSTALL` (`ultima-dvr-mount ultima-dvr-cull ultima-rtc-load`),
+flashed it, and validated over SSH + serial on the running board with a real USB
+stick and one camera attached:
+- **Boot clean** — `ultima-app` active, `NRestarts=0`, no I/O / ext4 / OOM /
+  SIGABRT in `dmesg`. The Falcon chain is unchanged (p1 = `tiboot3.bin` +
+  `tifalcon.bin`, the good 317221-byte non-UHS SPL; the dashcam work only added to
+  the rootfs, verified by `mdir` on the built wic's p1 and the rootfs manifest).
+- **M3 mount — first validation from a real flash.** The udev rule fscks and
+  mounts the stick at `/mnt/dvr` (exfat, `errors=remount-ro`), no manual step.
+- **M1 recorder** — `[dashcam] recording ENABLED` → Wave5 `1920x1080 UYVY→H.264`
+  → `/mnt/dvr/ULTIMA/<date>/<time>_cam1.h264`; ~61 s rotations, newest segment
+  growing live, and every segment sampled (first / middle / newest) leads with
+  `00 00 01 67 42 00 2a e9` = SPS, Baseline **L4.2** — the SPS/PPS-prepend holds
+  across rotations in the shipped build, so each file is standalone-decodable.
+- **M2 cull** — `ultima-dvr-cull.timer` enabled + active and firing on schedule
+  (deactivates cleanly; nothing deleted at 1 % used — correct, only culls under
+  10 % free).
+- **RTC loader** — `ultima-rtc-load.service` ran, `Result=success`; the DS1340
+  still holds no valid time, so filenames use the interim May-2025 date. Real
+  timestamps need only the coin cell + one-time `hwclock -u -w -f /dev/rtc0`.
+
+So M1–M3 are validated from a clean flash, not just a hot-deployed binary. The
+remaining open items are both hardware: the RTC coin cell, and M4's 4-camera MIPI
+eye.
 
 **M4 — Scale to 4×1080p (hardware prerequisite for the target).** The
 NVP6324's 1242 Mbps "FHD x4ch" MIPI rate is a **marginal eye** on this board
