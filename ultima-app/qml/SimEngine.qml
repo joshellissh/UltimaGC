@@ -21,7 +21,7 @@ Item {
     property bool checkEngine: false
     property bool batteryWarn: false
     property bool coolantWarn: false
-    property real boost: 0  // 0-30 PSI
+    property real boost: 0  // 0-20 PSI
 
     // Internal state
     property real _targetSpeed: 0
@@ -123,7 +123,7 @@ Item {
             // Boost: builds with throttle at higher RPM
             var boostTarget = 0
             if (engine.speed > 20 && engine._accel > 0) {
-                boostTarget = Math.min(30, engine._accel * 200 + engine.rpm / 300)
+                boostTarget = Math.min(20, engine._accel * 200 + engine.rpm / 300)
             }
             engine.boost += (boostTarget - engine.boost) * 0.05
 

@@ -491,7 +491,7 @@ void CanBus::simulateTick()
 
     double boostTarget = 0.0;
     if (m_speed > 20.0 && m_simAccel > 0.0)
-        boostTarget = qMin(24.0, m_simAccel * 200.0 + m_rpm / 300.0);
+        boostTarget = qMin(20.0, m_simAccel * 200.0 + m_rpm / 300.0);
     double newBoost = m_boostPsi + (boostTarget - m_boostPsi) * 0.05;
     if (!qFuzzyCompare(1.0 + newBoost, 1.0 + m_boostPsi)) { m_boostPsi = newBoost; emit boostChanged(); }
 

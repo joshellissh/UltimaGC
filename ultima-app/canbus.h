@@ -31,6 +31,9 @@ class CanBus : public QObject
     Q_PROPERTY(bool oilPressureWarn READ oilPressureWarn NOTIFY oilPressureWarnChanged)
     Q_PROPERTY(bool batteryWarn READ batteryWarn NOTIFY batteryWarnChanged)
     Q_PROPERTY(bool coolantWarn READ coolantWarn NOTIFY coolantWarnChanged)
+    // Not decoded from any frame yet — MCE18 DIN5 is the planned source
+    // (see GAUGE-CLUSTER.md's MCE18 section), unwired like driveMode below.
+    Q_PROPERTY(bool absWarn READ absWarn NOTIFY absWarnChanged)
     Q_PROPERTY(bool lowFuelWarn READ lowFuelWarn NOTIFY lowFuelWarnChanged)
     Q_PROPERTY(bool checkEngine READ checkEngine NOTIFY checkEngineChanged)
     // Raw readings behind the four warn/status booleans above — the dash
@@ -99,6 +102,7 @@ public:
     bool oilPressureWarn() const { return m_oilPressureWarn; }
     bool batteryWarn() const { return m_batteryWarn; }
     bool coolantWarn() const { return m_coolantWarn; }
+    bool absWarn() const { return m_absWarn; }
     bool lowFuelWarn() const { return m_lowFuelWarn; }
     bool checkEngine() const { return m_checkEngine; }
     bool leftIndicator() const { return m_leftIndicator; }
@@ -179,6 +183,7 @@ signals:
     void oilPressureWarnChanged();
     void batteryWarnChanged();
     void coolantWarnChanged();
+    void absWarnChanged();
     void lowFuelWarnChanged();
     void checkEngineChanged();
     void leftIndicatorChanged();
@@ -232,6 +237,7 @@ private:
     bool m_oilPressureWarn = false;
     bool m_batteryWarn = false;
     bool m_coolantWarn = false;
+    bool m_absWarn = false;       // unwired — see absWarn's Q_PROPERTY comment above
     bool m_lowFuelWarn = false;   // fuelLevel < 1/4 tank
     bool m_checkEngine = false;
     bool m_leftIndicator = false;

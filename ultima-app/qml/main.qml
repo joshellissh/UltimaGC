@@ -247,21 +247,36 @@ Window {
         readonly property real centerY: height / 2
         readonly property real startAngle: 270
         readonly property real endAngle: 503
-        readonly property real maxBoost: 30
+        readonly property real maxBoost: 20
+        readonly property real overBoostThreshold: 19
 
         property real displayBoost: startupActive ? startupFrac * maxBoost : sim.boost
         Behavior on displayBoost {
             NumberAnimation { duration: 250; easing.type: Easing.OutCubic }
         }
 
-        Component.onCompleted: loadImage("qrc:/boost_circle.png")
+        Component.onCompleted: {
+            loadImage("qrc:/boost_circle.png")
+            loadImage("qrc:/boost_circle_over.png")
+        }
         onImageLoaded: requestPaint()
         onDisplayBoostChanged: requestPaint()
 
         onPaint: {
             var ctx = getContext("2d")
             ctx.reset()
-            if (!isImageLoaded("qrc:/boost_circle.png"))
+            // boost_circle_over.png is a same-alignment red recolor of
+            // boost_circle.png (channel-remapped, not hand-painted, so it's
+            // pixel-identical in shape) — picking the source image keeps the
+            // over-boost state on the exact same clip+drawImage path as the
+            // normal one. An earlier version tried recoloring in place with
+            // ctx.globalCompositeOperation = "source-atop", but QML Canvas's
+            // clip() doesn't reliably constrain drawing under a non-default
+            // composite operation — it painted a hard-edged red rectangle
+            // over the whole 640x640 canvas instead of just the ring.
+            var overBoost = displayBoost > overBoostThreshold
+            var source = overBoost ? "qrc:/boost_circle_over.png" : "qrc:/boost_circle.png"
+            if (!isImageLoaded(source))
                 return
 
             function toRad(deg) {
@@ -284,7 +299,7 @@ Window {
             // window-space region out of the source image (9-arg drawImage)
             // rather than scaling the whole image into the smaller canvas,
             // which would squash/misplace the ring.
-            ctx.drawImage("qrc:/boost_circle.png", x, y, width, height, 0, 0, width, height)
+            ctx.drawImage(source, x, y, width, height, 0, 0, width, height)
             ctx.restore()
         }
     }
@@ -662,7 +677,7 @@ Window {
     property bool _warnFlash: true
     Timer {
         interval: 300
-        running: sim.oilPressureWarn || sim.batteryWarn || sim.coolantWarn
+        running: sim.oilPressureWarn || sim.batteryWarn || sim.coolantWarn || sim.absWarn
         repeat: true
         onTriggered: _warnFlash = !_warnFlash
         onRunningChanged: if (running) _warnFlash = true
@@ -720,34 +735,39 @@ Window {
     // indicators are steady state lamps, not warnings, so they just track
     // their sim property directly.
     Image {
-        x: 640 - width / 2; y: 23
+        x: 600 - width / 2; y: 23
         source: "qrc:/icon_oil_pressure.png"
         visible: startupActive ? startupFlash : (sim.oilPressureWarn && _warnFlash)
     }
     Image {
-        x: 720 - width / 2; y: 23
+        x: 680 - width / 2; y: 23
         source: "qrc:/icon_check_engine.png"
         visible: startupActive ? startupFlash : sim.checkEngine
     }
     Image {
-        x: 800 - width / 2; y: 23
+        x: 760 - width / 2; y: 23
         source: "qrc:/icon_low_beam.png"
         visible: startupActive ? startupFlash : sim.lowBeams
     }
     Image {
-        x: 800 - width / 2; y: 23
+        x: 760 - width / 2; y: 23
         source: "qrc:/icon_high_beam.png"
         visible: startupActive ? startupFlash : sim.highBeams
     }
     Image {
-        x: 880 - width / 2; y: 23
+        x: 840 - width / 2; y: 23
         source: "qrc:/icon_battery.png"
         visible: startupActive ? startupFlash : (sim.batteryWarn && _warnFlash)
     }
     Image {
-        x: 960 - width / 2; y: 23
+        x: 920 - width / 2; y: 23
         source: "qrc:/icon_coolant_warn.png"
         visible: startupActive ? startupFlash : (sim.coolantWarn && _warnFlash)
+    }
+    Image {
+        x: 1000 - width / 2; y: 23
+        source: "qrc:/icon_abs.png"
+        visible: startupActive ? startupFlash : (sim.absWarn && _warnFlash)
     }
 
     // Fonts

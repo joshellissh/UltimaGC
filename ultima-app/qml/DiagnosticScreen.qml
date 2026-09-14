@@ -64,7 +64,7 @@ Item {
     readonly property var channels: [
         // ECU (Syvecs S7+) — verified frame map, see GAUGE-CLUSTER.md
         { label: "RPM", key: "rpm", unit: "", dec: 0, max: 7500 },
-        { label: "Boost", key: "boost", unit: "psi", dec: 1, max: 30 },
+        { label: "Boost", key: "boost", unit: "psi", dec: 1, max: 20 },
         { label: "Coolant Temp", key: "coolantTemp", unit: "°F", dec: 0, max: 260, critAt: 220 },
         { label: "Vehicle Speed", key: "speed", unit: "mph", dec: 0, max: 180 },
         { label: "Oil Pressure", key: "oilPressure", unit: "psi", dec: 0, max: 100 },
