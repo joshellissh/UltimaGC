@@ -1296,3 +1296,114 @@ reboot — the right tool for env-var experiments (`QSG_RENDER_TIMING=1`,
 `QML_IMPORT_TRACE=1`). The app's `/tmp/ultima-screenshot.request` and
 `/tmp/ultima-camtest.request` triggers were what made the camera-grid check
 and the "is the first frame really the splash" check possible over SSH.
+
+### WiFi (cc33xx) enabled (2026-09-14) — and the firmware-version trap
+
+The board's onboard radio is a **TI cc33xx** (SDIO), not the wl18xx family the
+retired BeaglePlay used — the earlier notes that call WiFi "hardware this board
+doesn't have" predate finding the real chip. The in-kernel `cc33xx` driver
+(6.12.43-ti) autoloads fine and creates `wlan0`; association to the bench AP is
+handled by `recipes-ultima/ultima-wifi-connect` (wpa_supplicant on wlan0 +
+Arago's stock `30-wlan.network` for DHCP). SSID/psk live in
+`files/wpa_supplicant-wlan0.conf`.
+
+**The trap — firmware version skew.** The first WiFi image booted with no
+`wlan0` at all. dmesg: `cc33xx-conf.bin ... expected 1353 got 1282` →
+`FW download failed`. The driver and the firmware came from two different TI
+repos with **incompatible versions**:
+
+- meta-ti-extras' stock **`cc33xx-fw`** (git.ti.com/cc33xx-wlan/cc33xx-fw.git
+  @1.7.0.323) ships `cc33xx-conf.bin` = **1282 bytes** (and its own fw.bin /
+  2nd_loader) — the driver rejects the conf and the FW download fails.
+- BeagleBoard's 6.12.43-ti `cc33xx` driver wants the cc33xx blobs from
+  **`ti-linux-firmware`** (conf = **1353 bytes**, plus a differently-sized
+  fw.bin / 2nd_loader — all three are a matched set).
+
+Fix: **`recipes-bsp/cc33xx-fw-tilinux`** installs the three cc33xx blobs from
+`ti-linux-firmware` (via the BSP's shared `ti-linux-fw.inc`, so it tracks the
+same SRCREV as ti-sci-fw/ti-dm-fw), and `ultima-wifi-connect` RDEPENDs on it
+instead of `cc33xx-fw`. Nothing else pulls `cc33xx-fw`, so it drops out with no
+file conflict; `cc33conf` / `cc33xx-target-scripts` install only tools/scripts
+(no firmware blobs) and stay. The `cc33xx-nvs.bin` the driver also probes for is
+genuinely absent from both packages — its `-2 (ENOENT)` is a non-fatal warning;
+the radio runs on default calibration. Hardware-verified 2026-09-14:
+wlan0 associates to the bench AP, DHCP, gateway pings.
+
+**Live-swap trick (no reboot, no reflash).** To prove the firmware fix on a
+running board without rebuilding: push the three correct blobs over the serial
+console (paced base64 — a naive fast paste drops bytes; verify each by md5),
+`mount -o remount,rw /`, drop them into `/lib/firmware/ti-connectivity/`,
+remount ro, then `rmmod cc33xx_sdio cc33xx; modprobe cc33xx_sdio`. The reload
+re-triggers the FW download and `wlan0` appears. This touches only the WiFi
+subsystem — unlike the nvp6324/CSI graph, reloading cc33xx is safe. The
+`/lib/firmware` write lands on the SD ext4 (not tmpfs), so it survives a
+power-cycle; only a full reflash reverts it — which is why the recipe fix
+above matters.
+
+### 3 cameras working (2026-09-14) — the MIPI clock was tuned for one camera
+
+First 3-camera boot showed ONE torn tile, then (after routing) all three tiles
+shredding into random **green static**. Root-caused with the cdns CSI-RX error
+counters (`v4l2-ctl -d /dev/v4l-subdev1 --log-status`, diff over 3 s; the driver
+only prints a counter line when it's non-zero, so an all-zero block = a clean
+link): at `mipi_mclk=594`, 3 cameras streaming gave **~42k truncated-header/s +
+multi-stream FIFO overflow** — the classic oversubscription signature.
+
+**It was pure MIPI bandwidth.** One 1080p25 UYVY stream needs ~207 Mbps/lane;
+`mipi_mclk=594` (the driver default, proven CRC-clean for 1 camera) provides 594
+and three streams need ~621/lane — so the link oversubscribes and frames shred.
+The fix is the TX lane rate. Swept it by reboot (the param is probe-only; a live
+reload corrupts the media graph — the CSI stack holds the module so `rmmod` even
+fails `-EBUSY`):
+
+| `mipi_mclk` | bw for 3×1080p (need 621/lane) | eye | streaming err/s | result |
+|----|----|----|----|----|
+| 594 (1-cam default) | ✗ 594 < 621 | clean | ~42k trunc + overflow | green static |
+| 1242 (chip's 4ch rate) | ✓ ample | ✗ dirty | ~76k CRC/s | recognizable, **sheared** |
+| **756** | ✓ 756 > 621 | ✓ clean | **0 / 0 / 0** | **sharp 3-cam grid** |
+
+So `mipi_mclk=756` + its paired `link_freq_idx=4` is the operating point for the
+3 wired cameras (CH0-CH2): bandwidth with ~22% margin and a clean eye (0 CRC/s,
+0 overflow, 0 truncated in steady state). 1242 clears the bandwidth but its eye
+is marginal on this board's CSI path (~76k CRC/s ≈ one bad CRC per line → the
+diagonal shear; this reproduced across two independent sessions, so it's the
+path, not a fluke). **CAM3, earlier suspected covered/faulty, was just
+bandwidth-starved** — at 756 it's a clear bench scene; all three cameras are
+genuinely good.
+
+Two source changes bake it (both needed; each alone still fails):
+1. `recipes-kernel/nvp6324/files/nvp6324.conf` — `mipi_mclk=756 link_freq_idx=4`
+   (alongside the existing `vc_mask=0x7`).
+2. `recipes-ultima/nvp6324-csi-setup/files/nvp6324-csi-setup.sh` — the driver +
+   DT wire ONLY VC0 (ENABLED,IMMUTABLE), so the oneshot now also **routes VC1/VC2**
+   (bridge demuxes VC0/1/2 out its source pad1 as streams 0/1/2; the SHIM splits
+   them onto contexts 0/1/2 = `/dev/video2/3/4`) and propagates the format on all
+   three streams. Two media-ctl gotchas that cost time: (a) `media-ctl -R` rejects
+   the name-attached form `"name[...]"` with EINVAL — use the quoted name + a
+   space before the route list, `"name" [routes]`; (b) applying `-R` **resets each
+   pad's stream-0 format to the 640×480 default**, so VC0 must be re-set after the
+   routing or `/dev/video2` STREAMONs `-EPIPE` while VC1/VC2 look fine.
+
+Boot-param gotcha seen live: after editing `/etc/modprobe.d/nvp6324.conf` via a
+live `remount,rw` + reboot, the FIRST boot loaded the *old* options (only
+`vc_mask`, `mipi_mclk` at default) and a second reboot picked up the edit — an SD
+commit/boot-read race on the live edit. Irrelevant to the baked image (the conf
+is written into the rootfs at build time), but if hand-editing on the board,
+`sync` and expect to possibly reboot twice.
+
+**Next session — 4 cameras.** 4×1080p25 needs ~828 Mbps/lane (> 756), so a real
+4th camera forces `mipi_mclk=1242` (`link_freq_idx=0`), where the eye is the
+open problem (~76k CRC/s shear). The shear is error-driven, not a line-length
+register (`camdriver/nvp6324-framing-findings.md` §CRC-floor: LINE_BYTE_CNT is
+already correct at 3840; the doc's live sweeps of T_HS_ZERO 0x21/0x10 and
+continuous-clock 0x08 were flat *at 1242*). Options to explore, in order: (a) the
+cam-board→BeagleY **CSI FPC/connector signal integrity** (cable length/quality,
+seating, ground return) — both the framing doc and the `dashcam-csi-coldboot-
+flakiness` memory point here, and it's the only lever that would make 1242 clean;
+(b) **RX D-PHY HS-settle** tuning for the 1242 band (baked into a `.ko` + booted,
+NOT `i2cset` live — live pokes stall the stream and don't reconfigure the RX
+cleanly); (c) fallback: run **4ch at 720p** (~368 Mbps/cam → ~460 Mbps/lane, fits
+the clean low-rate eye), which needs the vendor 720p decode/MIPI-TX path ported
+in the driver. Discriminator worth running first: boot `vc_mask=0x3` at 594 — 2
+cameras = 414 Mbps/lane, should be clean; confirms the bandwidth model and gives
+a known-good 2-cam reference.

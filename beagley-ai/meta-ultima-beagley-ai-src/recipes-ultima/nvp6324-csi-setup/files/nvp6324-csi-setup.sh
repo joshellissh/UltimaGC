@@ -1,6 +1,6 @@
 #!/bin/sh
-# Propagate the NVP6324 CSI-2 pipeline format so a plain STREAMON on the
-# capture node succeeds.
+# Route + format the NVP6324 CSI-2 pipeline so a plain STREAMON on each of the
+# three capture nodes (/dev/video2..4) succeeds at boot.
 #
 # WHY THIS EXISTS. The NVP6324 subdev sources UYVY 1920x1080 on its MIPI pad,
 # but the downstream Cadence CSI2RX bridge and TI CSI2RX SHIM pads come up at
@@ -8,19 +8,23 @@
 # STREAMON, so an un-propagated pipeline fails with -EPIPE ("Broken pipe")
 # even though the chip is locked and streaming perfectly. media-ctl must push
 # the format down the chain once; it then persists in each subdev's active
-# state across STREAMOFF/STREAMON, so this is a boot-time one-shot. Routing
-# (nvp6324 -> bridge -> SHIM context 0 = /dev/video2 = VC0) is already set up
-# by the driver + DT (ENABLED,IMMUTABLE), so only the format needs setting.
+# state across STREAMOFF/STREAMON, so this is a boot-time one-shot.
+#
+# ROUTING. The driver + DT wire ONLY VC0 through the bridge and SHIM
+# (ENABLED,IMMUTABLE). This board runs 3 AHD cameras on CH0-CH2 (arbiter
+# vc_mask=0x7, mipi_mclk=756 -- see recipes-kernel/nvp6324/files/nvp6324.conf),
+# so VC1 and VC2 also need explicit routes: the Cadence bridge demuxes the 3
+# VCs (its sink pad0 streams 0/1/2) out its single source pad1 as streams
+# 0/1/2, and the SHIM splits those onto contexts 0/1/2 = /dev/video2/3/4.
 #
 # This lives in the board layer, not ultima-app: the media entity names below
 # are tied to this SoC (J722S) and its device tree, whereas ultima-app is
 # board-agnostic (see CLAUDE.md).
 #
-# Current config is VC0-only, 1080p25 (driver defaults vc_mask=0x1,
-# mipi_mclk=594, link_freq_idx=6). A 4-camera build (vc_mask=0xF,
-# mipi_mclk=1242) additionally needs the same format pushed onto SHIM contexts
-# 1-3 (/dev/video3..5) via the bridge's per-stream source pads; see the stub
-# at the bottom.
+# Kept in lock-step with the driver's vc_mask (0x7 = 3 cameras). If vc_mask
+# ever changes, update the routes here to match the populated channels, else
+# an enabled-but-camera-less VC free-runs and every frame splits (fps doubles,
+# image tears) -- see camdriver/nvp6324-framing-findings.md.
 set -e
 
 MEDIA=/dev/media0
@@ -47,25 +51,27 @@ while [ "$i" -lt 40 ]; do
 done
 if ! graph_ready; then
 	# No camera by the deadline: log and succeed. A wired-but-absent camera
-	# must not fail the boot; a genuine format rejection below still does (via
-	# set -e), so the two failure modes stay distinguishable in the journal.
+	# must not fail the boot; a genuine format/route rejection below still does
+	# (via set -e), so the two failure modes stay distinguishable in the journal.
 	log "'$SRC' not present in $MEDIA after 20s; leaving pipeline unset"
 	exit 0
 fi
 
-# Push 1080p UYVY down the VC0 path. Setting the bridge sink propagates to its
-# source pad internally; the SHIM sink is set explicitly. media-ctl returns
-# non-zero on a rejected format, so `set -e` fails the unit if any step is
-# refused (e.g. a resolution the pipeline can't carry).
-media-ctl -d "$MEDIA" -V "\"$SRC\":4/0 [$FMT]"
-media-ctl -d "$MEDIA" -V "\"$BRIDGE\":0/0 [$FMT]"
-media-ctl -d "$MEDIA" -V "\"$SHIM\":0/0 [$FMT]"
+# Demux VC0/1/2. NB: media-ctl -R rejects the name-attached form ("name[...]")
+# with EINVAL; use the quoted entity name followed by a space and the route
+# list. active flag = [1].
+media-ctl -d "$MEDIA" -R "\"$BRIDGE\" [0/0->1/0[1],0/1->1/1[1],0/2->1/2[1]]"
+media-ctl -d "$MEDIA" -R "\"$SHIM\" [0/0->1/0[1],0/1->2/0[1],0/2->3/0[1]]"
 
-log "VC0 pipeline set to UYVY 1920x1080 (/dev/video2 ready)"
+# Push 1080p UYVY down all three stream paths. The -R routing above resets each
+# pad's stream-0 format to the 640x480 default, so VC0 (stream 0) MUST be set
+# here too or STREAMON on /dev/video2 EPIPEs. Setting a subdev's sink stream
+# propagates to its source pad internally. media-ctl returns non-zero on a
+# rejected format, so `set -e` fails the unit if any step is refused.
+for s in 0 1 2; do
+	media-ctl -d "$MEDIA" -V "\"$SRC\":4/$s [$FMT]"
+	media-ctl -d "$MEDIA" -V "\"$BRIDGE\":0/$s [$FMT]"
+	media-ctl -d "$MEDIA" -V "\"$SHIM\":0/$s [$FMT]"
+done
 
-# --- 4-VC build (vc_mask=0xF) extension, left disabled for the VC0 default ---
-# The bridge demuxes VC0..3 onto source-pad streams 0..3, each bound to a SHIM
-# context (video2..5). Uncomment and adjust once a 4-camera build is proven:
-#   media-ctl -d "$MEDIA" -V "\"$BRIDGE\":0/1 [$FMT]"
-#   media-ctl -d "$MEDIA" -V "\"$BRIDGE\":0/2 [$FMT]"
-#   media-ctl -d "$MEDIA" -V "\"$BRIDGE\":0/3 [$FMT]"
+log "VC0/1/2 routed + set to UYVY 1920x1080 (/dev/video2..4 ready)"

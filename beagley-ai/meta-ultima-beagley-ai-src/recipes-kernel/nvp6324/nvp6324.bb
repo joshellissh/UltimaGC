@@ -12,8 +12,10 @@ inherit module
 NVP6324_EXTERNAL_SRC = "/home/builder/yocto/camdriver-src"
 S = "${WORKDIR}/camdriver-src"
 
-# No fetched files; the source is copied in by do_unpack:append below.
-SRC_URI = ""
+# No fetched driver source; that's copied in by do_unpack:append below. The
+# modprobe.d override IS a real SRC_URI local file, unaffected by that S-only
+# copytree swap (it lands in WORKDIR, do_install:append references it there).
+SRC_URI = "file://nvp6324.conf"
 
 python do_unpack:append() {
     import os, shutil
@@ -48,12 +50,28 @@ do_unpack[nostamp] = "1"
 # modalias (MODULE_DEVICE_TABLE(of, ...) in nvp6324.c) is a redundant fallback —
 # udev coldplug would also match it — but modules-load wins the race here.
 #
-# The companion nvp6324-csi-setup oneshot (recipes-ultima) then propagates the
-# CSI-2 pipeline format so a plain STREAMON on /dev/video2 works — without it
-# the un-propagated pipeline fails link validation with -EPIPE (not a driver
-# bug; see camdriver/nvp6324-framing-findings.md).
+# The companion nvp6324-csi-setup oneshot (recipes-ultima) then routes VC0/1/2
+# and propagates the CSI-2 pipeline format so a plain STREAMON on /dev/video2..4
+# works — without it the un-propagated pipeline fails link validation with
+# -EPIPE (not a driver bug; see camdriver/nvp6324-framing-findings.md).
 #
-# To override a param at boot without a rebuild, drop an
-# /etc/modprobe.d/nvp6324.conf `options nvp6324 ...` (e.g. mipi_mclk=1242 +
-# link_freq_idx=0 for a 4x1080p build). See ../../../../camdriver/PLAN.md.
+# files/nvp6324.conf overrides the driver defaults for this 3-camera board:
+# vc_mask=0x7 (VC0-VC2) and mipi_mclk=756 + link_freq_idx=4 (594 is bandwidth-
+# starved for 3x1080p -> green static; 756 is the clean 3-cam rate, verified on
+# hardware 2026-09-14). A 4x1080p build would need mipi_mclk=1242 +
+# link_freq_idx=0, where the eye is marginal on this board's CSI path and must
+# be tuned first. See files/nvp6324.conf and ../../../../camdriver/PLAN.md.
 KERNEL_MODULE_AUTOLOAD += "nvp6324"
+
+# vc_mask=0x7 (VC0-VC2): this car has 3 AHD cameras wired, not the 1-camera
+# default the driver ships with — see files/nvp6324.conf. No ordering
+# concern with the autoload mechanism above: systemd-modules-load.service
+# loads nvp6324 by calling modprobe (not insmod), and modprobe itself reads
+# modprobe.d for the options line as part of that same insertion — there's
+# no separate earlier phase to race.
+do_install:append() {
+    install -d ${D}${sysconfdir}/modprobe.d
+    install -m 0644 ${WORKDIR}/nvp6324.conf ${D}${sysconfdir}/modprobe.d/nvp6324.conf
+}
+
+FILES:${PN} += "${sysconfdir}/modprobe.d/nvp6324.conf"

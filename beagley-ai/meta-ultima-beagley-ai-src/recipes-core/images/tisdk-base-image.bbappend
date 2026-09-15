@@ -9,9 +9,19 @@
 #   meta-beagle's beagley-ai.conf) has an *optional* RV3028 RTC overlay
 #   (k3-am67a-beagley-ai-i2c1-rtc-rv3028.dtbo) — not applied here, revisit
 #   if/when that hardware is actually present.
-# - WiFi (wpa-supplicant/wl18xx-firmware): skipped — hardware this board
-#   doesn't have (WL1807).
 IMAGE_INSTALL:append:beagley-ai = " ultima-app ultima-splash can-utils mmc-utils ultima-data-mount volatile-binds"
+
+# WiFi (2026-09-14): the board's real onboard radio is a TI cc33xx, not the
+# WL1807/wl18xx this note used to name — that chip belongs to a different TI
+# reference board, and copying its "hardware this board doesn't have"
+# assumption from the stock SDK default is what left this off for so long.
+# dmesg already shows the kernel driver probing for it every boot ("cc33xx
+# wifi firmware missing", harmless until now). ultima-wifi-connect pulls in
+# the cc33xx firmware/tools + wpa-supplicant and associates wlan0 to the
+# bench network at boot; DHCP is already covered by Arago's stock
+# 30-wlan.network (Name=wlan*, DHCP=yes) so nothing else is needed. See
+# recipes-ultima/ultima-wifi-connect.
+IMAGE_INSTALL:append:beagley-ai = " ultima-wifi-connect"
 
 # Dashcam recording (see DASHCAM.md): ultima-dvr-mount preen-fscks then
 # auto-mounts a USB drive labeled ULTIMA_DVR to /mnt/dvr (exFAT fsck via
@@ -129,10 +139,11 @@ ultima_beagley_drop_generators () {
 # sole board, 2026-08-30 — previously an unconditional block in a shared
 # layer that has since been retired). read-only rootfs plus a handful of
 # surgical unit masks; none of it is board-specific.
-# The WL1807 WiFi enablement that used to ride the same
-# ROOTFS_POSTPROCESS_COMMAND line was dropped in the move: this board has no
-# wpa-supplicant / wl18xx-firmware installed (see IMAGE_INSTALL above), so it
-# only ever wrote dead config and a dangling wpa_supplicant@wlan0 symlink.
+# The old WL1807 WiFi enablement that used to ride the same
+# ROOTFS_POSTPROCESS_COMMAND line was dropped in that move (wrong chip for
+# this board, see the WiFi comment under IMAGE_INSTALL above) — real cc33xx
+# WiFi support now comes from the separate ultima-wifi-connect recipe
+# instead, not this postprocess block.
 
 # read-only-rootfs: root (p2) becomes mount-time read-only. oe-core's
 # rootfs-postcommands.bbclass does most of the work once the feature is on: it

@@ -1,0 +1,20 @@
+[Unit]
+Description=Associate wlan0 to the configured WiFi network
+# DHCP is already handled by Arago's stock 30-wlan.network (Name=wlan*,
+# DHCP=yes, installed by systemd-arago.inc) -- this unit only has to get
+# wlan0 associated for systemd-networkd to take it from there. Binds to the
+# wlan0 device unit rather than guessing a boot-order delay for when the
+# cc33xx firmware finishes loading and the interface registers -- the
+# systemd-native equivalent of can0's udev-triggered bring-up in
+# 70-can.rules: don't assume the device exists yet.
+After=sys-subsystem-net-devices-wlan0.device
+BindsTo=sys-subsystem-net-devices-wlan0.device
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/wpa_supplicant -i wlan0 -c /etc/wpa_supplicant-wlan0.conf -D nl80211
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
