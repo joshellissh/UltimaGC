@@ -380,6 +380,62 @@ tracks CRC; chase the CRC floor (link freq / D-PHY HS timing 0x21 0x10–0x1C), 
 H-total register. Note (advisor): `ti_csi2rx` hardcodes `vb2_set_plane_payload(...,sizeimage)`
 so `bytesused=4147200` carries no info; zero rows are unwritten vb2 memory, not SHIM padding.
 
+## 2026-09-15 (evening) — the residual is a per-line WORD SLIP in the TX; register space exhausted
+
+Measured with the bridge/SHIM error-counter deltas over 15 s steady state, 4 cameras, fresh boots
+(`scratchpad steady2.sh` + `runtests.sh`; captures analysed with `lagdist.py`/`losspos3.py`).
+
+**What the residual is.** Every CRC error is one 32-bit word (2 px UYVY) dropped or repeated within
+the first few words of a line, on every channel alike. The SHIM packs lines contiguously, so the slips
+random-walk ±40-70 px down each frame and re-draw every frame = the visible edge wobble. It fails the
+RX CRC, so the word is lost AFTER the TX packetiser computed the CRC (a slip in the line-memory read
+would arrive with a valid CRC). ~150 lag-change events per frame in captures = ~75 slips/frame at
+0.07 CRC/line (each slip shows in two frame pairs).
+
+**Ruled out (each measured, most from a fresh boot):** arbitration — 1 cam 0.050, 2 cams 0.047, 3 cams
+0.052, 4 cams 0.08 per line per cam; the arbiter's collision counters (0x20:0x68-0x6B/0x70) stay at 0;
+COLI_OPT, RD_T_MODE, VFC reset, SWITCH_OPT 1/4/8/16, H_pack_size, HCNT_ERR, TEST_MODE: no change.
+Packet size: quarter-line packets 3× worse, 4-line packets alone no change, 8-line (30720 B) HANGS the
+SoC hard. The video decoder: not involved (rate identical with 1 channel; the vendor pattern
+generator does not engage on this silicon, so that test was void). Thermal: fan on the NVP6324 no
+change; the BeagleY-AI is actively cooled. TX clock phase (0x21:0x44 bit4, 0x45 bits 7/3): no change
+or link down. Lane rate: 0x98 (1049) is a narrow optimum — 0x90 10× worse, 0x88/0x80 overflow (the
+TX PLL /1 floor; the vendor goes lower only via the 0x41=0x10 post-divider), 0x9C+ worse, ≥0xA4
+overflow. RX bands: 1040-1200 (idx20) 50% worse; 1200-1350 dead at every rate 1242-1366 (overflow
+or, at 1352+, unparsed garbage that reads "0 CRC" — counters lie when the packet layer is out of
+band). RX-side driver variants (SHIM ppc=1, bridge small-FIFO, bands): dead ends. D-PHY timings:
+HS-PREPARE/ZERO/TRAIL/EXIT, CLK-*, LP slew, continuous clock, SOL/EOL periods — individually nothing.
+
+**What helps (baked into nvp6324.c):** `0x21:0x08=0xC0` (MIPI_TX_HRES_IN, 3×: 0.2 → 0.07). The
+combination T_HS_PREPARE=10 (`0x11=0x0A`; 12 breaks the link = RX T_HS_SETTLE max) + T_HS_ZERO=255
+(`0x10=0xFF`) + 4-line packets (bank 0x20 RD_P_MODE manual, RD_PACKET=15360) halved the CRC rate
+again (0.043/0.053/0.043 vs 0.07-0.10) — **but 4-line packets wreck the picture: the J722S SHIM/DMA
+lays each multi-line packet down at its own offset, so frames come out as shifted horizontal stripes
+while the CRC counters read low and inter-frame row correlation passes (every frame is misplaced the
+same way).** Baked, seen on the dash as "massively broken", reverted 2026-09-16. Lesson: look at an
+actual frame before trusting a counter. Net: ~0.07 CRC/line ≈ 75 slips/frame with HRES — the wobble
+is reduced ~3× from the boot state, not eliminated.
+
+**Hangs to avoid:** never STREAMON a video node whose VC is disabled in the arbiter (3 starved
+streams + timeout STREAMOFF hung the SoC: no ping, no serial → power cycle); never exceed ~15 KB
+packets; rewriting 0x20:0x00 right after arb_init sometimes stalls output (settle 0.5 s).
+
+**Where this leaves it.** The slip is inside the NVP6324 MIPI TX datapath (post-CRC), it is
+rate/analog sensitive (HS resistor trim is the biggest lever; error rate varies ±30% per re-init and
+drifts with warm-up), and nothing in the register map moves it further. Remaining levers are
+physical: the CSI0 FPC/connector (signal integrity at ~1 Gbps; a shorter/better cable), the CSI1
+receiver A/B (see the csi1 conversion memory), or accepting ±2 px edge wobble. Datasheet:
+`docs/MY-CAM004M/Datasheet-N4.pdf` is machine-readable (BANK20 pp.39-42/68-73, BANK21 pp.43-44/74-77).
+
+### 2026-09-16 — HRES-only driver verified from a real boot
+
+Rebuilt the module from the reverted (trim-only) source, installed it over the SD copy and rebooted. Boot state
+read back as expected (0x21:0x08=0xC0, vendor 0x10/0x11 timing, 0x40=0x98, arbiter RD_P_MODE auto), the app came up
+clean, all four cameras at 25 fps, **0.0712 CRC/line/cam**, and — the check that was missing before — all four
+captured frames render as whole, correctly placed images (slight edge waviness only). The stripes were entirely the
+4-line packet mode. Note a warm reboot does not reset the NVP6324 (stale RD_PACKET values persist, ignored in auto
+mode); a cold power cycle is the true production state.
+
 ## Fast out-of-tree .ko cross-build (no bitbake)
 
 ```

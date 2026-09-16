@@ -97,10 +97,17 @@ do_image_wic[depends] += "${@bb.utils.contains('MACHINE', 'beagley-ai', 'ultima-
 # enable pass. None of these run before the app, but every one of them was
 # starting in the same window as the app's first frame, and the unit files
 # are parsed by systemd at every boot regardless. Networking itself
-# (systemd-networkd, dropbear) stays: wired SSH is the bench path.
+# (systemd-networkd, dropbear) stays: wired SSH is the bench path. avahi-daemon
+# also STAYS (unmasked 2026-09-15): the board's DHCP lease moves and its dropbear
+# host key is transient (regenerated each boot under /var/volatile, see the
+# read-only-rootfs note below), so `ssh ultimagc-beagley.local` via mDNS (the
+# hostname baked by recipes-core/base-files) is how it is actually reached —
+# masking avahi left it discoverable only by a hunt-the-IP
+# scan. The distro's 98-avahi-daemon.preset enables avahi-daemon.service, so
+# keeping it out of the mask list below is enough; it is also socket/dbus-
+# activated, so its idle boot cost is negligible.
 # - rpcbind / nfs-statd / remote-fs: no NFS on this image (NFS_FS is off in
 #   ultima-boot.cfg too).
-# - avahi: mDNS advertising; the board is reached by IP.
 # - iptables / ip6tables: meta-arago's empty-ruleset loaders.
 # - docker.socket: stray socket unit from the base image, no docker here.
 # - gplv3-notice: prints a licence banner to the console at boot.
@@ -111,7 +118,7 @@ ROOTFS_POSTPROCESS_COMMAND:append:beagley-ai = " ultima_beagley_mask_units; ulti
 
 ultima_beagley_mask_units () {
     for u in rpcbind.service rpcbind.socket nfs-statd.service remote-fs.target \
-             avahi-daemon.service avahi-daemon.socket iptables.service ip6tables.service \
+             iptables.service ip6tables.service \
              docker.socket gplv3-notice.service systemd-networkd-wait-online.service \
              systemd-resolved.service; do
         rm -f ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/*.wants/$u

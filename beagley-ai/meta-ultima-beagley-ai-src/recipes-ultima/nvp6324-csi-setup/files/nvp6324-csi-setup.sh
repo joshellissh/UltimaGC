@@ -1,6 +1,6 @@
 #!/bin/sh
 # Route + format the NVP6324 CSI-2 pipeline so a plain STREAMON on each of the
-# three capture nodes (/dev/video2..4) succeeds at boot.
+# four capture nodes (/dev/video2..5) succeeds at boot.
 #
 # WHY THIS EXISTS. The NVP6324 subdev sources UYVY 1920x1080 on its MIPI pad,
 # but the downstream Cadence CSI2RX bridge and TI CSI2RX SHIM pads come up at
@@ -11,17 +11,17 @@
 # state across STREAMOFF/STREAMON, so this is a boot-time one-shot.
 #
 # ROUTING. The driver + DT wire ONLY VC0 through the bridge and SHIM
-# (ENABLED,IMMUTABLE). This board runs 3 AHD cameras on CH0-CH2 (arbiter
-# vc_mask=0x7, mipi_mclk=756 -- see recipes-kernel/nvp6324/files/nvp6324.conf),
-# so VC1 and VC2 also need explicit routes: the Cadence bridge demuxes the 3
-# VCs (its sink pad0 streams 0/1/2) out its single source pad1 as streams
-# 0/1/2, and the SHIM splits those onto contexts 0/1/2 = /dev/video2/3/4.
+# (ENABLED,IMMUTABLE). This board runs 4 AHD cameras on CH0-CH3 (arbiter
+# vc_mask=0xF, mipi_mclk=1049 -- see recipes-kernel/nvp6324/files/nvp6324.conf),
+# so VC1/VC2/VC3 also need explicit routes: the Cadence bridge demuxes the 4
+# VCs (its sink pad0 streams 0/1/2/3) out its single source pad1 as streams
+# 0/1/2/3, and the SHIM splits those onto contexts 0/1/2/3 = /dev/video2/3/4/5.
 #
 # This lives in the board layer, not ultima-app: the media entity names below
 # are tied to this SoC (J722S) and its device tree, whereas ultima-app is
 # board-agnostic (see CLAUDE.md).
 #
-# Kept in lock-step with the driver's vc_mask (0x7 = 3 cameras). If vc_mask
+# Kept in lock-step with the driver's vc_mask (0xF = 4 cameras). If vc_mask
 # ever changes, update the routes here to match the populated channels, else
 # an enabled-but-camera-less VC free-runs and every frame splits (fps doubles,
 # image tears) -- see camdriver/nvp6324-framing-findings.md.
@@ -57,21 +57,21 @@ if ! graph_ready; then
 	exit 0
 fi
 
-# Demux VC0/1/2. NB: media-ctl -R rejects the name-attached form ("name[...]")
+# Demux VC0/1/2/3. NB: media-ctl -R rejects the name-attached form ("name[...]")
 # with EINVAL; use the quoted entity name followed by a space and the route
-# list. active flag = [1].
-media-ctl -d "$MEDIA" -R "\"$BRIDGE\" [0/0->1/0[1],0/1->1/1[1],0/2->1/2[1]]"
-media-ctl -d "$MEDIA" -R "\"$SHIM\" [0/0->1/0[1],0/1->2/0[1],0/2->3/0[1]]"
+# list. active flag = [1]. SHIM source pads 1/2/3/4 = contexts 0/1/2/3.
+media-ctl -d "$MEDIA" -R "\"$BRIDGE\" [0/0->1/0[1],0/1->1/1[1],0/2->1/2[1],0/3->1/3[1]]"
+media-ctl -d "$MEDIA" -R "\"$SHIM\" [0/0->1/0[1],0/1->2/0[1],0/2->3/0[1],0/3->4/0[1]]"
 
-# Push 1080p UYVY down all three stream paths. The -R routing above resets each
+# Push 1080p UYVY down all four stream paths. The -R routing above resets each
 # pad's stream-0 format to the 640x480 default, so VC0 (stream 0) MUST be set
 # here too or STREAMON on /dev/video2 EPIPEs. Setting a subdev's sink stream
 # propagates to its source pad internally. media-ctl returns non-zero on a
 # rejected format, so `set -e` fails the unit if any step is refused.
-for s in 0 1 2; do
+for s in 0 1 2 3; do
 	media-ctl -d "$MEDIA" -V "\"$SRC\":4/$s [$FMT]"
 	media-ctl -d "$MEDIA" -V "\"$BRIDGE\":0/$s [$FMT]"
 	media-ctl -d "$MEDIA" -V "\"$SHIM\":0/$s [$FMT]"
 done
 
-log "VC0/1/2 routed + set to UYVY 1920x1080 (/dev/video2..4 ready)"
+log "VC0/1/2/3 routed + set to UYVY 1920x1080 (/dev/video2..5 ready)"

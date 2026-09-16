@@ -1391,19 +1391,50 @@ commit/boot-read race on the live edit. Irrelevant to the baked image (the conf
 is written into the rootfs at build time), but if hand-editing on the board,
 `sync` and expect to possibly reboot twice.
 
-**Next session — 4 cameras.** 4×1080p25 needs ~828 Mbps/lane (> 756), so a real
-4th camera forces `mipi_mclk=1242` (`link_freq_idx=0`), where the eye is the
-open problem (~76k CRC/s shear). The shear is error-driven, not a line-length
-register (`camdriver/nvp6324-framing-findings.md` §CRC-floor: LINE_BYTE_CNT is
-already correct at 3840; the doc's live sweeps of T_HS_ZERO 0x21/0x10 and
-continuous-clock 0x08 were flat *at 1242*). Options to explore, in order: (a) the
-cam-board→BeagleY **CSI FPC/connector signal integrity** (cable length/quality,
-seating, ground return) — both the framing doc and the `dashcam-csi-coldboot-
-flakiness` memory point here, and it's the only lever that would make 1242 clean;
-(b) **RX D-PHY HS-settle** tuning for the 1242 band (baked into a `.ko` + booted,
-NOT `i2cset` live — live pokes stall the stream and don't reconfigure the RX
-cleanly); (c) fallback: run **4ch at 720p** (~368 Mbps/cam → ~460 Mbps/lane, fits
-the clean low-rate eye), which needs the vendor 720p decode/MIPI-TX path ported
-in the driver. Discriminator worth running first: boot `vc_mask=0x3` at 594 — 2
-cameras = 414 Mbps/lane, should be clean; confirms the bandwidth model and gives
-a known-good 2-cam reference.
+**Flashing regression (2026-09-15) — the fix was committed but the flashed image
+still showed one camera.** The camera source edits (routing + `mipi_mclk=756`)
+were made ~22:04 and committed 22:12 (`434d797`); the build ran right after
+(volume `.wic.xz` stamped 22:10). But `flash.sh` reads
+`deploy-beagley-ai/…rootfs.wic.xz`, and that host copy is populated by a
+**separate `docker cp`/stream-out step** (see the deploy-dir note at the end of
+`build.sh`) that was **not re-run** — so the host copy was still the 17:42 image
+built from the *pre-fix* source (the Sep-2 VC0-only `nvp6324-csi-setup.sh`), and
+reflashing it reverted to one camera. **This is the exact same trap logged under
+"Clean-build boot confirmed on hardware (2026-08-29)" — the local
+`deploy-beagley-ai/` copy going stale relative to a fresh volume rebuild.** It has
+now bitten twice. Fix: after any `build.sh`, stream the fresh artifact out of the
+volume before flashing and **verify the bytes**, not just the timestamp:
+```
+docker run --rm -v falcon-yocto-build:/y falcon-yocto:latest \
+  cat /y/tisdk/build-beagley-ai/deploy-ti/images/beagley-ai/tisdk-base-image-beagley-ai.rootfs.wic.xz \
+  > deploy-beagley-ai/tisdk-base-image-beagley-ai.rootfs.wic.xz
+# then confirm host sha256 == volume sha256 (a silent SMB truncation looks like success)
+```
+On 09-15 the fresh image was verified at the filesystem level before hand-off:
+extracted rootfs partition 2 from the `.wic` (`partx`+`dd`+`debugfs`, no loop
+device) and read `/etc/modprobe.d/nvp6324.conf` = `…mipi_mclk=756…`, the 3-cam
+route in `nvp6324-csi-setup.sh`, and the enabled `multi-user.target.wants`
+symlink straight from the ext4 — the reliable way to check what a `.wic` actually
+carries, since a package being in the manifest (`nvp6324-csi-setup 1.0-r0.0`)
+does NOT distinguish the routing revision (the VC0-only version was also
+`1.0-r0.0`).
+
+**4 cameras (2026-09-15/16) — done, with a known residual.** All four 1080p25
+cameras stream at 25 fps from boot with `vc_mask=0xF mipi_mclk=1049
+link_freq_idx=1` (`recipes-kernel/nvp6324/files/nvp6324.conf`) and the four-VC
+routing in `nvp6324-csi-setup.sh`. 1049 Mbps/lane is a rate derived here, not a
+vendor profile: the chip's own 4ch rate (1242) sits on a Cadence RX band edge
+that drops the last word of every line (diagonal shear), 756 is the vendor 720P
+profile mislabeled and breaks packet sync, and the TX PLL has no usable /1 rate
+below 1049. The residual is ~0.07 CRC errors/line: one 32-bit word slipped near
+the start of a line, downstream of the TX CRC, which the SHIM's contiguous line
+packing turns into a random walk of tens of px by the bottom of the frame
+(visible edge wobble). It is the same with one camera as with four, so it is
+link margin, not bandwidth; the only register that helps is the TX HS resistor
+trim (bank 0x21 reg 0x08 bit7, 3x), now baked in the driver. Every other
+TX/arbiter/RX register has been swept (`camdriver/nvp6324-framing-findings.md`).
+Multi-line arbiter packets cut the count further but the J722S SHIM/DMA lays
+each packet at its own offset and the picture becomes shifted stripes — do not
+bake them. Remaining levers are physical: a short known-good CSI0 FPC, or an A/B
+of four cameras at 1049 on the second receiver (CSI1/DSI0 connector, proven
+routable 2026-09-03).

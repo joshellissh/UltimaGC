@@ -81,7 +81,8 @@ static s64 nvp6324_link_freqs[] = {
 
 /* Index into nvp6324_link_freqs[] the control defaults to at probe. Must match the
  * TX rate (mipi_mclk): 6 = 300 MHz DDR = 600 Mbps band, which pairs with the default
- * 594 Mbps TX and gives CRC=0. (For 1242 TX use idx 0; for 756 use idx 4.) */
+ * 594 Mbps TX and gives CRC=0. (For 1049 TX use idx 1 = 500 MHz/1000 Mbps band, the
+ * multi-camera rate; for 1242 TX use idx 0; for 756 use idx 4.) */
 static int link_freq_idx = 6;
 module_param(link_freq_idx, int, 0444);
 MODULE_PARM_DESC(link_freq_idx,
@@ -141,7 +142,7 @@ MODULE_PARM_DESC(vc_mask, "Bitmask of MIPI VCs/channels to enable in the arbiter
  */
 static int mipi_mclk = 594;
 module_param(mipi_mclk, int, 0444);
-MODULE_PARM_DESC(mipi_mclk, "MIPI TX lane rate Mbps: 594 (default, CRC-clean 1x1080p), 756, 1242 (4x1080p), 378. Pair with matching link_freq_idx.");
+MODULE_PARM_DESC(mipi_mclk, "MIPI TX lane rate Mbps: 594 (default, CRC-clean 1x1080p), 1049 (3-4x 1080p multi-cam, this board), 1242 (band-edge word-drop here — avoid), 756 (=vendor 720P profile, broken here), 378. Pair with matching link_freq_idx (594->6, 1049->1, 1242->0).");
 
 struct nvp6324 {
 	struct i2c_client	*client;
@@ -332,6 +333,40 @@ static const struct nvp6324_reg nvp6324_mipi_pll_1242[] = {
 	{ 0x21, 0x16, 0x0B }, { 0x21, 0x19, 0x09 }, { 0x21, 0x1A, 0x15 }, { 0x21, 0x1B, 0x11 },
 	{ 0x21, 0x1C, 0x0E },
 };
+/*
+ * ~1049 Mbps/lane (0x40=0x98) — the multi-camera rate for THIS board (4x 1080p25).
+ * It is a narrow window, hardware-verified 2026-09-15: the TX PLL in /1 mode does
+ * not work below 0x98 (0x90 = 10x more errors, 0x88/0x80 overflow; the vendor only
+ * goes lower via the 0x41=0x10 post-divider), and the Cadence RX gets worse above
+ * it (0x9C slightly, 0x9E+ 5x, >=0xA4 overflow). Pair with link_freq_idx=1 (RX
+ * 500 MHz / 1000 Mbps band); the 1040-1200 and 1200-1350 RX bands were measured
+ * from fresh boots and are worse or dead (1242-1366: overflow or unparsed garbage).
+ *
+ * Residual: ~0.07 CRC errors/line with 4 cameras (was ~0.2 before the HRES trim;
+ * ~0.05 with 1 or 3 cameras, so it is not a bandwidth effect). Each one is a single
+ * 32-bit word dropped or repeated in the first few words of a line, AFTER the TX
+ * computed the packet CRC (so it fails the RX CRC), which the SHIM's contiguous
+ * line packing turns into a +-2 px random walk down the frame (visible edge
+ * wobble). It is present with ONE camera (0.05/line), unchanged by every arbiter
+ * option in the datasheet, the arbiter's own collision counters stay at 0, the
+ * decoder is not involved, cooling the NVP6324 does nothing, and the RX-side
+ * (SHIM ppc, bridge FIFO mode, bands) does nothing. What helps and is baked here:
+ * MIPI_TX_HRES_IN (0x21:0x08 bit7, 3x). T_HS_PREPARE=10 + T_HS_ZERO=255 with 4-line
+ * arbiter packets (bank0x20 RD_P_MODE manual, RD_PACKET=15360) halved the CRC rate
+ * again, BUT the J722S SHIM/DMA lays each multi-line packet down at its own offset,
+ * so the picture comes out as shifted stripes (CRC counters and inter-frame
+ * correlation both look fine — check an actual frame). Packets must stay one
+ * line (RD_P_MODE auto), and with 1-line packets the long T_HS_PREPARE/ZERO
+ * values measured no change, so the timings stay at the vendor 1242 block
+ * values. Full log: nvp6324-framing-findings.md and the arbiter-vc-mask memory.
+ */
+static const struct nvp6324_reg nvp6324_mipi_pll_1049[] = {
+	{ 0x21, 0x40, 0x98 }, { 0x21, 0x41, 0x00 }, { 0x21, 0x42, 0x03 }, { 0x21, 0x43, 0x43 },
+	{ 0x21, 0x11, 0x08 }, { 0x21, 0x10, 0x13 }, { 0x21, 0x12, 0x0B }, { 0x21, 0x13, 0x12 },
+	{ 0x21, 0x17, 0x02 }, { 0x21, 0x18, 0x12 }, { 0x21, 0x15, 0x07 }, { 0x21, 0x14, 0x2D },
+	{ 0x21, 0x16, 0x0B }, { 0x21, 0x19, 0x09 }, { 0x21, 0x1A, 0x15 }, { 0x21, 0x1B, 0x11 },
+	{ 0x21, 0x1C, 0x0E },
+};
 static const struct nvp6324_reg nvp6324_mipi_pll_756[] = {
 	{ 0x21, 0x40, 0xDC }, { 0x21, 0x41, 0x10 }, { 0x21, 0x42, 0x03 }, { 0x21, 0x43, 0x43 },
 	{ 0x21, 0x11, 0x05 }, { 0x21, 0x10, 0x0C }, { 0x21, 0x12, 0x07 }, { 0x21, 0x13, 0x0B },
@@ -358,7 +393,7 @@ static const struct nvp6324_reg nvp6324_mipi_pll_378[] = {
  * 4-lane enable. Order is load-bearing — 0x44/0x49 latches/locks the PLL. */
 static const struct nvp6324_reg nvp6324_mipi_tail_regs[] = {
 	{ 0x21, 0x44, 0x00 }, { 0x21, 0x49, 0xF3 }, { 0x21, 0x49, 0xF0 }, { 0x21, 0x44, 0x02 }, /* PLL latch pulse */
-	{ 0x21, 0x08, 0x40 },					/* frame options */
+	{ 0x21, 0x08, 0xC0 },					/* frame options: bit7 MIPI_TX_HRES_IN=1 (HS resistor trim, 3x fewer CRC/slips), LP_SLEW=4, non-continuous clock */
 	{ 0x21, 0x0F, 0x01 },					/* MIPI_TX_FRAME_CNT_EN */
 	{ 0x21, 0x38, 0x1E }, { 0x21, 0x39, 0x1E }, { 0x21, 0x3A, 0x1E }, { 0x21, 0x3B, 0x1E }, /* VC0..3 datatype = YUV422 */
 	{ 0x21, 0x07, 0x0F },					/* 4-lane enable */
@@ -415,6 +450,7 @@ static int nvp6324_setup_mipi(struct nvp6324 *priv)
 
 	switch (mipi_mclk) {
 	case 1242: pll = nvp6324_mipi_pll_1242; n = ARRAY_SIZE(nvp6324_mipi_pll_1242); break;
+	case 1049: pll = nvp6324_mipi_pll_1049; n = ARRAY_SIZE(nvp6324_mipi_pll_1049); break;
 	case 756:  pll = nvp6324_mipi_pll_756;  n = ARRAY_SIZE(nvp6324_mipi_pll_756);  break;
 	case 378:  pll = nvp6324_mipi_pll_378;  n = ARRAY_SIZE(nvp6324_mipi_pll_378);  break;
 	case 594:

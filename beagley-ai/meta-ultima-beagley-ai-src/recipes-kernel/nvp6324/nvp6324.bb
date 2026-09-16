@@ -50,20 +50,28 @@ do_unpack[nostamp] = "1"
 # modalias (MODULE_DEVICE_TABLE(of, ...) in nvp6324.c) is a redundant fallback —
 # udev coldplug would also match it — but modules-load wins the race here.
 #
-# The companion nvp6324-csi-setup oneshot (recipes-ultima) then routes VC0/1/2
-# and propagates the CSI-2 pipeline format so a plain STREAMON on /dev/video2..4
+# The companion nvp6324-csi-setup oneshot (recipes-ultima) then routes VC0-VC3
+# and propagates the CSI-2 pipeline format so a plain STREAMON on /dev/video2..5
 # works — without it the un-propagated pipeline fails link validation with
 # -EPIPE (not a driver bug; see camdriver/nvp6324-framing-findings.md).
 #
-# files/nvp6324.conf overrides the driver defaults for this 3-camera board:
-# vc_mask=0x7 (VC0-VC2) and mipi_mclk=756 + link_freq_idx=4 (594 is bandwidth-
-# starved for 3x1080p -> green static; 756 is the clean 3-cam rate, verified on
-# hardware 2026-09-14). A 4x1080p build would need mipi_mclk=1242 +
-# link_freq_idx=0, where the eye is marginal on this board's CSI path and must
-# be tuned first. See files/nvp6324.conf and ../../../../camdriver/PLAN.md.
+# files/nvp6324.conf overrides the driver defaults for this 4-camera board:
+# vc_mask=0xF (VC0-VC3) and mipi_mclk=1049 + link_freq_idx=1, the only rate
+# window that carries 4x1080p25 on this board's CSI path (594 is bandwidth-
+# starved beyond one camera; 1242, the chip's own 4ch profile, sits on a Cadence
+# RX band edge that drops the last word of every line). See files/nvp6324.conf
+# and the 1049 table comment in ../../../../camdriver/nvp6324.c.
+# Autoload restored 2026-09-15. The 434d797 "cold boot hangs the board" symptom was
+# NOT the camera pipeline wedging the kernel — it was two unrelated things stacked:
+# the onboard WiFi firmware bug (no wlan0 -> board unreachable, looked hung) and the
+# baked mipi_mclk=756 config, which is the vendor 720P profile mislabeled and destroys
+# MIPI packet sync (green static / one broken camera). Both fixed: cc33xx-fw-tilinux
+# ships the 1353-byte conf, and files/nvp6324.conf now selects the hardware-verified
+# 1049 Mbps multi-camera rate (vc_mask=0xF). 4x1080p25 all stream 25fps clean on
+# hardware (2026-09-15). The blacklist in files/nvp6324.conf is dropped in tandem.
 KERNEL_MODULE_AUTOLOAD += "nvp6324"
 
-# vc_mask=0x7 (VC0-VC2): this car has 3 AHD cameras wired, not the 1-camera
+# vc_mask=0xF (VC0-VC3): this car has 4 AHD cameras wired, not the 1-camera
 # default the driver ships with — see files/nvp6324.conf. No ordering
 # concern with the autoload mechanism above: systemd-modules-load.service
 # loads nvp6324 by calling modprobe (not insmod), and modprobe itself reads

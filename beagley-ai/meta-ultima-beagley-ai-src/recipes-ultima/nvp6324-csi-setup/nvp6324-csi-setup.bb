@@ -15,6 +15,10 @@ inherit systemd
 SRC_URI = "file://nvp6324-csi-setup.service file://nvp6324-csi-setup.sh"
 
 SYSTEMD_SERVICE:${PN} = "nvp6324-csi-setup.service"
+# Auto-enable restored 2026-09-15. The 434d797 "cold boot wedge" was the WiFi
+# firmware bug + the broken mipi_mclk=756 config, not this oneshot (see
+# recipes-kernel/nvp6324/nvp6324.bb). With the 1049 multi-camera rate baked, this
+# oneshot routes all four VCs (VC0-VC3) at boot so /dev/video2..5 stream cleanly.
 SYSTEMD_AUTO_ENABLE:${PN} = "enable"
 
 # media-ctl (v4l-utils) is the only runtime dependency; it is already pulled
