@@ -729,6 +729,29 @@ Window {
         visible: !diagnosticScreen.isOpen && !cameraGridScreen.isOpen
     }
 
+    // Dashcam status badge — camera_icon.png in the bottom-right whenever the
+    // DVR is NOT recording (no writable drive mounted at /mnt/dvr; see
+    // DashcamRecorder / DASHCAM.md). dashcam.recording flips true a few seconds
+    // after a drive auto-mounts, hiding this. z:150 + the overlay-screen gate
+    // mirror PageIndicator above: a dash-only badge that the full-screen
+    // camera/diagnostic screens cover when open. sourceSize pins the decode to
+    // the display size — the asset is 511x506, shown at 44px (this image is
+    // boot-time/GPU-conscious; see the qrc's pre-sized icons).
+    Image {
+        id: dvrStatusIcon
+        z: 150
+        width: 44
+        height: 44
+        sourceSize.width: 44
+        sourceSize.height: 44
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.rightMargin: 20
+        anchors.bottomMargin: 16
+        source: "qrc:/camera_icon.png"
+        visible: !dashcam.recording && !diagnosticScreen.isOpen && !cameraGridScreen.isOpen
+    }
+
     // Top indicator row — evenly spaced at 80px intervals, centered at x=800.
     // Oil/battery/coolant are true warnings, so once startup is done they
     // also gate on _warnFlash to blink at 300ms; check engine and the beam
@@ -1102,6 +1125,16 @@ Window {
         } else {
             rearCameraScreen.close()
         }
+    }
+
+    // "Format this USB drive for the dashcam?" dialog — auto-pops when a drive
+    // is plugged in that isn't set up for the DVR (see DashcamRecorder /
+    // DASHCAM.md). Self-contained (z:6000, its own visibility off
+    // dashcam.formatPromptOpen); suppressed during the boot self-test so it
+    // never lands mid-startup-sweep.
+    DvrFormatDialog {
+        id: dvrFormatDialog
+        suppressed: startupActive
     }
 
     // Headlight dim overlay — a single full-screen translucent black

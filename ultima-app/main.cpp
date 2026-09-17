@@ -238,6 +238,10 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty("sim", &canBus);
     engine.rootContext()->setContextProperty("systemClock", &systemClock);
     engine.rootContext()->setContextProperty("sysStats", &systemStats);
+    // Dashcam recording state, for the "not recording" badge on the dash
+    // (main.qml). On the macOS/sim dev build dvrReady() is always false, so
+    // dashcam.recording stays false and the badge is always shown.
+    engine.rootContext()->setContextProperty("dashcam", &dashcam);
     engine.rootContext()->setContextProperty("cameraFeed1", &cameraFeed1);
     // EXPERIMENT (2026-08-26): ULTIMA_CAM_FANOUT=1 points cameraFeed2..4 at
     // cameraFeed1's object, so every grid quadrant renders the one attached
@@ -421,6 +425,38 @@ int main(int argc, char *argv[])
                 canBus.debugToggleHazard();
         });
         indicatorTestTimer->start(250);
+
+        // Debug-only: forces the DVR "format this drive?" dialog through its
+        // states from /tmp/ultima-dvrtest.request ("prompt"/"formatting"/
+        // "success"/"error"/"close") — same polled-file pattern as the
+        // triggers above. Lets every dialog state be screenshotted on hardware
+        // without a real USB stick to wipe (detection is Linux-drive-only). See
+        // DashcamRecorder::debugForceState / dismissFormatPrompt.
+        auto *dvrTestTimer = new QTimer(&app);
+        QObject::connect(dvrTestTimer, &QTimer::timeout, &dashcam, [&dashcam]() {
+            QFile trigger(QStringLiteral("/tmp/ultima-dvrtest.request"));
+            if (!trigger.exists())
+                return;
+            QString cmd;
+            if (trigger.open(QIODevice::ReadOnly)) {
+                cmd = QString::fromUtf8(trigger.readAll()).trimmed();
+                trigger.close();
+            }
+            QFile::remove(QStringLiteral("/tmp/ultima-dvrtest.request"));
+            if (cmd == QStringLiteral("prompt"))
+                dashcam.debugForceState(QStringLiteral("idle"));
+            else if (cmd == QStringLiteral("formatting"))
+                dashcam.debugForceState(QStringLiteral("formatting"));
+            else if (cmd == QStringLiteral("success"))
+                dashcam.debugForceState(QStringLiteral("succeeded"), QStringLiteral("/dev/sdX"),
+                                        QStringLiteral("Drive ready — recording has started."));
+            else if (cmd == QStringLiteral("error"))
+                dashcam.debugForceState(QStringLiteral("failed"), QStringLiteral("/dev/sdX"),
+                                        QStringLiteral("mkfs.exfat failed on /dev/sda."));
+            else if (cmd == QStringLiteral("close"))
+                dashcam.dismissFormatPrompt();
+        });
+        dvrTestTimer->start(250);
     }
 
     return app.exec();

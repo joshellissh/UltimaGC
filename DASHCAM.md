@@ -79,9 +79,27 @@ buffer-lending refcount the display path already uses
   (in `IMAGE_INSTALL`): a udev rule mounts any block device labeled
   `ULTIMA_DVR` to `/mnt/dvr` via `systemd-mount`
   (`noatime,nosuid,nodev,noexec`), and unmounts on removal. exFAT, for
-  cross-platform browsability. No auto-format — the drive is prepared by hand
-  (`mkfs.exfat -n ULTIMA_DVR`). It is the only removable disk on the system,
-  so matching on LABEL alone is unambiguous.
+  cross-platform browsability. The udev rule never auto-formats; a drive can be
+  prepared by hand (`mkfs.exfat -n ULTIMA_DVR`) **or** via the on-screen format
+  dialog below. It is the only removable disk on the system, so matching on
+  LABEL alone is unambiguous.
+- **Format-on-demand — done.** When a USB drive is plugged in that *isn't* set
+  up for the DVR (no `ULTIMA_DVR` label), `DashcamRecorder` detects it (poll of
+  `/sys/block/sd*` restricted to USB-path disks, exactly one, none mounted, and
+  only when no `ULTIMA_DVR` label is present at all) and `ultima-app` pops a
+  small dialog offering to format it. On confirmation it runs
+  `recipes-ultima/ultima-dvr-mount/ultima-dvr-format.sh` (`/usr/bin/ultima-dvr-format`,
+  invoked async via `QProcess` as root — the app has no `User=`/`ProtectSystem=`
+  in its unit): whole-disk `mkfs.exfat -n ULTIMA_DVR`, `blockdev --rereadpt`,
+  then `udevadm trigger --action=add` so the mount rule above does the fsck +
+  mount. The helper re-checks every safety guard independently (is a whole USB
+  disk via its `/usb/` sysfs path, not `mmcblk*`, not already labeled, not
+  mounted) — a wipe never trusts its caller. Success is declared only once
+  `dvrReady()` flips true (the drive actually mounted), not on `mkfs` exit. UI
+  states are forceable for on-hardware screenshots via
+  `/tmp/ultima-dvrtest.request` (`prompt`/`formatting`/`success`/`error`/`close`).
+  Known limitation: a drive labeled `ULTIMA_DVR` but unmountable (corrupt) gets
+  no offer — the label check treats it as "the right drive, just broken".
 - **Camera capture — mature.** `nvp6324` driver → Cadence/TI CSI2RX,
   `nvp6324-csi-setup` boot oneshot propagates the 1080p format down the
   pipeline, and the app resolves the capture node per virtual channel through

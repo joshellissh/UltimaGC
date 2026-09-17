@@ -7,7 +7,12 @@
 # unambiguously identifies it. Deliberately matches on LABEL alone, not
 # filesystem type — reformatting the labeled drive to something other than
 # exFAT still mounts (systemd-mount auto-detects the type); an unlabeled or
-# differently-labeled drive is left completely alone, no auto-format.
+# differently-labeled drive is left completely alone HERE -- this rule never
+# auto-formats. Instead ultima-app detects such a drive and offers the driver an
+# on-screen "format this drive?" dialog, which runs ultima-dvr-format on
+# confirmation (whole-disk exFAT + LABEL=ULTIMA_DVR); that helper then
+# `udevadm trigger --action=add`s the disk, re-running this same rule to fsck +
+# mount it. See ultima-dvr-format.sh and DashcamRecorder.
 #
 # Numbered 99- so it runs after systemd/udev's own built-in blkid probing
 # (the rules that populate ID_FS_LABEL in the first place, typically in the
