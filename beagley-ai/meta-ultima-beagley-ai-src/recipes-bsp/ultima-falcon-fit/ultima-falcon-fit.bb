@@ -24,7 +24,13 @@ S = "${WORKDIR}"
 # the SD slot (no eMMC), the SD is always mmcblk1, and the MBR disk signature a
 # PARTUUID would encode is assigned by wic per build and then re-patched by
 # flash.sh — not something a build-time DTB can know.
-ULTIMA_FALCON_BOOTARGS ?= "root=/dev/mmcblk1p2 rootwait rootfstype=ext4 console=ttyS2,115200n8 earlycon quiet vt.global_cursor_default=0 ro"
+#
+# drm.edid_firmware: use the dash panel's own EDID, built into the kernel (see
+# linux-bb.org_%.bbappend), instead of reading it over HDMI DDC. Under falcon
+# the connector's first probe lands ~0.85 s after power-on, before the
+# Waveshare panel answers DDC; DRM then falls back to 1024x768, fbdev sizes fb0
+# to that for good, and ultima-splash refuses its 1600x720 image.
+ULTIMA_FALCON_BOOTARGS ?= "root=/dev/mmcblk1p2 rootwait rootfstype=ext4 console=ttyS2,115200n8 earlycon quiet vt.global_cursor_default=0 drm.edid_firmware=HDMI-A-1:edid/waveshare-104-1600x720.edid ro"
 ULTIMA_FALCON_DTB ?= "k3-am67a-beagley-ai.dtb"
 ULTIMA_FALCON_DM_FW ?= "ti-dm/j722s/ipc_echo_testb_mcu1_0_release_strip.xer5f"
 

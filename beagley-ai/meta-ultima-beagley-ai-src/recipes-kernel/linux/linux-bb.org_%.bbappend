@@ -43,3 +43,21 @@ KERNEL_CONFIG_FRAGMENTS += "${WORKDIR}/ultima-boot.cfg"
 # ../../../../camdriver/PLAN.md.
 SRC_URI:append = " file://nvp6324.cfg"
 KERNEL_CONFIG_FRAGMENTS += "${WORKDIR}/nvp6324.cfg"
+
+# Dash panel EDID (Waveshare 10.4" HDMI, 1600x720@59, dumped from the panel's
+# own /sys/class/drm/card0-HDMI-A-1/edid), built into the kernel and selected
+# by drm.edid_firmware= in the falcon bootargs (ultima-falcon-fit.bb). Falcon
+# boot probes the HDMI connector ~0.85 s after power-on, before the panel
+# answers DDC; with no EDID, DRM falls back to 1024x768 and fbdev sizes fb0 to
+# that permanently, so ultima-splash (1600x720 blob) refuses to draw. Built in
+# rather than /lib/firmware because the probe races the rootfs mount. The file
+# goes into the kernel tree's own firmware/ dir, next to the regulatory.db and
+# cadence/mhdp8546.bin that CONFIG_EXTRA_FIRMWARE already lists (ultima-edid.cfg
+# must repeat those — the option is one string, not a list).
+SRC_URI:append = " file://waveshare-104-1600x720.edid file://ultima-edid.cfg"
+KERNEL_CONFIG_FRAGMENTS += "${WORKDIR}/ultima-edid.cfg"
+
+do_configure:prepend() {
+    install -D -m 0644 ${WORKDIR}/waveshare-104-1600x720.edid \
+        ${S}/firmware/edid/waveshare-104-1600x720.edid
+}

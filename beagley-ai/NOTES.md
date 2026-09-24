@@ -1438,3 +1438,45 @@ each packet at its own offset and the picture becomes shifted stripes — do not
 bake them. Remaining levers are physical: a short known-good CSI0 FPC, or an A/B
 of four cameras at 1049 on the second receiver (CSI1/DSI0 connector, proven
 routable 2026-09-03).
+
+### Splash refused at boot: fb0 came up 1024x768 — panel EDID now built into the kernel (2026-09-24)
+
+**Symptom:** `ultima-splash.service` failed every boot with `splash image is
+4608000 bytes, panel is 1024x768 (expected 3145728) -- refusing to guess`, so the
+pre-Qt splash never showed (the app itself was fine — Qt's KMS modeset reads the
+EDID later and picks 1600x720).
+
+**Cause:** under falcon the HDMI connector's first probe lands ~0.85 s after
+power-on, before the Waveshare panel answers DDC. tidss logs `Cannot find any crtc
+or sizes` twice (0.62 s), then the connector reads as connected but the EDID read
+fails, DRM falls back to its no-EDID default modes (1024x768), and fbdev creates
+`fb0` at that size (`Console: switching to colour frame buffer device 128x48` is
+the tell; healthy is `200x45`) and never resizes it. The old GRUB boot probed at
+~2.9 s and worked; the falcon boot-time work moved it earlier than the panel is
+ready. It is a timing race, so it can vary with panel/board power-up order.
+
+**Fix:** ship the panel's own EDID and make DRM use it instead of DDC.
+- `recipes-kernel/linux/linux-bb.org/waveshare-104-1600x720.edid` — the 256-byte
+  EDID dumped from `/sys/class/drm/card0-HDMI-A-1/edid` ("WaveShare_104", preferred
+  DTD 1600x720, 89 MHz pixel clock, 59.05 Hz, checksums valid, 1 extension block).
+- `linux-bb.org_%.bbappend` installs it to the kernel tree's `firmware/edid/` and
+  `ultima-edid.cfg` adds it to `CONFIG_EXTRA_FIRMWARE`. That option is a single
+  string, not a list: the fragment must repeat bb.org's `regulatory.db
+  regulatory.db.p7s cadence/mhdp8546.bin` or WiFi/mhdp firmware silently drops.
+- `ultima-falcon-fit.bb` bootargs gain `drm.edid_firmware=HDMI-A-1:edid/waveshare-104-1600x720.edid`.
+
+**Why built into the kernel, and why not `video=HDMI-A-1:1600x720`:** the rootfs
+mounts at ~0.78 s and the connector probe is at ~0.85 s — a `/lib/firmware` file is
+a 70 ms race. And `video=` with no EDID makes DRM synthesize a CVT timing for the
+fb, while Qt's eglfs_kms later picks the EDID's preferred DTD (different pixel
+clock/blanking) — a real timing change that re-locks the panel scaler and defeats
+the invisible splash-to-app handoff this whole design exists for. With the EDID
+firmware, the fb and Qt use the identical mode.
+
+**Verified on hardware (cold power-cycle):** `colour frame buffer device 200x45`,
+`fb0` virtual_size 1600,720, `ultima-splash` active (exited) status=0, no failed
+units. The two `Cannot find any crtc or sizes` lines still appear at 0.62 s — the
+connector isn't probed yet — but fb0 is now created at the right size afterwards.
+Deployed by hand-copying the new `tifalcon.bin` onto the boot partition (temp
+name + md5 check + `mv`; old FIT kept as `tifalcon.bin.orig`); the flashed-image
+path (`build.sh` + `flash.sh`) carries the same FIT.

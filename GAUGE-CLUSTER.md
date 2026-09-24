@@ -165,6 +165,11 @@ Key design choices, all load-bearing:
   Image.convert("RGB").tobytes("raw", "BGRX")` — on a little-endian target, bytes
   `[B,G,R,pad]` read back as native `0x00RRGGBB` / XRGB8888), so the on-target code
   is a plain stride-aware `read()` loop with zero pixel-format conversion.
+- **fb0 is pinned to 1600x720 by a built-in EDID.** Under falcon the kernel probes HDMI
+  before the panel answers DDC and would size `fb0` to 1024x768, so the splash would
+  refuse; the panel's EDID is baked into the kernel and selected via
+  `drm.edid_firmware=` in the falcon bootargs — see the 2026-09-24 section in
+  `beagley-ai/NOTES.md`.
 - **Refuses to guess.** It draws only if the blob's byte count matches `xres*yres*4`
   for whatever panel is actually attached; a mismatch aborts rather than
   scaling/cropping — the same "refuse to guess" stance as its bpp check.
