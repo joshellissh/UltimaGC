@@ -129,16 +129,6 @@ Window {
         PropertyAction { target: root; property: "startupActive"; value: false }
     }
 
-    // FPS counter state — driven by real render-thread frame swaps
-    // (QQuickWindow::frameSwapped), not a fixed-interval guess, so it
-    // reflects actual redraw rate under this build's software rendering
-    // backend (see ultima-app.pro / NOTES.md). frameSwapped fires on the
-    // scene graph render thread; QML auto-marshals the connection back to
-    // this (GUI-thread) property write the same way any cross-thread Qt
-    // signal/slot does, so no explicit locking is needed here.
-    property int _fpsFrameCount: 0
-    onFrameSwapped: _fpsFrameCount++
-
     // Debug: boot straight into a camera overlay when ULTIMA_DEFAULT_CAMERA is
     // set (defaultCameraScreen context property, see main.cpp) — "360" opens
     // the surround view, anything else non-empty opens the 4-cam grid (which
@@ -170,11 +160,11 @@ Window {
     // is hidden behind them until the intro fade anyway.
     // Splash-to-cluster intro overlay — see introFrac/introTransitionDone
     // above for the timing/rationale. z:8500 sits above the dash (default
-    // z) and the headlight dim layer (8000) but below the FPS counter
-    // (9000) and dev-only boot-splash simulation (9999), matching those
-    // layers' existing "debug chrome always wins" ordering. Hidden outright
-    // once done rather than just transparent, so it stops costing paint
-    // time for the rest of the run.
+    // z) and the headlight dim layer (8000) but below the dev-only
+    // boot-splash simulation (9999), matching that layer's existing "debug
+    // chrome always wins" ordering. Hidden outright once done rather than
+    // just transparent, so it stops costing paint time for the rest of the
+    // run.
     Item {
         id: introOverlay
         anchors.fill: parent
@@ -1182,39 +1172,14 @@ Window {
     // extra alpha-blended quad for the GPU compositor (eglfs_kms) per
     // frame, vs. re-deriving a dimmed color per element across every
     // screen. Stacked above every screen (including camera/diagnostic
-    // overlays) so nothing escapes it, but below the FPS overlay and boot
-    // splash so debug chrome and the boot handoff always stay full-bright.
+    // overlays) so nothing escapes it, but below the boot splash so the
+    // boot handoff always stays full-bright.
     Rectangle {
         anchors.fill: parent
         color: "black"
         z: 8000
         opacity: (sim.lowBeams || sim.highBeams) ? headlightDimAmount : 0
         visible: opacity > 0
-    }
-
-    // FPS overlay — top-left corner, above every screen this cluster shows
-    // (diagnostic, camera grid, 360 view + its calibration panel, time-set)
-    // so a rendering slowdown is visible no matter what's on screen. Below
-    // only the boot splash (9999), which shouldn't show performance chrome.
-    Text {
-        id: fpsText
-        x: 8
-        y: 4
-        z: 9000
-        font.family: bahnschriftFont.name
-        font.pixelSize: 16
-        color: "#00ff00"
-        text: "-- FPS"
-
-        Timer {
-            interval: 1000
-            running: true
-            repeat: true
-            onTriggered: {
-                fpsText.text = root._fpsFrameCount + " FPS"
-                root._fpsFrameCount = 0
-            }
-        }
     }
 
     // Boot splash overlay — see splashDone above. Declared last / z above

@@ -16,8 +16,8 @@ Item {
     id: root
     anchors.fill: parent
     // Above the ~500 overlay screens (camera/diagnostic), below the z:8000
-    // headlight dim and z:9000 FPS overlay — a modal decision that sits over
-    // whatever is on screen but still dims with the headlights like everything.
+    // headlight dim — a modal decision that sits over whatever is on screen
+    // but still dims with the headlights like everything.
     z: 6000
 
     // Set by main.qml to the dash's startup self-test flag: don't pop the
