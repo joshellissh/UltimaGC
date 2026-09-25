@@ -461,10 +461,6 @@ public:
 
 protected:
     void run() override {
-        QElapsedTimer fpsTimer, stage;
-        int arrived = 0, published = 0, decoded = 0;
-        qint64 convNs = 0, convMax = 0;
-        fpsTimer.start();
         while (!m_stop.loadAcquire()) {
             struct pollfd pfd;
             pfd.fd = m_fd; pfd.events = POLLIN; pfd.revents = 0;
@@ -489,7 +485,6 @@ protected:
                     QMetaObject::invokeMethod(m_feed, "onWorkerError", Qt::QueuedConnection);
                     return; // the GUI thread will closeDevice() and wait() on us
                 }
-                ++arrived;
                 if (havePending)
                     ::ioctl(m_fd, VIDIOC_QBUF, &pending); // superseded before we ever looked at it
                 pending = buf;
@@ -525,7 +520,6 @@ protected:
             }
 
             if (complete && wantImage) {
-                stage.start();
                 QImage frame(m_feed->m_frameWidth, m_feed->m_frameHeight, QImage::Format_RGBA8888);
                 const uchar *src = static_cast<const uchar *>(m_feed->m_buffers[pending.index].start);
 #ifdef ULTIMA_HAVE_NEON
@@ -535,10 +529,6 @@ protected:
                 convertUYVYToRGBA8888(src, frame, m_feed->m_frameWidth, m_feed->m_frameHeight,
                                       m_feed->m_bytesPerLine, kDecimation, kDecimation);
 #endif
-                const qint64 ns = stage.nsecsElapsed();
-                convNs += ns;
-                if (ns > convMax) convMax = ns;
-                ++decoded;
                 {
                     QMutexLocker lock(&m_mutex);
                     m_latest = frame;
@@ -591,7 +581,6 @@ protected:
 
             if (complete && zeroCopy) {
                 m_feed->publishBuffer(int(pending.index));
-                ++published;
             } else {
                 ::ioctl(m_fd, VIDIOC_QBUF, &pending);
             }
@@ -609,17 +598,6 @@ protected:
                     if (::ioctl(m_fd, VIDIOC_QBUF, &rb) < 0)
                         fprintf(stderr, "[camerafeed] requeue[%d]: %s\n", idx, strerror(errno));
                 }
-            }
-
-            if (m_fpsLog && fpsTimer.elapsed() >= 2000) {
-                const double el = fpsTimer.elapsed(), n = decoded > 0 ? decoded : 1;
-                fprintf(stderr, "[camerafeed] %s: %.1f fps arrived, %.1f published, %.1f decoded | convert %.2f ms avg / %.2f ms max\n",
-                        qPrintable(m_feed->m_label), arrived * 1000.0 / el,
-                        published * 1000.0 / el, decoded * 1000.0 / el,
-                        convNs / n / 1e6, convMax / 1e6);
-                arrived = published = decoded = 0;
-                convNs = convMax = 0;
-                fpsTimer.restart();
             }
         }
     }

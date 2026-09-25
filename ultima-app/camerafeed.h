@@ -188,8 +188,8 @@ private:
     int m_reconnectIntervalMs = 1000;
     void scheduleReconnect();
 
-    // Perf instrumentation, opt-in via ULTIMA_CAM_FPS_LOG — see the
-    // capture thread's fps log in camerafeed.cpp.
+    // Opt-in via ULTIMA_CAM_FPS_LOG — gates the capture thread's decoder-lock
+    // slip log in camerafeed.cpp.
     bool m_fpsLogEnabled = false;
 
     bool m_zeroCopy = false;
