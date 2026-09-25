@@ -127,6 +127,8 @@ scripts/dev-build.sh   # qmake6 + make in ./build/, then opens ultima-app.app
 
 `CanBus` is written so the Linux-only `#ifdef __linux__` block (SocketCAN: `socket(PF_CAN, ...)`, `linux/can.h`, etc.) compiles out entirely on macOS. In its place, `CanBus::tryConnect()`'s `#else` branch starts a `QTimer`-driven `simulateTick()` that generates a realistic driving profile (see [CAN Bus Integration](#can-bus-integration-syvecs-s7) below), so the gauges animate immediately without any hardware. `main.cpp`'s `/proc/uptime` read and `OdoStore`'s `/data/odometer.json` path both fail open (silently) when missing on macOS, so nothing else needs stubbing.
 
+Debug keys (click the window first so it has focus; they also work on the board with a USB keyboard): `L`/`R` toggle the turn signals, `H` hazards, `↑`/`↓` step the gear, `Space` cycles headlights (off → low → high), `M` steps `limpMode` through every code in the enum (0-6, 100-113, then back to 0), and `S` pauses/resumes the simulator (a no-op on real-CAN builds). Gear, headlights and `M` also stop the simulator's own auto-cycling of that value once pressed.
+
 WSL2 has an equivalent script, `scripts/dev-build-wsl.sh` — see the comment at the top of that file for setup.
 
 ## Startup & Clock Behavior
@@ -258,7 +260,7 @@ Read from SCal Datastreams → Generic CAN Transmit → Transmit Content. Frame 
 | `0x600` | 0-1 | rpm | signed, clamped ≥ 0 |
 | `0x600` | 6-7 | map1A (boost) | signed, mbar 1:1 (SCal: y=(1\*x)+0, 0..3000, Pressure/Millibar/Signed); psi = (mbar − 1013.25) × 0.0145038, clamped ≥ 0. Confirmed against SCal Datastreams screenshot 2026-08-13; not yet candump-confirmed on the wire. |
 | `0x601` | 0-1 | cruiseState → `cruiseControl` | unsigned enum: 0=OFF 1=ON 2=ACTIVE; icon lit only when ACTIVE (ON reads as not-lit, same as OFF) |
-| `0x604` | 6-7 | limpMode | unsigned enum; non-zero → `checkEngine` |
+| `0x604` | 6-7 | limpMode | unsigned enum (0-113); non-zero → `checkEngine`. Named by `CanBus::limpModeName()` (Diagnostic screen shows the name; unknown codes show `LIMP n`); `limpModeMessage()` gives the plain-English text (e.g. "Engine coolant cold") drawn in white inside the dash's limp box (`limp_bg.png`, `main.qml`), shown whenever `limpMode != 0`. Limps (power reduced): 0=OFF 1=LIMP SWITCH ON 2=ECT COLD 3=EOT COLD 4=SENSOR WARNING LEVEL 5=AUTO TRANS 6=VEHICLE SPEED FAULT. Trips (engine shut down): 100=EOP 101=CCP 102=KNOCK SHUTDOWN 103=EOT 104=ECT 105=FP 106=PREIGN SHUTDOWN 107=TIME ON LOAD LIMIT 108=TRQ 109=VVT FAIL 110=VBAT 111=LEAN 112=ACT 113=ECP (the bare abbreviations are `<x> TRIP`). Enum from `docs/Auto Bionics CAN2 Mapping.xlsx`, not candump-confirmed. |
 | `0x605` | 2-3 | ect1 (coolant) | raw × 0.18 + 32 → °F; `coolantWarn` if > 220 °F |
 | `0x605` | 4-5 | ManualAuto_U12 → `transmissionAuto` | unsigned enum; nonzero → Automatic. Frame/slot per the user, not a SCal screenshot; polarity (which value means Automatic) is assumed, not confirmed either way. |
 | `0x608` | 0-1 | eop1 (oil pressure) | raw × 0.0145038 → psi; `oilPressureWarn` if rpm ≥ 600 && psi ≤ 40 |

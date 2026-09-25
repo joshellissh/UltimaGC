@@ -183,6 +183,59 @@ void CanBus::accumulateOdometer()
     m_lastSpeedMs = now;
 }
 
+// Syvecs limpMode enum (Frame 5/0x604 slot 4), from the "Enum Values" column of
+// docs/Auto Bionics CAN2 Mapping.xlsx. 1-6 are limps (power reduced); 100+ are
+// trips (engine shut down). name is the sheet's label (Diagnostic screen);
+// message is the plain-English text for the dash's limp box. Neither says
+// which way a sensor tripped (too high or too low) — the sheet doesn't either.
+// Codes not in the sheet show as "LIMP n" / "Limp code n" rather than being
+// hidden. Ascending — debugCycleLimpMode() steps through it in order.
+struct LimpModeEntry { int code; const char *name; const char *message; };
+static const LimpModeEntry kLimpModes[] = {
+    {   0, "OFF",                  "" },
+    {   1, "LIMP SWITCH ON",       "Limp switch on" },
+    {   2, "ECT COLD",             "Engine coolant cold" },
+    {   3, "EOT COLD",             "Engine oil cold" },
+    {   4, "SENSOR WARNING LEVEL", "Sensor warning" },
+    {   5, "AUTO TRANS",           "Transmission fault" },
+    {   6, "VEHICLE SPEED FAULT",  "Vehicle speed fault" },
+    { 100, "EOP TRIP",             "Oil pressure trip" },
+    { 101, "CCP TRIP",             "Crankcase pressure trip" },
+    { 102, "KNOCK SHUTDOWN",       "Knock shutdown" },
+    { 103, "EOT TRIP",             "Oil temperature trip" },
+    { 104, "ECT TRIP",             "Coolant temperature trip" },
+    { 105, "FP TRIP",              "Fuel pressure trip" },
+    { 106, "PREIGN SHUTDOWN",      "Pre-ignition shutdown" },
+    { 107, "TIME ON LOAD LIMIT",   "Time on load limit" },
+    { 108, "TRQ TRIP",             "Torque trip" },
+    { 109, "VVT FAIL",             "VVT failure" },
+    { 110, "VBAT TRIP",            "Battery voltage trip" },
+    { 111, "LEAN TRIP",            "Lean mixture trip" },
+    { 112, "ACT TRIP",             "Air charge temp trip" },
+    { 113, "ECP TRIP",             "Coolant pressure trip" },
+};
+
+static const LimpModeEntry *findLimpMode(int code)
+{
+    for (const LimpModeEntry &e : kLimpModes) {
+        if (e.code == code)
+            return &e;
+    }
+    return nullptr;
+}
+
+QString CanBus::limpModeName() const
+{
+    const LimpModeEntry *e = findLimpMode(m_limpMode);
+    return e ? QString::fromLatin1(e->name) : QStringLiteral("LIMP %1").arg(m_limpMode);
+}
+
+QString CanBus::limpModeMessage() const
+{
+    const LimpModeEntry *e = findLimpMode(m_limpMode);
+    return e ? QString::fromLatin1(e->message) : QStringLiteral("Limp code %1").arg(m_limpMode);
+}
+
 void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
 {
     if (dlc < 8)
@@ -437,7 +490,7 @@ void CanBus::simulateTick()
         m_simPhaseTimer = phase.dur;
 
         if (rnd() < 0.3) m_simOilFault = !m_simOilFault;
-        if (rnd() < 0.4) {
+        if (!m_simLimpManualOverride && rnd() < 0.4) {
             m_checkEngine = !m_checkEngine;
             emit checkEngineChanged();
             int limp = m_checkEngine ? 1 : 0;
@@ -579,4 +632,31 @@ void CanBus::debugCycleHeadlights()
     }
     if (newLow != m_lowBeams) { m_lowBeams = newLow; emit lowBeamsChanged(); }
     if (newHigh != m_highBeams) { m_highBeams = newHigh; emit highBeamsChanged(); }
+}
+
+// Next code in kLimpModes above the current one, wrapping to 0 (OFF) after
+// the last. Comparing by value rather than by index also handles a
+// m_limpMode that isn't in the table (an unknown code off real CAN).
+void CanBus::debugCycleLimpMode()
+{
+#if !defined(__linux__) || defined(ULTIMA_SIMULATE)
+    m_simLimpManualOverride = true;
+#endif
+    int next = kLimpModes[0].code;
+    for (const LimpModeEntry &e : kLimpModes) {
+        if (e.code > m_limpMode) { next = e.code; break; }
+    }
+    if (next != m_limpMode) { m_limpMode = next; emit limpModeChanged(); }
+    // Same derivation as decodeFrame()'s 0x604 case.
+    bool ce = (m_limpMode != 0);
+    if (ce != m_checkEngine) { m_checkEngine = ce; emit checkEngineChanged(); }
+}
+
+void CanBus::debugToggleSim()
+{
+#if !defined(__linux__) || defined(ULTIMA_SIMULATE)
+    // start() with no argument reuses the 60 ms interval tryConnect() set.
+    if (m_simTimer.isActive()) m_simTimer.stop(); else m_simTimer.start();
+    fprintf(stderr, "[canbus] simulation %s\n", m_simTimer.isActive() ? "resumed" : "paused");
+#endif
 }

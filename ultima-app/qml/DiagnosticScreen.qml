@@ -70,7 +70,7 @@ Item {
         { label: "Oil Pressure", key: "oilPressure", unit: "psi", dec: 0, max: 100 },
         { label: "Battery Volt", key: "vbat", unit: "V", dec: 2, max: 15.5 },
         { label: "Cruise State", key: "cruiseState", text: true },
-        { label: "Limp Mode", key: "limpMode", text: true },
+        { label: "Limp Mode", key: "limpModeName", text: true },
         // Index into "PRN1234567" (see canbus.h's gear Q_PROPERTY comment),
         // not a magnitude — noBar below suppresses the bar for it.
         { label: "Gear", key: "gear", unit: "", dec: 0, min: 0, max: 9, noBar: true },
@@ -309,6 +309,11 @@ Item {
             anchors.verticalCenter: barTrack.verticalCenter
             font.family: rangeFont.name
             font.pixelSize: 28
+            // Text tiles (e.g. limpModeName's "SENSOR WARNING LEVEL") can be
+            // wider than the tile — shrink to fit instead of overflowing.
+            fontSizeMode: (tile.cfg && tile.cfg.text) ? Text.HorizontalFit : Text.FixedSize
+            minimumPixelSize: 12
+            width: (tile.cfg && tile.cfg.text) ? tile.width - 20 : implicitWidth
             color: tile.state === "crit" ? "#ff3b30" : (tile.state === "warn" ? "#ff9500" : "white")
             text: tile.cfg ? root.fmtVal(tile.cfg) : ""
         }

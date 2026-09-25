@@ -496,7 +496,9 @@ Window {
     // sim.hazard via debugToggleHazard(); Up/Down step sim.gear one position
     // at a time through "PRN1234567" via debugGearUp()/debugGearDown();
     // Space steps sim.lowBeams/highBeams through off -> low -> high -> off
-    // via debugCycleHeadlights(). Window itself can't host
+    // via debugCycleHeadlights(); M steps sim.limpMode through every code in
+    // the Syvecs enum via debugCycleLimpMode(); S pauses/resumes the dev-build
+    // simulator via debugToggleSim(). Window itself can't host
     // Keys.onPressed (that attached property is Item-only, Window isn't an
     // Item), hence this focused child Item covering the whole dash.
     Item {
@@ -525,6 +527,8 @@ Window {
         property double lastGearUpPressMs: 0
         property double lastGearDownPressMs: 0
         property double lastHeadlightsPressMs: 0
+        property double lastLimpPressMs: 0
+        property double lastSimPressMs: 0
         Keys.onPressed: (event) => {
             if (event.isAutoRepeat) return
             var now = Date.now()
@@ -557,6 +561,16 @@ Window {
                 if (now - lastHeadlightsPressMs < 250) return
                 lastHeadlightsPressMs = now
                 sim.debugCycleHeadlights()
+                event.accepted = true
+            } else if (event.key === Qt.Key_M) {
+                if (now - lastLimpPressMs < 250) return
+                lastLimpPressMs = now
+                sim.debugCycleLimpMode()
+                event.accepted = true
+            } else if (event.key === Qt.Key_S) {
+                if (now - lastSimPressMs < 250) return
+                lastSimPressMs = now
+                sim.debugToggleSim()
                 event.accepted = true
             }
         }
@@ -791,6 +805,32 @@ Window {
         x: 1000 - width / 2; y: 23
         source: "qrc:/icon_abs.png"
         visible: startupActive ? startupFlash : (sim.absWarn && _warnFlash)
+    }
+
+    // Limp/trip box — up whenever the ECU reports any limpMode, the same
+    // condition that lights the check-engine icon above, with the cause
+    // spelled out inside (sim.limpModeMessage). 163 is the image's vertical
+    // center, not its top edge. Held back during the startup self-test, like
+    // the lamps. The box is a trapezoid, narrower at the bottom, so the text
+    // is fit to a width that clears its slanted sides at the text's height
+    // rather than the full 326px.
+    Image {
+        x: 800 - width / 2; y: 163 - height / 2
+        source: "qrc:/limp_bg.png"
+        visible: !startupActive && sim.limpMode !== 0
+
+        Text {
+            anchors.centerIn: parent
+            width: 236
+            horizontalAlignment: Text.AlignHCenter
+            font.family: bahnschriftFont.name
+            font.pixelSize: 26
+            font.capitalization: Font.AllUppercase
+            fontSizeMode: Text.HorizontalFit
+            minimumPixelSize: 14
+            color: "white"
+            text: sim.limpModeMessage
+        }
     }
 
     // Fonts

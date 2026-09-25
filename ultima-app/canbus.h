@@ -43,6 +43,8 @@ class CanBus : public QObject
     Q_PROPERTY(double vbat READ vbat NOTIFY vbatChanged)                         // V, backs batteryWarn
     Q_PROPERTY(QString cruiseState READ cruiseState NOTIFY cruiseStateChanged)   // OFF/ON/ACTIVE, backs cruiseControl
     Q_PROPERTY(int limpMode READ limpMode NOTIFY limpModeChanged)                // raw code, backs checkEngine
+    Q_PROPERTY(QString limpModeName READ limpModeName NOTIFY limpModeChanged)    // "ECT COLD", "EOP TRIP", ... (see limpModeName())
+    Q_PROPERTY(QString limpModeMessage READ limpModeMessage NOTIFY limpModeChanged) // "Engine coolant cold", ... — text for the dash's limp box
     // Channels not present in the Syvecs fixed stream — exposed for QML
     // compatibility. On real hardware these are decoded from the MCE18
     // CAN expander's DIN0-7 bitmask (see decodeFrame()'s 0x702 case), not
@@ -118,6 +120,8 @@ public:
     double vbat() const { return m_vbat; }
     QString cruiseState() const { return m_cruiseState; }
     int limpMode() const { return m_limpMode; }
+    QString limpModeName() const;
+    QString limpModeMessage() const;
 
     void setTotalOdo(double v);
     void setTripOdo(double v);
@@ -166,6 +170,23 @@ public:
     // nothing to latch against: m_lowBeams/m_highBeams only otherwise change
     // via decodeFrame(), same as debugToggleLeftIndicator() et al.
     Q_INVOKABLE void debugCycleHeadlights();
+
+    // Debug-only keyboard trigger (see main.qml's 'M' Keys.onPressed) — steps
+    // m_limpMode through every code in the Syvecs limpMode enum (see
+    // limpModeName()) in ascending order, wrapping from the last back to 0
+    // (OFF), and keeps m_checkEngine in step the way decodeFrame()'s 0x604
+    // case does. On dev/simulate builds, the first press latches
+    // m_simLimpManualOverride so simulateTick()'s random limp flip stops
+    // overwriting it — same reasoning as debugGearUp()/debugGearDown().
+    Q_INVOKABLE void debugCycleLimpMode();
+
+    // Debug-only keyboard trigger (see main.qml's 'S' Keys.onPressed) —
+    // pauses/resumes the dev-build simulator, freezing every simulated value
+    // where it is (or letting it run again), e.g. to inspect a layout or to
+    // hold a state set with the other debug keys. Doesn't touch the manual
+    // overrides above. A no-op on real-CAN builds, where there's no
+    // simulator to stop.
+    Q_INVOKABLE void debugToggleSim();
 
 public slots:
     // Flush in-memory odometer to OdoStore and persist.
@@ -270,6 +291,7 @@ private:
     int m_simGearCycleIndex = 0;      // index into the R/N/P/1..7 cycle
     bool m_simGearManualOverride = false; // set by debugGearUp()/debugGearDown(); permanently stops the auto-cycle
     bool m_simHeadlightsManualOverride = false; // set by debugCycleHeadlights(); permanently stops the low-beam auto-toggle
+    bool m_simLimpManualOverride = false; // set by debugCycleLimpMode(); permanently stops the random limp/check-engine flip
     bool m_simOilFault = false;       // forces a low-oil-pressure dip to exercise the warn icon
     bool m_simBattFault = false;      // forces a low-voltage dip to exercise the warn icon
 #endif

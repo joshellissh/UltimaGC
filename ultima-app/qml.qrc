@@ -33,6 +33,7 @@
         <file alias="icon_axle_lift.png">assets/images/icon_axle_lift.png</file>
         <file alias="icon_cruise.png">assets/images/icon_cruise.png</file>
         <file alias="icon_abs.png">assets/images/icon_abs.png</file>
+        <file alias="limp_bg.png">assets/images/limp_bg.png</file>
         <file alias="car_360.png">assets/images/car_360.png</file>
         <file alias="camera_icon.png">assets/images/camera_icon.png</file>
         <file>shaders/surround.vert</file>
