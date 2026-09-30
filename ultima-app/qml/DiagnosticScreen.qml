@@ -50,11 +50,12 @@ Item {
     // Only the frames we actually decode (see GAUGE-CLUSTER.md's frame maps) —
     // listed in display order. An expected ID that hasn't arrived still gets a
     // row, flagged amber, so a silent ECU/MCE18 is visible instead of absent.
-    readonly property var frameIds: ["0x600", "0x601", "0x604", "0x605", "0x608", "0x60E", "0x60F", "0x700", "0x702"]
+    readonly property var frameIds: ["0x600", "0x601", "0x604", "0x605", "0x608", "0x60A", "0x60E", "0x60F", "0x700", "0x702"]
     readonly property var frameNames: ({
         "0x600": "Syvecs F1: rpm, map", "0x601": "Syvecs F2: cruise",
         "0x604": "Syvecs F5: limp", "0x605": "Syvecs F6: ect, man/auto",
-        "0x608": "Syvecs F9: eop", "0x60E": "Syvecs F15: gear, vbat",
+        "0x608": "Syvecs F9: eop", "0x60A": "Syvecs F11: cal, TC switch",
+        "0x60E": "Syvecs F15: gear, vbat",
         "0x60F": "Syvecs F16: speed", "0x700": "MCE18: AIN0-3 (fuel)",
         "0x702": "MCE18: AIN8, DIN0-7"
     })
@@ -108,6 +109,10 @@ Item {
         // not a magnitude — noBar below suppresses the bar for it.
         { label: "Gear", key: "gear", unit: "", dec: 0, min: 0, max: 9, noBar: true },
         { label: "Trans Mode", key: "transmissionAuto", bool: true, boolText: ["M", "A"] },
+        // Raw values (0x60A slots 2/3) — calSelect is an enum 0-11, tcSwitch a
+        // switch position; neither is a magnitude, so no bar.
+        { label: "Cal Select", key: "calSelect", unit: "", dec: 0, min: 0, max: 11, noBar: true },
+        { label: "TC Switch", key: "tcSwitch", unit: "", dec: 0, min: 0, max: 11, noBar: true },
         // MCE18 CAN expander — datasheet defaults, not wire-verified yet
         { label: "Fuel Level", key: "fuelLevel", unit: "%", dec: 0, max: 100, mult: 100, unconfirmed: true },
         { label: "Left Turn", key: "leftIndicator", bool: true, unconfirmed: true },
@@ -240,15 +245,15 @@ Item {
         visible: !root.showRaw
         anchors.horizontalCenter: parent.horizontalCenter
         y: 66
-        columns: 5
+        columns: 6
         rows: 4
-        columnSpacing: 18
+        columnSpacing: 12
         rowSpacing: 10
 
         Repeater {
             model: root.channels
             delegate: Tile {
-                width: 260
+                width: 246
                 height: 145
                 cfg: modelData
             }

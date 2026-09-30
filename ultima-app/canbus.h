@@ -24,6 +24,11 @@ class CanBus : public QObject
     // Throttle position, % (tps1, Frame 1/0x600 slot 3, y=x/81.92). Shown on the
     // diagnostics screen only — the dash doesn't use it.
     Q_PROPERTY(double tps READ tps NOTIFY tpsChanged)
+    // Active tune/cal map (calSelect, Frame 11/0x60A slot 2, enum 0-11) and the
+    // traction-control switch position (tcSwitch, 0x60A slot 3). Raw values,
+    // diagnostics screen only — the dash doesn't use them.
+    Q_PROPERTY(int calSelect READ calSelect NOTIFY calSelectChanged)
+    Q_PROPERTY(int tcSwitch READ tcSwitch NOTIFY tcSwitchChanged)
     // Index into the dash's "PRN1234567" gear-position string, not a raw
     // ratio: 0=P 1=R 2=N 3..9=1st..7th. Chosen so main.qml's gear indicator
     // is a plain string index (see its comment), not an if/else chain.
@@ -101,6 +106,8 @@ public:
     double speed() const { return m_speed; }
     double rpm() const { return m_rpm; }
     double tps() const { return m_tps; }
+    int calSelect() const { return m_calSelect; }
+    int tcSwitch() const { return m_tcSwitch; }
     int gear() const { return m_gear; }
     double fuelLevel() const { return m_fuelLevel; }
     double coolantTemp() const { return m_coolantTempF; }
@@ -208,6 +215,8 @@ signals:
     void speedChanged();
     void rpmChanged();
     void tpsChanged();
+    void calSelectChanged();
+    void tcSwitchChanged();
     void gearChanged();
     void fuelLevelChanged();
     void coolantTempChanged();
@@ -267,6 +276,8 @@ private:
     double m_speed = 0.0;         // mph
     double m_rpm = 0.0;
     double m_tps = 0.0;           // % (tps1)
+    int m_calSelect = 0;          // raw enum (0-11), Frame 11 slot 2
+    int m_tcSwitch = 0;           // raw switch position, Frame 11 slot 3
     // Index into "PRN1234567": 0=P 1=R 2=N 3..9=1st..7th. Starts at P (0),
     // not N — before the first 0x60E frame ever arrives (app just launched,
     // CAN not yet connected), the car is realistically parked, so P is the

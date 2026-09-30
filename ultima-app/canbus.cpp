@@ -278,6 +278,8 @@ static QString describeFrame(quint32 id, const quint8 *d, int dlc)
         double kpa = be_s16(d, 0) * 0.1;
         return QStringLiteral("EOP %1 psi (%2 kPa)").arg(n(kpa * 0.145038, 1), n(kpa, 1));
     }
+    case 0x60A:
+        return QStringLiteral("cal select %1 | TC switch %2").arg(be_s16(d, 2)).arg(be_s16(d, 4));
     case 0x60E: {
         int g = be_s16(d, 2);
         QString gn = g == 0 ? QStringLiteral("Unknown") : g == 1 ? QStringLiteral("R")
@@ -421,6 +423,15 @@ void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
             m_oilPressureWarn = warn;
             emit oilPressureWarnChanged();
         }
+        break;
+    }
+    case 0x60A: {                                       // Frame 11: calSelect @ slot 2, tcSwitch @ slot 3
+        // Both y=(1*x)+0 per the CAN2 mapping sheet; calSelect is a signed
+        // enum 0-11, tcSwitch leaves Sign blank (read as signed, like tps1).
+        int cal = be_s16(d, 2);
+        if (cal != m_calSelect) { m_calSelect = cal; emit calSelectChanged(); }
+        int tc = be_s16(d, 4);
+        if (tc != m_tcSwitch) { m_tcSwitch = tc; emit tcSwitchChanged(); }
         break;
     }
     case 0x60E: {                                       // Frame 15: gear @ slot 2, vbat @ slot 3
