@@ -17,8 +17,7 @@ import QtQuick 2.15
 // channels marked `source: "sysStats"`, which read off the `SystemStats`
 // context property instead (board stats that aren't CAN signals at all; see
 // systemstats.h). Channels flagged `unconfirmed: true` come from the MCE18
-// (datasheet defaults, no unit on the bench yet) or rely on an
-// assumed-not-confirmed polarity (`transmissionAuto`) — everything else is
+// (datasheet defaults, no unit on the bench yet) — everything else is
 // SCal-verified.
 Item {
     id: root
@@ -43,6 +42,39 @@ Item {
 
     property real _dragStartX: 0
     property bool _dragging: false
+    // Raw CAN frame monitor (tap the title to toggle) — shows every ID on the
+    // bus with its bytes/rate/age, for confirming what's actually arriving
+    // rather than what the decoders made of it. Polled only while shown.
+    property bool showRaw: false
+    property var rawFrames: []
+    // Only the frames we actually decode (see GAUGE-CLUSTER.md's frame maps) —
+    // listed in display order. An expected ID that hasn't arrived still gets a
+    // row, flagged amber, so a silent ECU/MCE18 is visible instead of absent.
+    readonly property var frameIds: ["0x600", "0x601", "0x604", "0x605", "0x608", "0x60E", "0x60F", "0x700", "0x702"]
+    readonly property var frameNames: ({
+        "0x600": "Syvecs F1: rpm, map", "0x601": "Syvecs F2: cruise",
+        "0x604": "Syvecs F5: limp", "0x605": "Syvecs F6: ect, man/auto",
+        "0x608": "Syvecs F9: eop", "0x60E": "Syvecs F15: gear, vbat",
+        "0x60F": "Syvecs F16: speed", "0x700": "MCE18: AIN0-3 (fuel)",
+        "0x702": "MCE18: AIN8, DIN0-7"
+    })
+    Timer {
+        interval: 500
+        repeat: true
+        running: root.showRaw && root.isOpen
+        triggeredOnStart: true
+        onTriggered: {
+            var seen = {}
+            var snap = sim.rawFrames()
+            for (var i = 0; i < snap.length; ++i) seen[snap[i].id] = snap[i]
+            var out = []
+            for (var j = 0; j < root.frameIds.length; ++j) {
+                var id = root.frameIds[j]
+                out.push(seen[id] || { id: id, data: "--", hz: -1, ageMs: -1, count: 0 })
+            }
+            root.rawFrames = out
+        }
+    }
 
     // Tracks open/closing state for things outside this screen (e.g. the
     // 360 icon in main.qml) that need to hide while this is in front —
@@ -64,6 +96,7 @@ Item {
     readonly property var channels: [
         // ECU (Syvecs S7+) — verified frame map, see GAUGE-CLUSTER.md
         { label: "RPM", key: "rpm", unit: "", dec: 0, max: 7500 },
+        { label: "Throttle (TPS1)", key: "tps", unit: "%", dec: 1, max: 100 },
         { label: "Boost", key: "boost", unit: "psi", dec: 1, max: 20 },
         { label: "Coolant Temp", key: "coolantTemp", unit: "°F", dec: 0, max: 260, critAt: 220 },
         { label: "Vehicle Speed", key: "speed", unit: "mph", dec: 0, max: 180 },
@@ -74,8 +107,7 @@ Item {
         // Index into "PRN1234567" (see canbus.h's gear Q_PROPERTY comment),
         // not a magnitude — noBar below suppresses the bar for it.
         { label: "Gear", key: "gear", unit: "", dec: 0, min: 0, max: 9, noBar: true },
-        // Auto/Manual polarity is assumed, not confirmed — see canbus.h
-        { label: "Trans Mode", key: "transmissionAuto", bool: true, boolText: ["M", "A"], unconfirmed: true },
+        { label: "Trans Mode", key: "transmissionAuto", bool: true, boolText: ["M", "A"] },
         // MCE18 CAN expander — datasheet defaults, not wire-verified yet
         { label: "Fuel Level", key: "fuelLevel", unit: "%", dec: 0, max: 100, mult: 100, unconfirmed: true },
         { label: "Left Turn", key: "leftIndicator", bool: true, unconfirmed: true },
@@ -191,7 +223,12 @@ Item {
         font.family: bahnschriftFont.name
         font.pixelSize: 22
         color: "white"
-        text: "DIAGNOSTICS"
+        text: root.showRaw ? "CAN FRAMES  ▸ tap for values" : "DIAGNOSTICS  ▸ tap for CAN frames"
+        MouseArea {
+            anchors.fill: parent
+            anchors.margins: -16
+            onClicked: root.showRaw = !root.showRaw
+        }
     }
 
     // y/rowSpacing trimmed from 78/16 to make room for the page indicator
@@ -200,6 +237,7 @@ Item {
     // not enough to fit dots without touching the last row.
     Grid {
         id: grid
+        visible: !root.showRaw
         anchors.horizontalCenter: parent.horizontalCenter
         y: 66
         columns: 5
@@ -213,6 +251,56 @@ Item {
                 width: 260
                 height: 145
                 cfg: modelData
+            }
+        }
+    }
+
+    Rectangle {
+        visible: root.showRaw
+        x: 40; y: 66; width: parent.width - 80; height: 616
+        color: "#0a0a0a"; radius: 8
+        border.width: 1; border.color: "#2a2c30"
+        clip: true
+
+        Row {
+            id: rawHead
+            x: 16; y: 8; height: 24
+            spacing: 0
+            Repeater {
+                model: [["ID", 80], ["DATA", 250], ["HZ", 60], ["AGE", 100], ["COUNT", 90], ["FRAME", 230], ["CONVERTED VALUES", 640]]
+                delegate: Text {
+                    width: modelData[1]
+                    font.family: bahnschriftFont.name; font.pixelSize: 13
+                    color: "#8a8d93"; text: modelData[0]
+                }
+            }
+        }
+        Column {
+            x: 16; y: 36
+            Repeater {
+                model: root.rawFrames
+                delegate: Row {
+                    height: 26
+                    readonly property bool stale: modelData.ageMs < 0 || modelData.ageMs > 1500
+                    readonly property color c: stale ? "#ff9500" : "white"
+                    Text { width: 80; font.family: rangeFont.name; font.pixelSize: 17; color: parent.c; text: modelData.id }
+                    Text { width: 250; font.family: rangeFont.name; font.pixelSize: 17; color: parent.c; text: modelData.data }
+                    Text { width: 60; font.family: rangeFont.name; font.pixelSize: 17; color: parent.c; text: modelData.hz < 0 ? "--" : modelData.hz.toFixed(1) }
+                    Text { width: 100; font.family: rangeFont.name; font.pixelSize: 17; color: parent.c; text: modelData.ageMs < 0 ? "NO DATA" : modelData.ageMs + " ms" }
+                    Text { width: 90; font.family: rangeFont.name; font.pixelSize: 17; color: parent.c; text: modelData.count }
+                    Text {
+                        width: 230; font.family: bahnschriftFont.name; font.pixelSize: 15
+                        elide: Text.ElideRight
+                        color: "white"
+                        text: root.frameNames[modelData.id]
+                    }
+                    Text {
+                        width: 640; font.family: bahnschriftFont.name; font.pixelSize: 15
+                        elide: Text.ElideRight
+                        color: parent.c
+                        text: modelData.values || "--"
+                    }
+                }
             }
         }
     }

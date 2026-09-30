@@ -5,6 +5,8 @@
 #include <QString>
 #include <QTimer>
 #include <QSocketNotifier>
+#include <QHash>
+#include <QVariantList>
 
 class OdoStore;
 
@@ -19,6 +21,9 @@ class CanBus : public QObject
     Q_OBJECT
     Q_PROPERTY(double speed READ speed NOTIFY speedChanged)             // mph
     Q_PROPERTY(double rpm READ rpm NOTIFY rpmChanged)
+    // Throttle position, % (tps1, Frame 1/0x600 slot 3, y=x/81.92). Shown on the
+    // diagnostics screen only — the dash doesn't use it.
+    Q_PROPERTY(double tps READ tps NOTIFY tpsChanged)
     // Index into the dash's "PRN1234567" gear-position string, not a raw
     // ratio: 0=P 1=R 2=N 3..9=1st..7th. Chosen so main.qml's gear indicator
     // is a plain string index (see its comment), not an if/else chain.
@@ -78,8 +83,8 @@ class CanBus : public QObject
     Q_PROPERTY(bool cruiseControl READ cruiseControl NOTIFY cruiseControlChanged)
     // Automatic/manual shift mode — not on the Syvecs fixed stream DBC, but
     // decoded from this car's CAN2 config as ManualAuto_U12 (Frame 6/0x605,
-    // slot 3 — see decodeFrame()); polarity (nonzero = Automatic) is
-    // assumed, not confirmed. Not sourced from the MCE18 expander. The
+    // slot 3 — see decodeFrame()); raw 0 = Automatic, 8192 = Manual
+    // (observed on the car). Not sourced from the MCE18 expander. The
     // dev-build simulator (see simulateTick()) still drives it for layout
     // review.
     Q_PROPERTY(bool transmissionAuto READ transmissionAuto NOTIFY transmissionAutoChanged)
@@ -95,6 +100,7 @@ public:
 
     double speed() const { return m_speed; }
     double rpm() const { return m_rpm; }
+    double tps() const { return m_tps; }
     int gear() const { return m_gear; }
     double fuelLevel() const { return m_fuelLevel; }
     double coolantTemp() const { return m_coolantTempF; }
@@ -188,6 +194,12 @@ public:
     // simulator to stop.
     Q_INVOKABLE void debugToggleSim();
 
+    // Snapshot of every CAN ID seen so far, sorted by ID, for the diagnostics
+    // screen's raw-frame monitor: [{id:"0x600", data:"01 02 ..", count, hz,
+    // ageMs}]. hz is measured since the previous call, so a single consumer
+    // should poll this (DiagnosticScreen does, only while its monitor is open).
+    Q_INVOKABLE QVariantList rawFrames();
+
 public slots:
     // Flush in-memory odometer to OdoStore and persist.
     void save();
@@ -195,6 +207,7 @@ public slots:
 signals:
     void speedChanged();
     void rpmChanged();
+    void tpsChanged();
     void gearChanged();
     void fuelLevelChanged();
     void coolantTempChanged();
@@ -232,6 +245,17 @@ private:
     void decodeFrame(quint32 id, const quint8 *data, int dlc);
     void accumulateOdometer();
     void closeSocket();
+    void recordRawFrame(quint32 id, const quint8 *data, int dlc);
+
+    struct RawFrame {
+        quint8 data[8] = {0};
+        int dlc = 0;
+        quint64 count = 0;
+        quint64 snapCount = 0;   // count at the previous rawFrames() call
+        qint64 lastMs = 0;
+    };
+    QHash<quint32, RawFrame> m_rawFrames;
+    qint64 m_rawSnapMs = 0;
 
     OdoStore *m_odo;
     QString m_iface;
@@ -242,6 +266,7 @@ private:
     // Gauge state
     double m_speed = 0.0;         // mph
     double m_rpm = 0.0;
+    double m_tps = 0.0;           // % (tps1)
     // Index into "PRN1234567": 0=P 1=R 2=N 3..9=1st..7th. Starts at P (0),
     // not N — before the first 0x60E frame ever arrives (app just launched,
     // CAN not yet connected), the car is realistically parked, so P is the

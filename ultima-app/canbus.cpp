@@ -6,6 +6,9 @@
 #if !defined(__linux__) || defined(ULTIMA_SIMULATE)
 #include <QRandomGenerator>
 #include <cmath>
+#include <algorithm>
+#include <QStringList>
+#include <QVariantMap>
 #endif
 
 #include <stdio.h>
@@ -236,8 +239,112 @@ QString CanBus::limpModeMessage() const
     return e ? QString::fromLatin1(e->message) : QStringLiteral("Limp code %1").arg(m_limpMode);
 }
 
+// Human-readable converted values for one frame, for the diagnostics screen's
+// raw-frame monitor. Applies the same scalings as decodeFrame() below (keep the
+// two in step) but shows every decoded slot's engineering value plus its raw
+// count where the conversion is non-trivial, without touching any state.
+static QString describeFrame(quint32 id, const quint8 *d, int dlc)
+{
+    if (dlc < 8)
+        return QStringLiteral("short frame (dlc %1)").arg(dlc);
+    auto n = [](double v, int dec) { return QString::number(v, 'f', dec); };
+
+    switch (id) {
+    case 0x600: {
+        double mapMbar = be_s16(d, 6);
+        return QStringLiteral("rpm %1 | TPS %4% | MAP %2 mbar (boost %3 psi)")
+            .arg(qMax(0, int(be_s16(d, 0))))
+            .arg(mapMbar, 0, 'f', 0)
+            .arg(qMax(0.0, (mapMbar - 1013.25) * 0.0145038), 0, 'f', 1)
+            .arg(be_s16(d, 4) / 81.92, 0, 'f', 1);
+    }
+    case 0x601: {
+        int v = be_u16(d, 0);
+        static const char *names[] = { "OFF", "ON", "ACTIVE" };
+        return QStringLiteral("cruise %1 (raw %2)").arg(v <= 2 ? names[v] : "?").arg(v);
+    }
+    case 0x604: {
+        int v = be_u16(d, 6);
+        const LimpModeEntry *e = findLimpMode(v);
+        return QStringLiteral("limp %1 (raw %2)").arg(e ? QString::fromLatin1(e->name) : QStringLiteral("unknown")).arg(v);
+    }
+    case 0x605: {
+        double c = be_s16(d, 2) * 0.1;
+        int ma = be_u16(d, 4);
+        return QStringLiteral("ECT %1 F (%2 C) | man/auto raw %3 (%4)")
+            .arg(n(c * 1.8 + 32.0, 1), n(c, 1)).arg(ma).arg(ma ? "MANUAL" : "AUTO");
+    }
+    case 0x608: {
+        double kpa = be_s16(d, 0) * 0.1;
+        return QStringLiteral("EOP %1 psi (%2 kPa)").arg(n(kpa * 0.145038, 1), n(kpa, 1));
+    }
+    case 0x60E: {
+        int g = be_s16(d, 2);
+        QString gn = g == 0 ? QStringLiteral("Unknown") : g == 1 ? QStringLiteral("R")
+                   : g == 2 ? QStringLiteral("N") : QStringLiteral("%1").arg(g - 2);
+        return QStringLiteral("gear %1 (raw %2) | vbat %3 V").arg(gn).arg(g).arg(n(be_u16(d, 4) * 0.001, 2));
+    }
+    case 0x60F: {
+        double kph = be_s16(d, 0) * 0.036;
+        return QStringLiteral("speed %1 mph (%2 kph)").arg(n(qMax(0.0, kph * 0.621371), 1), n(kph, 1));
+    }
+    case kMce18Base: {
+        double fuel = qBound(0.0, (be_u16(d, 0) - kFuelSenderEmptyMv) / (kFuelSenderFullScaleMv - kFuelSenderEmptyMv), 1.0);
+        return QStringLiteral("AIN0 %1 mV (fuel %2%) | AIN1 %3 | AIN2 %4 | AIN3 %5 mV")
+            .arg(be_u16(d, 0)).arg(fuel * 100.0, 0, 'f', 0).arg(be_u16(d, 2)).arg(be_u16(d, 4)).arg(be_u16(d, 6));
+    }
+    case kMce18Base + 2: {
+        static const char *din[] = { "leftInd", "rightInd", "axleLift", "lowBeams", "highBeams", "DIN5", "DIN6", "hazard" };
+        QStringList on;
+        for (int i = 0; i < 8; ++i)
+            if (d[2] & (1 << i)) on << QString::fromLatin1(din[i]);
+        return QStringLiteral("AIN8 %1 mV | DIN 0x%2: %3")
+            .arg(be_u16(d, 0)).arg(d[2], 2, 16, QLatin1Char('0')).arg(on.isEmpty() ? QStringLiteral("none") : on.join(','));
+    }
+    default:
+        return QString();
+    }
+}
+
+void CanBus::recordRawFrame(quint32 id, const quint8 *d, int dlc)
+{
+    RawFrame &f = m_rawFrames[id];
+    f.dlc = qBound(0, dlc, 8);
+    memcpy(f.data, d, f.dlc);
+    f.count++;
+    f.lastMs = QDateTime::currentMSecsSinceEpoch();
+}
+
+QVariantList CanBus::rawFrames()
+{
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const double dt = m_rawSnapMs ? (now - m_rawSnapMs) / 1000.0 : 0.0;
+    m_rawSnapMs = now;
+
+    QList<quint32> ids = m_rawFrames.keys();
+    std::sort(ids.begin(), ids.end());
+    QVariantList out;
+    for (quint32 id : ids) {
+        RawFrame &f = m_rawFrames[id];
+        QStringList bytes;
+        for (int i = 0; i < f.dlc; ++i)
+            bytes << QStringLiteral("%1").arg(f.data[i], 2, 16, QLatin1Char('0')).toUpper();
+        QVariantMap m;
+        m["id"] = QStringLiteral("0x") + QStringLiteral("%1").arg(id, 3, 16, QLatin1Char('0')).toUpper();
+        m["data"] = bytes.join(' ');
+        m["values"] = describeFrame(id, f.data, f.dlc);
+        m["count"] = QVariant::fromValue(f.count);
+        m["hz"] = dt > 0 ? (f.count - f.snapCount) / dt : 0.0;
+        m["ageMs"] = now - f.lastMs;
+        f.snapCount = f.count;
+        out << m;
+    }
+    return out;
+}
+
 void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
 {
+    recordRawFrame(id, d, dlc);
     if (dlc < 8)
         return;
 
@@ -245,6 +352,12 @@ void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
     case 0x600: {                                       // Frame 1: rpm @ slot 1, map1A @ slot 4
         double v = qMax(0, int(be_s16(d, 0)));
         if (v != m_rpm) { m_rpm = v; emit rpmChanged(); }
+
+        // tps1 (SCal Slot 3/Frame 1): y=(x/81.92)+0, %. The CAN2 mapping sheet
+        // leaves the Sign column blank for it; read as signed so a slightly
+        // negative raw shows ~0 rather than wrapping to ~800%.
+        double tps = be_s16(d, 4) / 81.92;
+        if (!qFuzzyCompare(1.0 + tps, 1.0 + m_tps)) { m_tps = tps; emit tpsChanged(); }
 
         // map1A (SCal Slot 4/Frame 1): y=(1*x)+0, signed, absolute MAP in
         // mbar. Signed matters — near vacuum a raw negative read through an
@@ -289,9 +402,10 @@ void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
         bool warn = f > 220.0;
         if (warn != m_coolantWarn) { m_coolantWarn = warn; emit coolantWarnChanged(); }
 
-        // ManualAuto_U12: raw TCM enum: polarity assumed (nonzero =
-        // Automatic) — not confirmed against a SCal screenshot or candump.
-        bool transAuto = be_u16(d, 4) != 0;
+        // ManualAuto_U12: raw TCM enum. Observed on the car: 0 = Automatic,
+        // 8192 (0x2000) = Manual. Test == 0 rather than != 8192 so any other
+        // non-zero value still reads as Manual.
+        bool transAuto = be_u16(d, 4) == 0;
         if (transAuto != m_transmissionAuto) { m_transmissionAuto = transAuto; emit transmissionAutoChanged(); }
         break;
     }

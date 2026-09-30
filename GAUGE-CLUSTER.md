@@ -258,11 +258,12 @@ Read from SCal Datastreams → Generic CAN Transmit → Transmit Content. Frame 
 | Frame (CAN ID) | Bytes | Channel | Decoding |
 |---|---|---|---|
 | `0x600` | 0-1 | rpm | signed, clamped ≥ 0 |
+| `0x600` | 4-5 | tps1 (throttle %) | raw / 81.92 → %, read as signed (the mapping sheet leaves Sign blank). Diagnostics screen only (`CanBus::tps`); not candump-confirmed. |
 | `0x600` | 6-7 | map1A (boost) | signed, mbar 1:1 (SCal: y=(1\*x)+0, 0..3000, Pressure/Millibar/Signed); psi = (mbar − 1013.25) × 0.0145038, clamped ≥ 0. Confirmed against SCal Datastreams screenshot 2026-08-13; not yet candump-confirmed on the wire. |
 | `0x601` | 0-1 | cruiseState → `cruiseControl` | unsigned enum: 0=OFF 1=ON 2=ACTIVE; icon lit only when ACTIVE (ON reads as not-lit, same as OFF) |
 | `0x604` | 6-7 | limpMode | unsigned enum (0-113); non-zero → `checkEngine`. Named by `CanBus::limpModeName()` (Diagnostic screen shows the name; unknown codes show `LIMP n`); `limpModeMessage()` gives the plain-English text (e.g. "Engine coolant cold") drawn in white inside the dash's limp box (`limp_bg.png`, `main.qml`), shown whenever `limpMode != 0`. Limps (power reduced): 0=OFF 1=LIMP SWITCH ON 2=ECT COLD 3=EOT COLD 4=SENSOR WARNING LEVEL 5=AUTO TRANS 6=VEHICLE SPEED FAULT. Trips (engine shut down): 100=EOP 101=CCP 102=KNOCK SHUTDOWN 103=EOT 104=ECT 105=FP 106=PREIGN SHUTDOWN 107=TIME ON LOAD LIMIT 108=TRQ 109=VVT FAIL 110=VBAT 111=LEAN 112=ACT 113=ECP (the bare abbreviations are `<x> TRIP`). Enum from `docs/Auto Bionics CAN2 Mapping.xlsx`, not candump-confirmed. |
 | `0x605` | 2-3 | ect1 (coolant) | raw × 0.18 + 32 → °F; `coolantWarn` if > 220 °F |
-| `0x605` | 4-5 | ManualAuto_U12 → `transmissionAuto` | unsigned enum; nonzero → Automatic. Frame/slot per the user, not a SCal screenshot; polarity (which value means Automatic) is assumed, not confirmed either way. |
+| `0x605` | 4-5 | ManualAuto_U12 → `transmissionAuto` | unsigned enum; observed values: 0 = Automatic, 8192 (0x2000) = Manual; decoded as zero → Automatic. Values reported by the user from the car, not candump-confirmed. |
 | `0x608` | 0-1 | eop1 (oil pressure) | raw × 0.0145038 → psi; `oilPressureWarn` if rpm ≥ 600 && psi ≤ 40 |
 | `0x60E` | 2-3 | gear | Syvecs enum 0=Unknown 1=R 2=N 3..10=1st..8th (this car has 7 forward gears; 10/8th falls back to Neutral) → QML index into "PRN1234567": 0=P 1=R 2=N 3..9=1st..7th |
 | `0x60E` | 4-5 | vbat | V × 0.001 (unsigned); `batteryWarn` if v < 12.5 |
