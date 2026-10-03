@@ -42,7 +42,7 @@ class CanBus : public QObject
     Q_PROPERTY(bool batteryWarn READ batteryWarn NOTIFY batteryWarnChanged)
     Q_PROPERTY(bool coolantWarn READ coolantWarn NOTIFY coolantWarnChanged)
     // Not decoded from any frame yet — MCE18 DIN5 is the planned source
-    // (see GAUGE-CLUSTER.md's MCE18 section), unwired like driveMode below.
+    // (see GAUGE-CLUSTER.md's MCE18 section), still unwired.
     Q_PROPERTY(bool absWarn READ absWarn NOTIFY absWarnChanged)
     Q_PROPERTY(bool lowFuelWarn READ lowFuelWarn NOTIFY lowFuelWarnChanged)
     Q_PROPERTY(bool checkEngine READ checkEngine NOTIFY checkEngineChanged)
@@ -93,9 +93,9 @@ class CanBus : public QObject
     // dev-build simulator (see simulateTick()) still drives it for layout
     // review.
     Q_PROPERTY(bool transmissionAuto READ transmissionAuto NOTIFY transmissionAutoChanged)
-    // Drive mode selector — not on the Syvecs fixed stream. One of "SPORT",
-    // "SPORT+", "RACE"; the dev-build simulator (see simulateTick()) cycles
-    // through them for layout review.
+    // Drive mode display, derived from calSelect (0x60A slot 2): 0 = "NORMAL",
+    // 1 = "SPORT", 2 = "SPORT+", anything else = "" (blank). The dev-build
+    // simulator (see simulateTick()) cycles through them for layout review.
     Q_PROPERTY(QString driveMode READ driveMode NOTIFY driveModeChanged)
 
 public:
@@ -305,7 +305,7 @@ private:
     bool m_hazard = false;
     bool m_cruiseControl = false;
     bool m_transmissionAuto = true;
-    QString m_driveMode = QStringLiteral("SPORT");
+    QString m_driveMode;                   // "" until a 0x60A frame maps calSelect 0-2
     double m_oilPressurePsi = 0.0;             // raw reading behind m_oilPressureWarn
     double m_vbat = 0.0;                       // raw reading (V) behind m_batteryWarn
     QString m_cruiseState = QStringLiteral("OFF"); // raw OFF/ON/ACTIVE behind m_cruiseControl
