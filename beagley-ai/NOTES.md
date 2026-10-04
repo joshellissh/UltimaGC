@@ -1480,3 +1480,54 @@ connector isn't probed yet — but fb0 is now created at the right size afterwar
 Deployed by hand-copying the new `tifalcon.bin` onto the boot partition (temp
 name + md5 check + `mv`; old FIT kept as `tifalcon.bin.orig`); the flashed-image
 path (`build.sh` + `flash.sh`) carries the same FIT.
+
+### Cameras all `STREAMON: Broken pipe` after a boot — `nvp6324-csi-setup` lost a race (2026-10-03)
+
+**Symptom:** the app was up but no camera showed; `ultima-app` logged
+`VIDIOC_STREAMON: Broken pipe` (-EPIPE) on `/dev/video2..5`, repeating on its
+backoff. The chip and driver were fine (`NVP6324 detected`, CSI2RX probed with
+4/4 lanes, `vc_mask=15 mipi_mclk=1049 link_freq_idx=1`).
+
+**Cause:** `nvp6324-csi-setup.service` was `failed` for that boot —
+`Unable to setup routes: No such file or directory (2)` from the first
+`media-ctl -R`. With no routes/format applied the bridge and SHIM stay at their
+640x480 default, so link validation EPIPEs every STREAMON (the same end state as
+the 3-camera routing section above). Intermittent: the next cold boot ran the
+identical script clean on attempt 1. The script waited only for the `nvp6324`
+entity to show in the graph; the exact ENOENT source (a bridge/SHIM entity or its
+`/dev/v4l-subdevN` node not yet there) was **not** pinned down — inferred, never
+reproduced.
+
+**Fix:** `nvp6324-csi-setup.sh` wraps the route + format sequence in
+`apply_pipeline()` and retries it up to 15x, 1 s apart, logging each failed
+attempt (`attempt N failed; retrying`); exhausting them exits 1 so the unit still
+shows `failed`. The sequence is idempotent (`-R` replaces the route table, `-V`
+sets absolute formats). Gotcha: the function uses explicit `|| exit 1`, **not**
+`set -e` — errexit is ignored inside a function called from an `until`/`if`
+condition, so a failed `-R` would have silently run on and returned only the last
+command's status. Unit-tested with a fake `media-ctl` (recovers after transient
+failures, exits 1 when persistent).
+
+**Live-recovery without a reboot:** run `/usr/bin/nvp6324-csi-setup.sh` by hand
+over SSH — it needs no remount (it only sets media-pipeline state), and the app's
+reconnect backoff picks the cameras up within ~8 s.
+
+**Verified on hardware:** a cold reboot after the fix — setup succeeded on
+attempt 1, all four cameras 1920x1080 UYVY streaming (`NRestarts=0`). The retry
+path itself has **not** been seen to fire on real hardware, since that boot didn't
+lose the race. Deployed live by `scp` to `/data`, `remount,rw`, `mv` over
+`/usr/bin/nvp6324-csi-setup.sh`, `remount,ro` (old copy kept at
+`/data/nvp6324-csi-setup.sh.bak`); the recipe was rebuilt so the next flashed image
+carries it.
+
+**Live app update (same session):** `ultima-app` alone can be updated without a
+reflash — `bash build.sh ultima-app`, copy
+`.../work/beagley_ai-oe-linux/ultima-app/1.0/packages-split/ultima-app/usr/bin/ultima-app`
+out of the `falcon-yocto-build` volume, `scp` to `/data`, then `remount,rw` →
+`cp` to a temp name + `mv` over `/usr/bin/ultima-app` → `systemctl restart
+ultima-app` → `remount,ro`. Gotchas: the board is busybox (no `install`; use
+`cp` + `chmod`), and `remount,ro` fails with "mount point is busy" until the
+service restarts (the replaced binary is still running, unlinked) — restart first,
+then remount. `build.sh` lost its exec bit on this Synology checkout; invoke it
+as `bash build.sh`. The board regenerates its SSH host key every boot (tmpfs), so
+`ssh-keygen -R ultimagc-beagley.local` after each reboot.
