@@ -57,21 +57,47 @@ if ! graph_ready; then
 	exit 0
 fi
 
+# Routing + format are applied by apply_pipeline(), retried below. The
+# nvp6324 entity showing up in the media graph does not guarantee everything
+# media-ctl needs is ready yet (seen on hardware: a boot where the first -R
+# failed with "Unable to setup routes: No such file or directory", leaving the
+# 640x480 defaults and every camera STREAMON -EPIPE until the script was re-run
+# by hand once boot had settled -- most likely a bridge/SHIM entity or its
+# /dev/v4l-subdevN node not registered yet). The whole sequence is idempotent
+# (-R replaces the route table, -V sets absolute formats), so just retry it.
+#
 # Demux VC0/1/2/3. NB: media-ctl -R rejects the name-attached form ("name[...]")
 # with EINVAL; use the quoted entity name followed by a space and the route
 # list. active flag = [1]. SHIM source pads 1/2/3/4 = contexts 0/1/2/3.
-media-ctl -d "$MEDIA" -R "\"$BRIDGE\" [0/0->1/0[1],0/1->1/1[1],0/2->1/2[1],0/3->1/3[1]]"
-media-ctl -d "$MEDIA" -R "\"$SHIM\" [0/0->1/0[1],0/1->2/0[1],0/2->3/0[1],0/3->4/0[1]]"
-
-# Push 1080p UYVY down all four stream paths. The -R routing above resets each
+#
+# Then push 1080p UYVY down all four stream paths. The -R routing resets each
 # pad's stream-0 format to the 640x480 default, so VC0 (stream 0) MUST be set
 # here too or STREAMON on /dev/video2 EPIPEs. Setting a subdev's sink stream
 # propagates to its source pad internally. media-ctl returns non-zero on a
-# rejected format, so `set -e` fails the unit if any step is refused.
-for s in 0 1 2 3; do
-	media-ctl -d "$MEDIA" -V "\"$SRC\":4/$s [$FMT]"
-	media-ctl -d "$MEDIA" -V "\"$BRIDGE\":0/$s [$FMT]"
-	media-ctl -d "$MEDIA" -V "\"$SHIM\":0/$s [$FMT]"
+# rejected format, so each step aborts the attempt on failure. NB: explicit
+# `|| exit 1`, not `set -e` -- errexit is ignored inside a function called from
+# an `until`/`if` condition (it would silently run on past a failed -R).
+apply_pipeline() (
+	media-ctl -d "$MEDIA" -R "\"$BRIDGE\" [0/0->1/0[1],0/1->1/1[1],0/2->1/2[1],0/3->1/3[1]]" || exit 1
+	media-ctl -d "$MEDIA" -R "\"$SHIM\" [0/0->1/0[1],0/1->2/0[1],0/2->3/0[1],0/3->4/0[1]]" || exit 1
+	for s in 0 1 2 3; do
+		media-ctl -d "$MEDIA" -V "\"$SRC\":4/$s [$FMT]" || exit 1
+		media-ctl -d "$MEDIA" -V "\"$BRIDGE\":0/$s [$FMT]" || exit 1
+		media-ctl -d "$MEDIA" -V "\"$SHIM\":0/$s [$FMT]" || exit 1
+	done
+)
+
+# Up to ~15s of retries. Exhausting them is a real failure (non-zero, so the
+# unit shows failed), distinct from the camera-absent exit 0 above.
+attempt=1
+until apply_pipeline; do
+	if [ "$attempt" -ge 15 ]; then
+		log "routing/format still failing after $attempt attempts; giving up"
+		exit 1
+	fi
+	log "attempt $attempt failed; retrying in 1s"
+	attempt=$((attempt + 1))
+	sleep 1
 done
 
-log "VC0/1/2/3 routed + set to UYVY 1920x1080 (/dev/video2..5 ready)"
+log "VC0/1/2/3 routed + set to UYVY 1920x1080 (/dev/video2..5 ready, attempt $attempt)"
