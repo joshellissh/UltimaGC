@@ -1498,27 +1498,65 @@ entity to show in the graph; the exact ENOENT source (a bridge/SHIM entity or it
 `/dev/v4l-subdevN` node not yet there) was **not** pinned down — inferred, never
 reproduced.
 
-**Fix:** `nvp6324-csi-setup.sh` wraps the route + format sequence in
-`apply_pipeline()` and retries it up to 15x, 1 s apart, logging each failed
-attempt (`attempt N failed; retrying`); exhausting them exits 1 so the unit still
-shows `failed`. The sequence is idempotent (`-R` replaces the route table, `-V`
-sets absolute formats). Gotcha: the function uses explicit `|| exit 1`, **not**
-`set -e` — errexit is ignored inside a function called from an `until`/`if`
-condition, so a failed `-R` would have silently run on and returned only the last
-command's status. Unit-tested with a fake `media-ctl` (recovers after transient
-failures, exits 1 when persistent).
+**Fix (two rounds, same day):**
+1. First version wrapped the route + format sequence in `apply_pipeline()` with a
+   15x/1 s retry. That fixed the ENOENT case but not the next one:
+2. **Second failure mode — the "absent" verdict was wrong.** On a later boot the unit
+   logged `'nvp6324 4-0031' not present in /dev/media0 after 20s; leaving pipeline
+   unset` having run only **2.3 s** (5.82→8.14 s monotonic, ~1 s after the CSI
+   bridge probed at 7.0 s). The wait loop is fine (40 x `sleep 0.5` = 20.2 s, tested
+   both from SSH and under `systemd-run`), so it exited early on a *true*
+   `graph_ready`; the separate `if ! graph_ready` re-check right after then came
+   back *false* and printed the misleading message. Most likely `media-ctl -p`
+   reading the graph mid-registration (inferred from timings, not reproduced).
+   Because the camera was then "absent", exit 0 — no retry, pipeline left at
+   640x480, every `STREAMON` EPIPE.
+
+   Current script: ONE deadline loop (30 s, read off `/proc/uptime`, not an
+   iteration count). Each pass: `graph_ready` and, if so, `apply_pipeline`; success
+   only when both succeed in the same pass. "Absent" (exit 0, logged) is concluded
+   only after the deadline with the graph never seen; graph seen but routing never
+   applied is exit 1 (unit shows `failed`). Never split this back into "wait, then
+   re-check and decide" — a single `graph_ready` is not a reliable verdict.
+   Gotcha kept: `apply_pipeline` uses explicit `|| exit 1`, **not** `set -e` —
+   errexit is ignored inside a function called from an `if`/`until` condition.
+   Unit-tested with a fake `media-ctl` (flapping check, transient `-R` failures,
+   never-present → exit 0, always-failing → exit 1).
 
 **Live-recovery without a reboot:** run `/usr/bin/nvp6324-csi-setup.sh` by hand
 over SSH — it needs no remount (it only sets media-pipeline state), and the app's
 reconnect backoff picks the cameras up within ~8 s.
 
-**Verified on hardware:** a cold reboot after the fix — setup succeeded on
-attempt 1, all four cameras 1920x1080 UYVY streaming (`NRestarts=0`). The retry
-path itself has **not** been seen to fire on real hardware, since that boot didn't
-lose the race. Deployed live by `scp` to `/data`, `remount,rw`, `mv` over
-`/usr/bin/nvp6324-csi-setup.sh`, `remount,ro` (old copy kept at
-`/data/nvp6324-csi-setup.sh.bak`); the recipe was rebuilt so the next flashed image
-carries it.
+**Live-recovery caveat:** that manual run only works while nothing is streaming. With
+the app already streaming, the kernel refuses re-routing (`Unable to setup routes:
+Device or resource busy`) and the script retries for 30 s then exits 1. Harmless
+(the failed `-R` changes nothing), but don't expect it to "refresh" a working feed.
+
+**Verified on hardware:** five consecutive cold reboots with the final script — the
+unit succeeded each time at ~7.6 s monotonic on attempt 3 or 4 (i.e. the early
+passes found the graph not ready, which is exactly the case that used to fail), unit
+`active`, app `NRestarts=0`. The *failure* branches have only been exercised against
+the fake `media-ctl`, not seen on hardware. Deployed live by `scp` to `/data`,
+`remount,rw`, `mv` over `/usr/bin/nvp6324-csi-setup.sh`, `remount,ro` (previous copy
+kept at `/data/nvp6324-csi-setup.sh.bak`).
+
+**Capture node numbers are NOT stable across boots — don't test `/dev/video2..5`.**
+The wave5 codec and the 6 CSI contexts probe in varying order, so `/dev/video0/1`
+are sometimes wave5 and sometimes contexts 0/1 (seen both). The app resolves nodes
+through the media graph (`mediagraph.h`); do the same by hand: in `media-ctl -p`,
+entity `30102000.ticsi2rx context N` -> its `device node name`. (The script's
+"ready" log line still says `/dev/video2..5`; that text is stale.)
+
+**Transient EPIPE right after a good boot (open, benign so far).** With the unit
+succeeded, polling the four contexts at 1 s from first-SSH showed VC0-VC2 EPIPE at
+26 s, then all four streaming from 29 s through 150 s. The app's reconnect backoff
+(<= 8 s) covers this; a camera first-STREAMON `Broken pipe` followed ~1 s later by
+`streaming` is also visible in earlier app logs. Cause not identified. One earlier
+boot appeared to have VC0-VC2 still EPIPE at ~89 s, not reproduced. Also note the app
+only opens feeds while a camera screen is open or recording is on (so "streaming: 0"
+in the journal soon after boot is normal), apart from one brief attempt at ~4 s.
+Gotcha for test harnesses: `v4l2-ctl --stream-count` prints `fps` only per full
+second, so classify "OK" by absence of `returned -1` / `Broken pipe`, not by `fps`.
 
 **Live app update (same session):** `ultima-app` alone can be updated without a
 reflash — `bash build.sh ultima-app`, copy

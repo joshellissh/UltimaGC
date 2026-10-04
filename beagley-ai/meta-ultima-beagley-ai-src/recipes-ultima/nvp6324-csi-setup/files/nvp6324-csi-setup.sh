@@ -39,24 +39,6 @@ graph_ready() {
 	[ -e "$MEDIA" ] && media-ctl -d "$MEDIA" -p 2>/dev/null | grep -q "entity.*$SRC"
 }
 
-# The Cadence CSI2RX bridge finishes its async probe ~6.5s after boot (the
-# nvp6324 i2c subdev itself probes at ~1.8s); the media graph is not complete
-# until then. Wait, bounded (~20s), for the source entity to appear rather
-# than racing it. A missing camera is not fatal to the rest of the boot.
-i=0
-while [ "$i" -lt 40 ]; do
-	graph_ready && break
-	i=$((i + 1))
-	sleep 0.5
-done
-if ! graph_ready; then
-	# No camera by the deadline: log and succeed. A wired-but-absent camera
-	# must not fail the boot; a genuine format/route rejection below still does
-	# (via set -e), so the two failure modes stay distinguishable in the journal.
-	log "'$SRC' not present in $MEDIA after 20s; leaving pipeline unset"
-	exit 0
-fi
-
 # Routing + format are applied by apply_pipeline(), retried below. The
 # nvp6324 entity showing up in the media graph does not guarantee everything
 # media-ctl needs is ready yet (seen on hardware: a boot where the first -R
@@ -87,17 +69,47 @@ apply_pipeline() (
 	done
 )
 
-# Up to ~15s of retries. Exhausting them is a real failure (non-zero, so the
-# unit shows failed), distinct from the camera-absent exit 0 above.
-attempt=1
-until apply_pipeline; do
-	if [ "$attempt" -ge 15 ]; then
-		log "routing/format still failing after $attempt attempts; giving up"
-		exit 1
-	fi
-	log "attempt $attempt failed; retrying in 1s"
+# One deadline loop does both the waiting and the retrying. The Cadence CSI2RX
+# bridge finishes its async probe ~6.5-7s after boot (the nvp6324 i2c subdev
+# itself probes at ~1.8s) and the media graph is not complete until then. Each
+# pass: if the graph shows the camera, try to apply the pipeline; success is
+# only ever "graph_ready AND apply_pipeline both succeeded in the same pass".
+#
+# Do NOT split this into "wait for graph_ready, then check it again and decide
+# the camera is absent". That was the previous shape, and on hardware it gave up
+# ~1s after the bridge probed with "not present after 20s" (the unit had run for
+# 2.3s, not 20): the wait loop broke on a true graph_ready, and an immediate
+# second graph_ready came back false while the graph was still being assembled
+# (media-ctl -p reads the graph mid-registration). A single check is not a
+# reliable "absent" verdict, so absence is only concluded after the deadline.
+#
+# Deadline is read off /proc/uptime rather than counted in iterations, so it is a
+# real wall-clock bound however long each media-ctl call takes under boot load.
+now() { cut -d. -f1 /proc/uptime; }
+deadline=$(( $(now) + 30 ))
+attempt=0
+seen=
+while :; do
 	attempt=$((attempt + 1))
-	sleep 1
+	if graph_ready; then
+		seen=1
+		if apply_pipeline; then
+			log "VC0/1/2/3 routed + set to UYVY 1920x1080 (/dev/video2..5 ready, attempt $attempt)"
+			exit 0
+		fi
+		log "attempt $attempt: graph present but routing/format failed; retrying"
+	fi
+	[ "$(now)" -ge "$deadline" ] && break
+	sleep 0.5
 done
 
-log "VC0/1/2/3 routed + set to UYVY 1920x1080 (/dev/video2..5 ready, attempt $attempt)"
+if [ -n "$seen" ]; then
+	# The camera was in the graph but the pipeline could never be applied: a
+	# real failure, so the unit shows failed.
+	log "routing/format still failing after $attempt attempts (30s); giving up"
+	exit 1
+fi
+# Never seen in the graph within the deadline. A wired-but-absent camera must
+# not fail the boot, so succeed -- logged, and distinct from the failure above.
+log "'$SRC' not present in $MEDIA after 30s ($attempt checks); leaving pipeline unset"
+exit 0
