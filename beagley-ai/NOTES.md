@@ -1545,18 +1545,58 @@ The wave5 codec and the 6 CSI contexts probe in varying order, so `/dev/video0/1
 are sometimes wave5 and sometimes contexts 0/1 (seen both). The app resolves nodes
 through the media graph (`mediagraph.h`); do the same by hand: in `media-ctl -p`,
 entity `30102000.ticsi2rx context N` -> its `device node name`. (The script's
-"ready" log line still says `/dev/video2..5`; that text is stale.)
+"ready" log line now says "all 4 capture nodes".)
 
-**Transient EPIPE right after a good boot (open, benign so far).** With the unit
-succeeded, polling the four contexts at 1 s from first-SSH showed VC0-VC2 EPIPE at
-26 s, then all four streaming from 29 s through 150 s. The app's reconnect backoff
-(<= 8 s) covers this; a camera first-STREAMON `Broken pipe` followed ~1 s later by
-`streaming` is also visible in earlier app logs. Cause not identified. One earlier
-boot appeared to have VC0-VC2 still EPIPE at ~89 s, not reproduced. Also note the app
-only opens feeds while a camera screen is open or recording is on (so "streaming: 0"
-in the journal soon after boot is normal), apart from one brief attempt at ~4 s.
-Gotcha for test harnesses: `v4l2-ctl --stream-count` prints `fps` only per full
-second, so classify "OK" by absence of `returned -1` / `Broken pipe`, not by `fps`.
+**ROOT CAUSE of the post-boot `STREAMON: Broken pipe` (found 2026-10-04) — all four
+capture nodes must be formatted, not just the one you stream.** Everything above
+(the unit race, the retries) was real but is *not* what made the cameras show
+"intermittent" EPIPE after a boot where the unit had succeeded. That was this:
+each `/dev/videoN` context node defaults to **640x480**, and the four routes share
+one TI SHIM sink pad, so `STREAMON` on ANY context validates the link to EVERY
+routed context's node against that node's own format. Until all four nodes are
+1920x1080, every `STREAMON` returns -EPIPE. Pad formats were always correct.
+
+Evidence, not inference: with the two CSI modules rebuilt `-DDEBUG` the kernel
+printed `j721e-csi2rx 30102000.ticsi2rx: Width does not match (source 1920, sink
+640)` once per failed `STREAMON`; and a controlled test on a fresh boot — stream
+ctx0 with 1, then 2, then 3 of the other nodes set → EPIPE every time; with all
+four set → streams. It also explains every earlier symptom: an app (or my polling
+loop) opening nodes in order VC0..VC3 sees the first three `STREAMON`s fail and the
+fourth succeed, then everything works ("transient", ~1 s apart in the app logs,
+retry succeeds); and manual re-runs of the setup script "fixing" it was just timing.
+**Worst case it implies:** a screen that activates only ONE feed (the reverse-gear
+`RearCameraScreen` = `cameraFeed2`) opens a single node, so on a fresh boot it
+EPIPEs forever until something (the 4-feed grid, the dashcam recorder) has
+formatted the other three. Not the nvp6324 driver (its `get_frame_desc` is built
+from routing state, and the bridge's "Failed to find stream" EPIPE never fired).
+
+**Fix:** `nvp6324-csi-setup.sh`'s `apply_pipeline()` now also `S_FMT`s all four
+context nodes (`media-ctl -e "30102000.ticsi2rx context N"` resolves the node;
+`v4l2-ctl --set-fmt-video=width=1920,height=1080,pixelformat=UYVY`). The format
+lives in the driver's per-context state so it survives open/close. Verified on
+hardware over 3 reboots with the ORIGINAL modules: the very first action after
+boot, streaming only VC1 (no other node touched), works; all four then stream; the
+three untouched nodes already read 1920x1080.
+
+**Debugging technique for kernel `dev_dbg` without a debug kernel (reusable).** The
+board kernel has `CONFIG_DYNAMIC_DEBUG` off and no tracefs/kprobes (trimmed for boot
+time), so `dev_dbg` is compiled out. Don't rebuild the kernel for it (that changes
+`struct module` → every rootfs module must be rebuilt, and the FIT needs a card-swap
+recovery). Instead rebuild just the module(s) out-of-tree with `-DDEBUG` against the
+existing kernel build dir, which makes `dev_dbg` print unconditionally and keeps
+vermagic/CRCs identical: in the container (volume mounted read-only is enough),
+`W=.../work/beagley_ai-oe-linux/linux-bb.org/6.12.43+git`, put
+`$W/recipe-sysroot-native/usr/bin/aarch64-oe-linux` + `.../usr/bin` on PATH, copy the
+module's `.c` files to a scratch dir with `obj-m += x.o` / `ccflags-y += -DDEBUG`, then
+`make -C $W/build M=<scratch> ARCH=arm64 CROSS_COMPILE=aarch64-oe-linux-
+CC="aarch64-oe-linux-gcc -fuse-ld=bfd" LD=aarch64-oe-linux-ld.bfd modules`. Check
+`modinfo -F vermagic` matches (`6.12.43-ti SMP preempt_rt mod_unload aarch64`), back up
+the originals, `remount,rw`, `cp`+`mv` the `.ko` over the installed ones, reboot
+(NOTES above: reloading the CSI graph live is unsafe), read `dmesg`. **Restore the
+originals afterwards** (done 2026-10-04; backups were in `/data/dbgmod-orig/`).
+Gotchas: capture node numbers change per boot (wave5 vs CSI probe order) so never
+hard-code `/dev/video2..5`; `v4l2-ctl --stream-count` prints `fps` only per full
+second, so classify "OK" by absence of `returned -1`/`Broken pipe`, not by `fps`.
 
 **Live app update (same session):** `ultima-app` alone can be updated without a
 reflash — `bash build.sh ultima-app`, copy

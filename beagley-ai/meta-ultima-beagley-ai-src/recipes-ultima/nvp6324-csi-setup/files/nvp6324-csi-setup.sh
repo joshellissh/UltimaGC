@@ -10,6 +10,20 @@
 # the format down the chain once; it then persists in each subdev's active
 # state across STREAMOFF/STREAMON, so this is a boot-time one-shot.
 #
+# THE CAPTURE NODES MUST BE FORMATTED TOO -- ALL FOUR, NOT JUST THE ONE YOU
+# STREAM. The four routes share one TI SHIM sink pad, so starting ANY context
+# validates the link to EVERY routed context's /dev/videoN against that node's
+# own format, and each node defaults to 640x480. Confirmed on hardware with the
+# kernel's own debug output ("j721e-csi2rx: Width does not match (source 1920,
+# sink 640)"): STREAMON on a node fails with 1, 2 or 3 of the 4 nodes set to
+# 1920x1080 and succeeds only once all four are. So nothing could stream after a
+# fresh boot until something had touched all four nodes -- an app opening them in
+# order saw its first three STREAMONs EPIPE and the fourth succeed (looking like
+# a boot race), and a single-feed screen (e.g. the reverse camera) opening only
+# one node would EPIPE forever. Not a driver or timing bug: the pad formats were
+# always right. apply_pipeline() therefore also S_FMTs all four nodes; the format
+# lives in the driver's per-context state, so it survives open/close.
+#
 # ROUTING. The driver + DT wire ONLY VC0 through the bridge and SHIM
 # (ENABLED,IMMUTABLE). This board runs 4 AHD cameras on CH0-CH3 (arbiter
 # vc_mask=0xF, mipi_mclk=1049 -- see recipes-kernel/nvp6324/files/nvp6324.conf),
@@ -29,6 +43,7 @@ set -e
 
 MEDIA=/dev/media0
 FMT="fmt:UYVY8_1X16/1920x1080"
+NODEFMT="width=1920,height=1080,pixelformat=UYVY"   # same format, as a capture-node S_FMT
 SRC="nvp6324 4-0031"                          # i2c bus 4, addr 0x31 (fixed)
 BRIDGE="cdns_csi2rx.30101000.csi-bridge"      # fixed SoC address
 SHIM="30102000.ticsi2rx"                       # fixed SoC address
@@ -67,6 +82,14 @@ apply_pipeline() (
 		media-ctl -d "$MEDIA" -V "\"$BRIDGE\":0/$s [$FMT]" || exit 1
 		media-ctl -d "$MEDIA" -V "\"$SHIM\":0/$s [$FMT]" || exit 1
 	done
+	# Capture-node formats (see the header: all four are required). Nodes are
+	# resolved from the media graph -- /dev/videoN numbers differ boot to boot
+	# (the wave5 codec and the CSI contexts probe in varying order).
+	for s in 0 1 2 3; do
+		node=$(media-ctl -d "$MEDIA" -e "$SHIM context $s") || exit 1
+		[ -n "$node" ] || exit 1
+		v4l2-ctl -d "$node" --set-fmt-video="$NODEFMT" >/dev/null || exit 1
+	done
 )
 
 # One deadline loop does both the waiting and the retrying. The Cadence CSI2RX
@@ -94,7 +117,7 @@ while :; do
 	if graph_ready; then
 		seen=1
 		if apply_pipeline; then
-			log "VC0/1/2/3 routed + set to UYVY 1920x1080 (/dev/video2..5 ready, attempt $attempt)"
+			log "VC0/1/2/3 routed + set to UYVY 1920x1080 (+ all 4 capture nodes, attempt $attempt)"
 			exit 0
 		fi
 		log "attempt $attempt: graph present but routing/format failed; retrying"
