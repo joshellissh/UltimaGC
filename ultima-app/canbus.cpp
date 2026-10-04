@@ -431,10 +431,11 @@ void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
         int cal = be_s16(d, 2);
         if (cal != m_calSelect) { m_calSelect = cal; emit calSelectChanged(); }
         // 0/1/2/3 = Valet/Sport/Sport+/Race on the dash; other enum values have
-        // no known meaning yet, so they fall back to VALET (the same default
-        // shown before the first 0x60A frame arrives).
+        // no known meaning yet, so the indicator goes blank rather than
+        // showing a stale or wrong mode. (Before the first 0x60A frame it
+        // shows the VALET default.)
         static const QString calModes[] = { QStringLiteral("VALET"), QStringLiteral("SPORT"), QStringLiteral("SPORT+"), QStringLiteral("RACE") };
-        const QString mode = (cal >= 0 && cal <= 3) ? calModes[cal] : calModes[0];
+        const QString mode = (cal >= 0 && cal <= 3) ? calModes[cal] : QString();
         if (mode != m_driveMode) { m_driveMode = mode; emit driveModeChanged(); }
         int tc = be_s16(d, 4);
         if (tc != m_tcSwitch) { m_tcSwitch = tc; emit tcSwitchChanged(); }

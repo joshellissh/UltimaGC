@@ -94,7 +94,7 @@ class CanBus : public QObject
     // review.
     Q_PROPERTY(bool transmissionAuto READ transmissionAuto NOTIFY transmissionAutoChanged)
     // Drive mode display, derived from calSelect (0x60A slot 2): 0 = "VALET",
-    // 1 = "SPORT", 2 = "SPORT+", 3 = "RACE", anything else (or no 0x60A frame yet) = "VALET". The dev-build
+    // 1 = "SPORT", 2 = "SPORT+", 3 = "RACE", anything else = "" (blank); "VALET" until the first 0x60A frame. The dev-build
     // simulator (see simulateTick()) cycles through them for layout review.
     Q_PROPERTY(QString driveMode READ driveMode NOTIFY driveModeChanged)
 
