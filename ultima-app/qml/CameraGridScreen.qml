@@ -150,10 +150,10 @@ Item {
         readonly property real centerX: (width - tileW) / 2
 
         readonly property var tiles: [
-            { label: "FRONT", x: centerX,           y: stackTop },
-            { label: "REAR",  x: centerX,           y: stackTop + tileH + gap },
-            { label: "LEFT",  x: 0,                 y: (height - tileH) / 2 },
-            { label: "RIGHT", x: width - tileW,     y: (height - tileH) / 2 }
+            { x: centerX,           y: stackTop },
+            { x: centerX,           y: stackTop + tileH + gap },
+            { x: 0,                 y: (height - tileH) / 2 },
+            { x: width - tileW,     y: (height - tileH) / 2 }
         ]
 
         Repeater {
@@ -185,7 +185,7 @@ Item {
                     style: Text.Outline
                     styleColor: "black"
                     font.pixelSize: 18
-                    text: modelData.label + (tile.feed.streaming ? "" : tile.feed.failed ? "  FAILED" : "  NO SIGNAL")
+                    text: tile.feed.streaming ? "" : tile.feed.failed ? "FAILED" : "NO SIGNAL"
                 }
             }
         }
