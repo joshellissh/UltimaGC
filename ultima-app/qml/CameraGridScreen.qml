@@ -4,7 +4,8 @@ import Ultima 1.0
 // Camera grid screen — reached by swiping right from the main cluster (mirror
 // image of DiagnosticScreen, which owns swipe-left). Shows the 4 raw camera
 // feeds (cameraFeed1..cameraFeed4 context properties, see main.cpp) as a
-// plain 2x2 grid, one quadrant per physical camera, no
+// plain cross layout (front top-center, rear under it, left/right
+// at the sides), one tile per physical camera, no
 // stitching — same content Camera360Screen shows on tap/reverse-gear, but
 // reached as a persistent swipeable screen instead of a tap-triggered
 // overlay. Deliberately a separate screen/file rather than sharing
@@ -131,32 +132,49 @@ Item {
         text: "CAMERAS"
     }
 
-    // 2x2 grid, one quadrant per camera — identical layout to
-    // Camera360Screen's, pillarboxed to whatever aspect ratio CameraFeed
-    // actually negotiated.
-    Grid {
+    // Cross layout, one tile per camera (feeds order is [front, rear, left,
+    // right] — see Camera360Screen.qml): front top-center with rear directly
+    // under it, left/right flush to the screen edges and vertically centered.
+    // Tiles are 16:9; the center column is 2 tiles + gap tall, clear of the
+    // title above and the page indicator below. CameraView is pillarboxed to
+    // whatever aspect ratio CameraFeed actually negotiated.
+    Item {
+        id: layout
         anchors.fill: parent
-        columns: 2
-        rows: 2
         visible: !root.showPlaceholder
 
+        readonly property real tileH: 296
+        readonly property real tileW: Math.round(tileH * 16 / 9)
+        readonly property real gap: 8
+        readonly property real stackTop: 60
+        readonly property real centerX: (width - tileW) / 2
+
+        readonly property var tiles: [
+            { label: "FRONT", x: centerX,           y: stackTop },
+            { label: "REAR",  x: centerX,           y: stackTop + tileH + gap },
+            { label: "LEFT",  x: 0,                 y: (height - tileH) / 2 },
+            { label: "RIGHT", x: width - tileW,     y: (height - tileH) / 2 }
+        ]
+
         Repeater {
-            model: 4
+            model: layout.tiles
 
             Item {
-                id: quadrant
-                width: root.width / 2
-                height: root.height / 2
+                id: tile
+                x: modelData.x
+                y: modelData.y
+                width: layout.tileW
+                height: layout.tileH
                 property var feed: root.feeds[index]
 
                 CameraView {
-                    feed: quadrant.feed
+                    feed: tile.feed
                     anchors.centerIn: parent
                     height: parent.height
-                    width: quadrant.feed.frameHeight > 0
-                           ? Math.round(parent.height * (quadrant.feed.frameWidth / quadrant.feed.frameHeight))
+                    width: tile.feed.frameHeight > 0
+                           ? Math.round(parent.height * (tile.feed.frameWidth / tile.feed.frameHeight))
                            : Math.round(parent.height * 16 / 9)
-                    visible: !quadrant.feed.failed
+                    visible: !tile.feed.failed
                 }
 
                 Text {
@@ -167,14 +185,14 @@ Item {
                     style: Text.Outline
                     styleColor: "black"
                     font.pixelSize: 18
-                    text: "CAM " + (index + 1) + (quadrant.feed.streaming ? "" : quadrant.feed.failed ? "  FAILED" : "  NO SIGNAL")
+                    text: modelData.label + (tile.feed.streaming ? "" : tile.feed.failed ? "  FAILED" : "  NO SIGNAL")
                 }
             }
         }
     }
 
     // Page indicator — this screen is the "left" page (see PageIndicator.qml
-    // comment). Declared after the Grid so it paints on top of the camera
+    // comment). Declared after the layout so it paints on top of the camera
     // feeds; its dots carry their own dark border for contrast against
     // whatever's under them, same reasoning as the outlined "CAM N" labels
     // above.
