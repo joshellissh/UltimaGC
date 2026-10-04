@@ -430,11 +430,11 @@ void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
         // enum 0-11, tcSwitch leaves Sign blank (read as signed, like tps1).
         int cal = be_s16(d, 2);
         if (cal != m_calSelect) { m_calSelect = cal; emit calSelectChanged(); }
-        // 0/1/2 = Normal/Sport/Sport+ on the dash; other enum values have
-        // no known meaning yet, so the indicator goes blank rather than
-        // showing a stale mode.
-        static const QString calModes[] = { QStringLiteral("NORMAL"), QStringLiteral("SPORT"), QStringLiteral("SPORT+") };
-        const QString mode = (cal >= 0 && cal <= 2) ? calModes[cal] : QString();
+        // 0/1/2/3 = Valet/Sport/Sport+/Race on the dash; other enum values have
+        // no known meaning yet, so they fall back to VALET (the same default
+        // shown before the first 0x60A frame arrives).
+        static const QString calModes[] = { QStringLiteral("VALET"), QStringLiteral("SPORT"), QStringLiteral("SPORT+"), QStringLiteral("RACE") };
+        const QString mode = (cal >= 0 && cal <= 3) ? calModes[cal] : calModes[0];
         if (mode != m_driveMode) { m_driveMode = mode; emit driveModeChanged(); }
         int tc = be_s16(d, 4);
         if (tc != m_tcSwitch) { m_tcSwitch = tc; emit tcSwitchChanged(); }
@@ -584,10 +584,10 @@ void CanBus::simulateTick()
         emit transmissionAutoChanged();
     }
 
-    // Drive mode: step through NORMAL -> SPORT -> SPORT+ on a slow cycle so
+    // Drive mode: step through VALET -> SPORT -> SPORT+ -> RACE on a slow cycle so
     // the indicator can be exercised without real CAN hardware.
-    static const QString driveModes[] = { QStringLiteral("NORMAL"), QStringLiteral("SPORT"), QStringLiteral("SPORT+") };
-    int driveModeIndex = int(std::fmod(m_simElapsedS / 5.0, 3.0));
+    static const QString driveModes[] = { QStringLiteral("VALET"), QStringLiteral("SPORT"), QStringLiteral("SPORT+"), QStringLiteral("RACE") };
+    int driveModeIndex = int(std::fmod(m_simElapsedS / 5.0, 4.0));
     if (driveModes[driveModeIndex] != m_driveMode) {
         m_driveMode = driveModes[driveModeIndex];
         emit driveModeChanged();

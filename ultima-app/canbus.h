@@ -93,8 +93,8 @@ class CanBus : public QObject
     // dev-build simulator (see simulateTick()) still drives it for layout
     // review.
     Q_PROPERTY(bool transmissionAuto READ transmissionAuto NOTIFY transmissionAutoChanged)
-    // Drive mode display, derived from calSelect (0x60A slot 2): 0 = "NORMAL",
-    // 1 = "SPORT", 2 = "SPORT+", anything else = "" (blank). The dev-build
+    // Drive mode display, derived from calSelect (0x60A slot 2): 0 = "VALET",
+    // 1 = "SPORT", 2 = "SPORT+", 3 = "RACE", anything else (or no 0x60A frame yet) = "VALET". The dev-build
     // simulator (see simulateTick()) cycles through them for layout review.
     Q_PROPERTY(QString driveMode READ driveMode NOTIFY driveModeChanged)
 
@@ -305,7 +305,7 @@ private:
     bool m_hazard = false;
     bool m_cruiseControl = false;
     bool m_transmissionAuto = true;
-    QString m_driveMode;                   // "" until a 0x60A frame maps calSelect 0-2
+    QString m_driveMode = QStringLiteral("VALET");  // default until a 0x60A frame maps calSelect 0-3
     double m_oilPressurePsi = 0.0;             // raw reading behind m_oilPressureWarn
     double m_vbat = 0.0;                       // raw reading (V) behind m_batteryWarn
     QString m_cruiseState = QStringLiteral("OFF"); // raw OFF/ON/ACTIVE behind m_cruiseControl

@@ -892,7 +892,9 @@ Window {
         font.pixelSize: 28
         text: sim.driveMode
         color: {
+            if (sim.driveMode === "VALET") return "green"
             if (sim.driveMode === "SPORT+") return "orange"
+            if (sim.driveMode === "RACE") return "red"
             return "white"
         }
     }

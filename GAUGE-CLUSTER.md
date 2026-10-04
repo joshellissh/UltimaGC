@@ -265,7 +265,7 @@ Read from SCal Datastreams → Generic CAN Transmit → Transmit Content. Frame 
 | `0x605` | 2-3 | ect1 (coolant) | raw × 0.18 + 32 → °F; `coolantWarn` if > 220 °F |
 | `0x605` | 4-5 | ManualAuto_U12 → `transmissionAuto` | unsigned enum; observed values: 0 = Automatic, 8192 (0x2000) = Manual; decoded as zero → Automatic. Values reported by the user from the car, not candump-confirmed. |
 | `0x608` | 0-1 | eop1 (oil pressure) | raw × 0.0145038 → psi; `oilPressureWarn` if rpm ≥ 600 && psi ≤ 40 |
-| `0x60A` | 2-3 | calSelect | signed enum (0-11), active tune/cal map; raw value on the Diagnostics screen (`CanBus::calSelect`); 0/1/2 also drive the dash drive-mode indicator as NORMAL/SPORT/SPORT+ (`CanBus::driveMode`, blank for other values). From `docs/Auto Bionics CAN2 Mapping.xlsx`, not candump-confirmed. |
+| `0x60A` | 2-3 | calSelect | signed enum (0-11), active tune/cal map; raw value on the Diagnostics screen (`CanBus::calSelect`); 0/1/2/3 also drive the dash drive-mode indicator as VALET/SPORT/SPORT+/RACE (`CanBus::driveMode`, VALET for other values). From `docs/Auto Bionics CAN2 Mapping.xlsx`, not candump-confirmed. |
 | `0x60A` | 4-5 | tcSwitch | traction-control switch position, y=x (sheet leaves Sign and enum blank; read as signed). Raw value on the Diagnostics screen (`CanBus::tcSwitch`) only; meaning of each position not yet known. Not candump-confirmed. |
 | `0x60E` | 2-3 | gear | Syvecs enum 0=Unknown 1=R 2=N 3..10=1st..8th (this car has 7 forward gears; 10/8th falls back to Neutral) → QML index into "PRN1234567": 0=P 1=R 2=N 3..9=1st..7th |
 | `0x60E` | 4-5 | vbat | V × 0.001 (unsigned); `batteryWarn` if v < 12.5 |
@@ -276,7 +276,7 @@ Read from SCal Datastreams → Generic CAN Transmit → Transmit Content. Frame 
 - `sensorWarningLevel` — `checkEngine` currently derives from `limpMode` alone.
 - `mapMax` (boost, `0x614`/frame 21) — previously documented here as verified and wired to the boost gauge, but the xlsx built from `CAN2.png` (the source of truth for this mapping) shows frame 21 as all SPARE. Decode removed from `CanBus::decodeFrame()`. The boost gauge isn't stuck at 0 waiting on this, though — it was rewired to `map1A` (`0x600` bytes 6-7, see the frame map above) instead, which *is* SCal-confirmed.
 
-**Drive mode (`driveMode`)** is derived from `calSelect` (`0x60A` slot 2): 0 = NORMAL, 1 = SPORT, 2 = SPORT+ (orange on the dash); any other value leaves it blank, and it stays blank until the first `0x60A` frame arrives. The dev-build simulator (`simulateTick()`) cycles the three modes for layout review.
+**Drive mode (`driveMode`)** is derived from `calSelect` (`0x60A` slot 2): 0 = VALET, 1 = SPORT, 2 = SPORT+, 3 = RACE (VALET green, SPORT white, SPORT+ orange, RACE red on the dash); any other value, or no `0x60A` frame yet, shows VALET. The dev-build simulator (`simulateTick()`) cycles the four modes for layout review.
 
 ### MCE18 CAN Bus Expander (DSS-Configured 2026-08-21, Wiring Still Unconfirmed)
 
