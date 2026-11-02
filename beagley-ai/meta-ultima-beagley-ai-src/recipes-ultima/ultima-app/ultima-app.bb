@@ -1,7 +1,7 @@
 SUMMARY = "Ultima fullscreen Qt5 QML gauge cluster"
 LICENSE = "CLOSED"
 
-DEPENDS = "qtbase qtdeclarative"
+DEPENDS = "qtbase qtdeclarative alsa-lib"
 # ti-img-rogue-driver explicit here (not just via tisdk-base-image.bbappend's
 # IMAGE_INSTALL) so the GPU module can't silently drop out of the image if
 # that list changes later — same reasoning this project already used once
@@ -12,9 +12,15 @@ DEPENDS = "qtbase qtdeclarative"
 # build- or run-time libraries. The earlier software-encode spikes that pulled
 # those in were BeaglePlay/AM625 (a board with no hardware encoder) and have
 # been removed; see DASHCAM.md and beagley-ai/wave5-enc/.
-RDEPENDS:${PN} = "qtbase-plugins qtdeclarative-qmlplugins iproute2 ti-img-rogue-driver"
+RDEPENDS:${PN} = "qtbase-plugins qtdeclarative-qmlplugins iproute2 ti-img-rogue-driver alsa-lib"
 
 inherit qmake5 systemd
+
+# Alert sounds over HDMI audio (soundplayer.cpp): link libasound. Opt-in in
+# ultima-app.pro so the macOS/WSL dev builds, which have no libasound, stay
+# unchanged. The audio drivers themselves are kernel modules loaded at udev
+# coldplug (after the first frame) — nothing here needs to force-load them.
+EXTRA_QMAKEVARS_PRE += "CONFIG+=ultima_alsa"
 
 # Same shared, board-agnostic ultima-app source — bind-mounted read-only at a
 # fixed container path (see build.sh) and copied into WORKDIR here so the
@@ -107,6 +113,17 @@ do_install() {
     # mirroring the Buildroot boards' separate /data partition), and
     # ultima-data-mount.bb mounts it here before this service starts.
     install -d ${D}/data
+
+    # Alert sounds (SOUND.md): ship every .wav in ultima-app/assets/sounds. The
+    # app also searches /data/sounds first, so one can be swapped on a running
+    # car without a rebuild. A name with no file falls back to a built-in tone.
+    # (if/fi, not `[ -e ] &&`: an empty glob must not trip do_install's set -e.)
+    install -d ${D}${datadir}/ultima/sounds
+    for f in ${S}/assets/sounds/*.wav; do
+        if [ -e "$f" ]; then
+            install -m 0644 "$f" ${D}${datadir}/ultima/sounds/
+        fi
+    done
 }
 
-FILES:${PN} += "${bindir}/ultima-app ${systemd_unitdir}/system/ultima-app.service ${sysconfdir}/udev/rules.d/70-can.rules ${sysconfdir}/modules-load.d/pvrsrvkm.conf /data"
+FILES:${PN} += "${bindir}/ultima-app ${systemd_unitdir}/system/ultima-app.service ${sysconfdir}/udev/rules.d/70-can.rules ${sysconfdir}/modules-load.d/pvrsrvkm.conf /data ${datadir}/ultima/sounds"

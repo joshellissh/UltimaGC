@@ -27,11 +27,22 @@ CONFIG += c++17
 TARGET = ultima-app
 HEADERS += odostore.h canbus.h systemclock.h systemstats.h camerafeed.h cameraview.h \
     cameracalibration.h warpmesh.h shadermanager.h surroundtexture.h surroundview.h \
-    calibrationstore.h dmabuftexture.h mediagraph.h dashcamrecorder.h wave5encoder.h
+    calibrationstore.h dmabuftexture.h mediagraph.h dashcamrecorder.h wave5encoder.h \
+    soundplayer.h soundevents.h
 SOURCES += main.cpp odostore.cpp canbus.cpp systemclock.cpp systemstats.cpp camerafeed.cpp cameraview.cpp \
     cameracalibration.cpp warpmesh.cpp shadermanager.cpp surroundtexture.cpp surroundview.cpp \
-    calibrationstore.cpp dmabuftexture.cpp mediagraph.cpp dashcamrecorder.cpp wave5encoder.cpp
+    calibrationstore.cpp dmabuftexture.cpp mediagraph.cpp dashcamrecorder.cpp wave5encoder.cpp \
+    soundplayer.cpp soundevents.cpp
 RESOURCES += qml.qrc
+
+# Alert sounds (soundplayer.cpp) go straight to ALSA. Opt-in, like
+# ultima_dev_sim: the Yocto recipe passes CONFIG+=ultima_alsa (and depends on
+# alsa-lib); the macOS / WSL dev builds don't have libasound, so without the
+# flag SoundPlayer compiles to a no-op and nothing else changes.
+ultima_alsa {
+    DEFINES += ULTIMA_ALSA
+    LIBS += -lasound
+}
 
 # Off by default so the Buildroot/Pi build always uses real SocketCAN.
 # Dev-build scripts pass CONFIG+=ultima_dev_sim to get simulated gauge data

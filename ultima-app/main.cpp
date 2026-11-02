@@ -38,6 +38,8 @@
 #include "cameraview.h"
 #include "surroundview.h"
 #include "dashcamrecorder.h"
+#include "soundplayer.h"
+#include "soundevents.h"
 
 static double readUptime() {
     double t = 0;
@@ -210,6 +212,12 @@ int main(int argc, char *argv[])
     DashcamRecorder dashcam({ &cameraFeed1, &cameraFeed2, &cameraFeed3, &cameraFeed4 });
     dashcam.start();
 
+    // Alert sounds out of the HDMI audio path (warnings, drive mode, turn
+    // signal ticks, dashcam chimes). The player's worker thread opens ALSA
+    // lazily on the first sound, so this costs nothing at boot; SoundEvents
+    // (below, once the QML window exists) decides when to play what.
+    SoundPlayer soundPlayer;
+
     qmlRegisterType<CameraView>("Ultima", 1, 0, "CameraView");
     qmlRegisterType<SurroundView>("Ultima", 1, 0, "SurroundView");
     {
@@ -242,6 +250,9 @@ int main(int argc, char *argv[])
     // (main.qml). On the macOS/sim dev build dvrReady() is always false, so
     // dashcam.recording stays false and the badge is always shown.
     engine.rootContext()->setContextProperty("dashcam", &dashcam);
+    // For one-off sounds from QML: soundPlayer.play("success"). The automatic
+    // ones are wired in C++ by SoundEvents, not here.
+    engine.rootContext()->setContextProperty("soundPlayer", &soundPlayer);
     engine.rootContext()->setContextProperty("cameraFeed1", &cameraFeed1);
     // EXPERIMENT (2026-08-26): ULTIMA_CAM_FANOUT=1 points cameraFeed2..4 at
     // cameraFeed1's object, so every grid quadrant renders the one attached
@@ -282,6 +293,11 @@ int main(int argc, char *argv[])
     // boot appends and still lands on the serial console for a
     // serial boot-timing capture to pick up in the same timeline as power-on).
     auto rootWindow = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+
+    // Sound policy: which event plays which sound (see soundevents.h). Needs
+    // the root window for main.qml's blinkPhase turn-signal clock.
+    SoundEvents soundEvents(&soundPlayer, &canBus, &dashcam, rootWindow);
+
     std::atomic<bool> renderedOnce{false};
     std::atomic<bool> swappedOnce{false};
     auto logFirstFrame = [t0](std::atomic<bool> &done, const char *label) -> bool {
@@ -457,6 +473,32 @@ int main(int argc, char *argv[])
                 dashcam.dismissFormatPrompt();
         });
         dvrTestTimer->start(250);
+
+        // Debug-only: plays a sound by name from /tmp/ultima-sound.request
+        // (e.g. `echo alarm > /tmp/ultima-sound.request`; SoundPlayer::names()
+        // lists them) — same polled-file pattern as the triggers above, for
+        // auditioning the sounds over SSH without provoking the real event.
+        auto *soundTestTimer = new QTimer(&app);
+        QObject::connect(soundTestTimer, &QTimer::timeout, &soundPlayer, [&soundPlayer]() {
+            QFile trigger(QStringLiteral("/tmp/ultima-sound.request"));
+            if (!trigger.exists())
+                return;
+            QString name;
+            if (trigger.open(QIODevice::ReadOnly)) {
+                name = QString::fromUtf8(trigger.readAll()).trimmed();
+                trigger.close();
+            }
+            QFile::remove(QStringLiteral("/tmp/ultima-sound.request"));
+            if (name == QLatin1String("all")) {
+                // Staggered: the player's queue is short on purpose.
+                int i = 0;
+                for (const QString &n : SoundPlayer::names())
+                    QTimer::singleShot(1500 * i++, &soundPlayer, [&soundPlayer, n]() { soundPlayer.play(n); });
+            } else if (!name.isEmpty()) {
+                soundPlayer.play(name);
+            }
+        });
+        soundTestTimer->start(250);
     }
 
     return app.exec();
