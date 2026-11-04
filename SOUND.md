@@ -1,11 +1,11 @@
 # Alert sounds over HDMI audio
 
-The dash makes short alert/feedback sounds (warnings, drive-mode change, turn-signal
-ticks, dashcam chimes) through the panel's HDMI audio. Status: **hardware path verified
+The dash makes short alert/feedback sounds (warnings and turn-signal
+ticks) through the panel's HDMI audio. Status: **hardware path verified
 2026-11-02; the app code below is written and compile-checked against Qt 5.15.13 /
-alsa-lib 1.2.11 but has not yet been built into an image or heard on the board. No
-`.wav` files are in the repo yet, so until some are added every sound plays its
-built-in tone.**
+alsa-lib 1.2.11 but has not yet been built into an image or heard on the board. The
+four WAVs (`alarm`, `warn`, `tick`, `tock`) are in `ultima-app/assets/sounds/`; a name
+with no file would still play its built-in tone.**
 
 ## Hardware path (verified on the board, 6.12.43-ti)
 
@@ -50,8 +50,8 @@ kernel/DT already registers it.
   - Compiled for real only with `CONFIG+=ultima_alsa` (set by the Yocto recipe; the
     recipe also adds `alsa-lib` to DEPENDS/RDEPENDS). Without it (macOS/WSL dev builds)
     `play()` is a no-op, optionally logging with `ULTIMA_SOUND_LOG=1`.
-- `ultima-app/soundevents.{h,cpp}` — `SoundEvents`. Pure signal wiring over `CanBus`,
-  `DashcamRecorder` and `main.qml`'s root window; none of those were modified. All the
+- `ultima-app/soundevents.{h,cpp}` — `SoundEvents`. Pure signal wiring over `CanBus`
+  and `main.qml`'s root window; none of those were modified. All the
   policy (what, when, cooldowns) lives here.
 
 | Event | Sound | Rule |
@@ -60,17 +60,12 @@ kernel/DT already registers it.
 | Battery warn | `warn` (falling two-tone) | only if still low with engine running (rpm >= 600) for 2-4 s — `vbat < 12.5 V` is simply true at key-on / cranking; re-alerts every 60 s |
 | Low fuel | `warn` | rising edge, 120 s cooldown (sender slosh at 1/4 tank) |
 | Check engine / ABS | `warn` | rising edge, 10 s cooldown |
-| Drive mode change | `mode_valet` 1 beep, `mode_sport` 2, `mode_sportplus` 3 rising, `mode_race` 4 fast | beep count = mode |
 | Turn signal / hazard | `tick` (lit phase) / `tock` (dark phase) | off the QML `blinkPhase` clock, so it is in step with the icon; plus an immediate tick on engage |
-| Dashcam recording start / stop | `rec_start` rising / `rec_stop` falling | on `recordingChanged`, 3 s cooldown |
-| Dashcam "format this drive?" | `prompt` (double ping) | when the prompt opens |
-| Format result | `success` / `error` | |
 
-CAN-derived sounds (warnings, drive mode) are **held back for 8 s after launch**: the app
+CAN-derived sounds (warnings) are **held back for 8 s after launch**: the app
 starts with every flag false and the first CAN frames flip several to their real value,
-which is state catching up rather than an event. Consequence: a drive-mode frame that
-first arrives *after* 8 s (CAN link up late) will chime once for the initial mode.
-Dashcam and turn-signal sounds are not held back.
+which is state catching up rather than an event.
+Turn-signal sounds are not held back.
 
 ## Configuration / testing
 
@@ -88,8 +83,6 @@ pattern as the other debug hooks in `main.cpp`):
     echo alarm > /tmp/ultima-sound.request        # one sound
     echo all   > /tmp/ultima-sound.request        # every sound, 1.5 s apart
 
-Names: alarm, error, mode_race, mode_sport, mode_sportplus, mode_valet, prompt,
-rec_start, rec_stop, success, tick, tock, warn. The existing hooks also exercise the
-events end to end: `/tmp/ultima-indicator.request` (left/right/hazard -> ticks) and
-`/tmp/ultima-dvrtest.request` (prompt/success/error -> chimes). QML can play one-offs
-via the `soundPlayer` context property: `soundPlayer.play("success")`.
+Names: alarm, tick, tock, warn. The existing indicator hook also exercises the events
+end to end: `/tmp/ultima-indicator.request` (left/right/hazard -> ticks). QML can play
+one-offs via the `soundPlayer` context property: `soundPlayer.play("warn")`.

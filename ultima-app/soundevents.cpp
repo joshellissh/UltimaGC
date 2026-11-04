@@ -1,7 +1,6 @@
 #include "soundevents.h"
 
 #include "canbus.h"
-#include "dashcamrecorder.h"
 #include "soundplayer.h"
 
 namespace {
@@ -14,19 +13,9 @@ constexpr qint64 kBatteryRepeatMs = 60000;
 constexpr qint64 kLowFuelCooldownMs = 120000;   // fuel sender slosh around 1/4 tank
 constexpr qint64 kMinTickGapMs = 150;      // merge the engage tick with the first blink-phase tick
 constexpr double kEngineRunningRpm = 600.0; // same threshold canbus.cpp uses for the oil warning
-
-int driveModeLevel(const QString &mode)
-{
-    if (mode == QLatin1String("VALET"))  return 0;
-    if (mode == QLatin1String("SPORT"))  return 1;
-    if (mode == QLatin1String("SPORT+")) return 2;
-    if (mode == QLatin1String("RACE"))   return 3;
-    return -1;   // blank / unknown calSelect: say nothing
-}
 } // namespace
 
-SoundEvents::SoundEvents(SoundPlayer *player, CanBus *can, DashcamRecorder *dashcam,
-                         QObject *window, QObject *parent)
+SoundEvents::SoundEvents(SoundPlayer *player, CanBus *can, QObject *window, QObject *parent)
     : QObject(parent)
     , m_player(player)
     , m_can(can)
@@ -66,33 +55,12 @@ SoundEvents::SoundEvents(SoundPlayer *player, CanBus *can, DashcamRecorder *dash
     connect(&m_batteryPoll, &QTimer::timeout, this, &SoundEvents::pollBattery);
     connect(can, &CanBus::batteryWarnChanged, this, &SoundEvents::onBatteryWarnChanged);
 
-    // --- Drive mode ---------------------------------------------------
-    connect(can, &CanBus::driveModeChanged, this, &SoundEvents::onDriveModeChanged);
-
     // --- Turn signals / hazards ---------------------------------------
     connect(can, &CanBus::leftIndicatorChanged, this, &SoundEvents::onIndicatorsChanged);
     connect(can, &CanBus::rightIndicatorChanged, this, &SoundEvents::onIndicatorsChanged);
     connect(can, &CanBus::hazardChanged, this, &SoundEvents::onIndicatorsChanged);
     if (window)
         connect(window, SIGNAL(blinkPhaseChanged()), this, SLOT(onBlinkPhase()));
-
-    // --- Dashcam ------------------------------------------------------
-    connect(dashcam, &DashcamRecorder::recordingChanged, this, [this, dashcam] {
-        fire(QStringLiteral("rec"),
-             dashcam->isRecording() ? QStringLiteral("rec_start") : QStringLiteral("rec_stop"),
-             3000, false);
-    });
-    connect(dashcam, &DashcamRecorder::formatPromptOpenChanged, this, [this, dashcam] {
-        if (dashcam->formatPromptOpen() && dashcam->formatState() == QLatin1String("idle"))
-            fire(QStringLiteral("prompt"), QStringLiteral("prompt"), 2000, false);
-    });
-    connect(dashcam, &DashcamRecorder::formatStateChanged, this, [this, dashcam] {
-        const QString s = dashcam->formatState();
-        if (s == QLatin1String("succeeded"))
-            fire(QStringLiteral("format"), QStringLiteral("success"), 0, false);
-        else if (s == QLatin1String("failed"))
-            fire(QStringLiteral("format"), QStringLiteral("error"), 0, false);
-    });
 }
 
 bool SoundEvents::settled() const
@@ -143,15 +111,6 @@ void SoundEvents::pollBattery()
         m_battBadPolls = 0;
     if (m_battBadPolls >= kBatteryBadPolls)
         fire(QStringLiteral("battery"), QStringLiteral("warn"), kBatteryRepeatMs);
-}
-
-void SoundEvents::onDriveModeChanged()
-{
-    static const char *const kSounds[] = { "mode_valet", "mode_sport", "mode_sportplus", "mode_race" };
-    const int level = driveModeLevel(m_can->driveMode());
-    if (level < 0)
-        return;
-    fire(QStringLiteral("mode"), QLatin1String(kSounds[level]), 300);
 }
 
 void SoundEvents::tick(bool lit)

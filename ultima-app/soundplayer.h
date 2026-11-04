@@ -8,8 +8,8 @@
 #include <QWaitCondition>
 #include <thread>
 
-// Plays the dash's short alert/feedback sounds (warning alarms, drive-mode
-// chirps, turn-signal ticks, dashcam chimes) out of the HDMI audio path.
+// Plays the dash's short alert/feedback sounds (warning alarms,
+// turn-signal ticks) out of the HDMI audio path.
 //
 // Each sound name ("alarm", "tick", ...) is a WAV file, <name>.wav, looked up in
 // $ULTIMA_SOUND_DIR, /data/sounds (writable: swap a sound without a rebuild),

@@ -25,7 +25,7 @@ doesn't belong in the Yocto-specific notes. **Read `DASHCAM.md`** for the dash-c
 recording feature — continuous Wave5 hardware-H.264 recording of the camera streams
 to an auto-mounted USB drive: its design, the on-hardware encoder bring-up
 (`beagley-ai/wave5-enc/`), and milestones. **Read `SOUND.md`** for the alert sounds
-played over HDMI audio (warnings, drive mode, turn-signal ticks, dash-cam chimes): the
+played over HDMI audio (warnings and turn-signal ticks): the
 verified hardware path, the ALSA format constraints, and the event/sound table.
 
 ## Repo layout

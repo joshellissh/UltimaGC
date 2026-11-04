@@ -44,21 +44,6 @@ const QHash<QString, Notes> &library()
         l.insert("alarm", { {1300, 140}, {0, 80}, {1300, 140}, {0, 80}, {1300, 140} });
         l.insert("warn",  { {880, 120}, {0, 30}, {660, 200} });
 
-        // Drive mode: the number of beeps says which mode you landed in
-        // (VALET 1, SPORT 2, SPORT+ 3 rising, RACE 4 fast) — no need to look.
-        l.insert("mode_valet",     { {600, 100} });
-        l.insert("mode_sport",     { {800, 80}, {0, 70}, {800, 80} });
-        l.insert("mode_sportplus", { {800, 70}, {0, 50}, {1000, 70}, {0, 50}, {1200, 70} });
-        l.insert("mode_race",      { {1400, 55}, {0, 45}, {1400, 55}, {0, 45}, {1400, 55}, {0, 45}, {1400, 55} });
-
-        // Dashcam. Recording started rises, stopped falls; the "format this
-        // drive?" prompt is a double ping; success/error close the flow.
-        l.insert("rec_start", { {660, 90}, {880, 90}, {1100, 160} });
-        l.insert("rec_stop",  { {1100, 90}, {880, 90}, {660, 160} });
-        l.insert("prompt",    { {988, 100}, {0, 60}, {988, 100} });
-        l.insert("success",   { {784, 90}, {1047, 220} });
-        l.insert("error",     { {330, 120}, {0, 30}, {220, 300} });
-
         return l;
     }();
     return lib;

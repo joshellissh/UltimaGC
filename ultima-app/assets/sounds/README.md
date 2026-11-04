@@ -15,8 +15,4 @@ at a sensible peak level.
 |---|---|
 | `alarm.wav` | oil pressure / coolant warning (repeats every 4 s while active) |
 | `warn.wav` | battery, low fuel, check engine, ABS |
-| `mode_valet.wav` `mode_sport.wav` `mode_sportplus.wav` `mode_race.wav` | drive mode changed to that mode |
 | `tick.wav` `tock.wav` | turn signal / hazard, lit phase / dark phase (~14 ms each by default — keep them tiny) |
-| `rec_start.wav` `rec_stop.wav` | dashcam recording started / stopped |
-| `prompt.wav` | "format this drive?" dialog opened |
-| `success.wav` `error.wav` | drive format succeeded / failed |

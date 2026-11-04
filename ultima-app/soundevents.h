@@ -8,11 +8,10 @@
 #include <QTimer>
 
 class CanBus;
-class DashcamRecorder;
 class SoundPlayer;
 
 // Decides *when* the dash makes a sound; SoundPlayer decides how. Pure signal
-// wiring over existing objects — CanBus, DashcamRecorder and main.qml's window
+// wiring over existing objects — CanBus and main.qml's window
 // are observed, never modified — so a sound policy change lives here only.
 //
 //   warnings    oil pressure / coolant: "alarm" on the rising edge, repeated
@@ -21,11 +20,8 @@ class SoundPlayer;
 //               below 12.5 V at key-on and while cranking, which is not a
 //               fault). Low fuel (cooldown: the sender sloshes around the
 //               threshold), check engine, ABS: "warn" on the rising edge.
-//   drive mode  beep count = mode (see the mode_* sounds), on change.
 //   turn signal tick/tock off the QML blink clock (main.qml `blinkPhase`), so
 //               the sound is in step with the lit icon by construction.
-//   dashcam     recording started / stopped, "format this drive?" prompt,
-//               format succeeded / failed.
 //
 // CAN-derived sounds are held back for kSettleMs after launch: the app starts
 // with every flag false and the first CAN frames then flip several to their
@@ -35,13 +31,11 @@ class SoundEvents : public QObject
     Q_OBJECT
 public:
     // `window` is main.qml's root object (for blinkPhase); may be null.
-    SoundEvents(SoundPlayer *player, CanBus *can, DashcamRecorder *dashcam,
-                QObject *window, QObject *parent = nullptr);
+    SoundEvents(SoundPlayer *player, CanBus *can, QObject *window, QObject *parent = nullptr);
 
 private slots:
     void onBlinkPhase();
     void onIndicatorsChanged();
-    void onDriveModeChanged();
     void onBatteryWarnChanged();
     void pollBattery();
     void repeatAlarms();

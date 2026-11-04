@@ -212,8 +212,8 @@ int main(int argc, char *argv[])
     DashcamRecorder dashcam({ &cameraFeed1, &cameraFeed2, &cameraFeed3, &cameraFeed4 });
     dashcam.start();
 
-    // Alert sounds out of the HDMI audio path (warnings, drive mode, turn
-    // signal ticks, dashcam chimes). The player's worker thread opens ALSA
+    // Alert sounds out of the HDMI audio path (warnings, turn signal
+    // ticks). The player's worker thread opens ALSA
     // lazily on the first sound, so this costs nothing at boot; SoundEvents
     // (below, once the QML window exists) decides when to play what.
     SoundPlayer soundPlayer;
@@ -250,7 +250,7 @@ int main(int argc, char *argv[])
     // (main.qml). On the macOS/sim dev build dvrReady() is always false, so
     // dashcam.recording stays false and the badge is always shown.
     engine.rootContext()->setContextProperty("dashcam", &dashcam);
-    // For one-off sounds from QML: soundPlayer.play("success"). The automatic
+    // For one-off sounds from QML: soundPlayer.play("warn"). The automatic
     // ones are wired in C++ by SoundEvents, not here.
     engine.rootContext()->setContextProperty("soundPlayer", &soundPlayer);
     engine.rootContext()->setContextProperty("cameraFeed1", &cameraFeed1);
@@ -296,7 +296,7 @@ int main(int argc, char *argv[])
 
     // Sound policy: which event plays which sound (see soundevents.h). Needs
     // the root window for main.qml's blinkPhase turn-signal clock.
-    SoundEvents soundEvents(&soundPlayer, &canBus, &dashcam, rootWindow);
+    SoundEvents soundEvents(&soundPlayer, &canBus, rootWindow);
 
     std::atomic<bool> renderedOnce{false};
     std::atomic<bool> swappedOnce{false};
