@@ -149,10 +149,16 @@ public:
     // safety concern (this touches no bus, unlike the CAN1/CAN2 rules), and
     // it defeated the entire point of an on-board debug key: exercising the
     // overlay on real hardware without needing CAN connected. Ungated, this
-    // simply overwrites m_leftIndicator/m_rightIndicator the same way a real
-    // decodeFrame() DIN0/DIN1 update would — if real CAN is also connected
-    // and driving these at the same time, whichever writes last wins, same
-    // as any other debug override in this app (e.g. debugSetCameraGrid()).
+    // flips m_leftIndicator/m_rightIndicator like a real decodeFrame()
+    // DIN0/DIN1 update would. With CAN live the next MCE18 frame used to
+    // revert the flip within one frame period, so a press now also latches a
+    // manual override: decodeFrame() keeps tracking the real DIN level but
+    // does not apply it while the override is latched. The latch holds
+    // indefinitely (an earlier 10 s timeout was far too short for bench
+    // testing) and is released by the first real CAN *change* of that
+    // signal's level — a real stalk/hazard action always takes over — after
+    // which the signal follows CAN again. Repeated MCE18 frames carrying the
+    // same level do not release it.
     // debugToggleHazard() (main.qml's 'H' key) is the same pattern applied
     // to m_hazard/DIN7.
     Q_INVOKABLE void debugToggleLeftIndicator();
@@ -255,6 +261,21 @@ private:
     void accumulateOdometer();
     void closeSocket();
     void recordRawFrame(quint32 id, const quint8 *data, int dlc);
+
+    // Left / right / hazard: the visible level (what QML sees) vs the last
+    // level CAN reported, plus the debug-key override that can hold the
+    // visible level against CAN. See debugToggleLeftIndicator().
+    enum IndicatorId { IndLeft, IndRight, IndHazard, IndCount };
+    struct IndicatorSlot {
+        bool *level = nullptr;               // -> m_leftIndicator etc.
+        void (CanBus::*changed)() = nullptr; // its NOTIFY signal
+        bool canLevel = false;               // last level seen on CAN
+        bool overridden = false;             // debug-key latch, see above
+    };
+    IndicatorSlot m_ind[IndCount];
+    void setIndicatorLevel(int i, bool v);
+    void applyCanIndicator(int i, bool canLevel);
+    void toggleIndicatorOverride(int i);
 
     struct RawFrame {
         quint8 data[8] = {0};

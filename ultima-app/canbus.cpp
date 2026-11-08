@@ -67,6 +67,12 @@ CanBus::CanBus(OdoStore *odo, const QString &iface, QObject *parent)
         m_totalOdo = m_odo->totalOdo();
         m_tripOdo = m_odo->tripOdo();
     }
+    m_ind[IndLeft].level = &m_leftIndicator;
+    m_ind[IndLeft].changed = &CanBus::leftIndicatorChanged;
+    m_ind[IndRight].level = &m_rightIndicator;
+    m_ind[IndRight].changed = &CanBus::rightIndicatorChanged;
+    m_ind[IndHazard].level = &m_hazard;
+    m_ind[IndHazard].changed = &CanBus::hazardChanged;
     m_reconnectTimer.setInterval(1000);
     connect(&m_reconnectTimer, &QTimer::timeout, this, &CanBus::tryConnect);
     tryConnect();
@@ -513,12 +519,12 @@ void CanBus::decodeFrame(quint32 id, const quint8 *d, int dlc)
         bool highBeamsIn = dinMask & (1 << 4);
         bool hazardIn = dinMask & (1 << 7);
 
-        if (leftInd != m_leftIndicator) { m_leftIndicator = leftInd; emit leftIndicatorChanged(); }
-        if (rightInd != m_rightIndicator) { m_rightIndicator = rightInd; emit rightIndicatorChanged(); }
+        applyCanIndicator(IndLeft, leftInd);
+        applyCanIndicator(IndRight, rightInd);
         if (axleLiftIn != m_axleLift) { m_axleLift = axleLiftIn; emit axleLiftChanged(); }
         if (lowBeamsIn != m_lowBeams) { m_lowBeams = lowBeamsIn; emit lowBeamsChanged(); }
         if (highBeamsIn != m_highBeams) { m_highBeams = highBeamsIn; emit highBeamsChanged(); }
-        if (hazardIn != m_hazard) { m_hazard = hazardIn; emit hazardChanged(); }
+        applyCanIndicator(IndHazard, hazardIn);
         break;
     }
     default:
@@ -708,23 +714,43 @@ void CanBus::simulateTick()
 // flips, matching real CAN's DIN pass-through (decodeFrame()'s
 // kMce18Base+2 case) — the visible blink is synthesized from the level in
 // QML (main.qml's blinkTimer), not here.
-void CanBus::debugToggleLeftIndicator()
+void CanBus::setIndicatorLevel(int i, bool v)
 {
-    m_leftIndicator = !m_leftIndicator;
-    emit leftIndicatorChanged();
+    IndicatorSlot &s = m_ind[i];
+    if (*s.level == v)
+        return;
+    *s.level = v;
+    emit (this->*s.changed)();
 }
 
-void CanBus::debugToggleRightIndicator()
+// CAN side: always remember the real level. A debug-key latch holds the
+// visible level until CAN actually *changes* this signal (the real
+// stalk/hazard switch moved), then hands control back; repeats of the same
+// level — the normal MCE18 stream — never release it.
+void CanBus::applyCanIndicator(int i, bool canLevel)
 {
-    m_rightIndicator = !m_rightIndicator;
-    emit rightIndicatorChanged();
+    IndicatorSlot &s = m_ind[i];
+    const bool edge = canLevel != s.canLevel;
+    s.canLevel = canLevel;
+    if (s.overridden) {
+        if (!edge)
+            return;
+        s.overridden = false;
+    }
+    setIndicatorLevel(i, canLevel);
 }
 
-void CanBus::debugToggleHazard()
+// Debug-key side: flip the visible level and latch it so CAN can't revert it.
+void CanBus::toggleIndicatorOverride(int i)
 {
-    m_hazard = !m_hazard;
-    emit hazardChanged();
+    IndicatorSlot &s = m_ind[i];
+    s.overridden = true;
+    setIndicatorLevel(i, !*s.level);
 }
+
+void CanBus::debugToggleLeftIndicator()  { toggleIndicatorOverride(IndLeft); }
+void CanBus::debugToggleRightIndicator() { toggleIndicatorOverride(IndRight); }
+void CanBus::debugToggleHazard()         { toggleIndicatorOverride(IndHazard); }
 
 void CanBus::debugGearUp()
 {
