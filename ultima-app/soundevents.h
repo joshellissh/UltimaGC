@@ -45,7 +45,7 @@ private:
     // cooldownMs. canEvent sounds are dropped silently while CAN state is
     // still settling after launch — see the class comment.
     void fire(const QString &event, const QString &sound, qint64 cooldownMs = 0, bool canEvent = true);
-    void tick(bool lit);
+    void tick(bool lit, const char *src);
     bool settled() const;
     bool indicating() const;
 
@@ -58,6 +58,15 @@ private:
     QTimer m_batteryPoll;
     int m_battBadPolls = 0;
     qint64 m_lastTickMs = -1000;
+    bool m_lastTickLit = false;
+    bool m_prevIndicating = false;   // indicating() as of the last onIndicatorsChanged
+
+    // ULTIMA_SOUND_LOG=1: timestamped "[snd-t]" lines for each tick request
+    // and for GUI-thread stalls (a 10 ms heartbeat that reports lateness) —
+    // for diagnosing tick timing against the blink clock. Off by default.
+    bool m_log = false;
+    QTimer m_heartbeat;
+    qint64 m_hbLastMs = 0;
 };
 
 #endif // SOUNDEVENTS_H

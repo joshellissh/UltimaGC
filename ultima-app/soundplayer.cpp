@@ -1,5 +1,6 @@
 #include "soundplayer.h"
 
+#include <QDateTime>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QHash>
@@ -57,7 +58,6 @@ const QHash<QString, Notes> &library()
 constexpr unsigned kRate = 48000;
 constexpr int kChunkMs = 20;          // silence-feed granularity (= worst-case start latency on top of the ALSA buffer)
 constexpr int kLeadInMs = 250;        // silent lead-in on a freshly opened stream (HDMI sink relock)
-constexpr int kIdleCloseMs = 4000;    // keep the stream alive this long after the last sound
 constexpr unsigned kLatencyUs = 80000;
 constexpr qint64 kRetryOpenMs = 2000; // don't hammer a missing card
 
@@ -227,19 +227,23 @@ std::vector<int32_t> loadSound(const QString &name, float volume)
     return render(library().value(name), volume);
 }
 
-snd_pcm_t *openPcm(const QString &device)
+// quiet: no error log — used by the background warm-up, which retries every
+// couple of seconds until the card shows up and shouldn't flood the journal.
+snd_pcm_t *openPcm(const QString &device, bool quiet)
 {
     snd_pcm_t *pcm = nullptr;
     const QByteArray dev = device.toLocal8Bit();
     int err = snd_pcm_open(&pcm, dev.constData(), SND_PCM_STREAM_PLAYBACK, 0);
     if (err < 0) {
-        fprintf(stderr, "[sound] snd_pcm_open(%s) failed: %s\n", dev.constData(), snd_strerror(err));
+        if (!quiet)
+            fprintf(stderr, "[sound] snd_pcm_open(%s) failed: %s\n", dev.constData(), snd_strerror(err));
         return nullptr;
     }
     err = snd_pcm_set_params(pcm, SND_PCM_FORMAT_S32_LE, SND_PCM_ACCESS_RW_INTERLEAVED,
                              2, kRate, 1 /* soft resample */, kLatencyUs);
     if (err < 0) {
-        fprintf(stderr, "[sound] snd_pcm_set_params(%s) failed: %s\n", dev.constData(), snd_strerror(err));
+        if (!quiet)
+            fprintf(stderr, "[sound] snd_pcm_set_params(%s) failed: %s\n", dev.constData(), snd_strerror(err));
         snd_pcm_close(pcm);
         return nullptr;
     }
@@ -285,6 +289,7 @@ SoundPlayer::SoundPlayer(QObject *parent)
     if (ok)
         m_volume = std::min(1.0f, std::max(0.0f, vol));
     m_device = qEnvironmentVariable("ULTIMA_SOUND_DEVICE", QStringLiteral("default"));
+    m_log = qEnvironmentVariableIntValue("ULTIMA_SOUND_LOG") != 0;
 
 #ifdef ULTIMA_ALSA
     if (m_enabled)
@@ -310,7 +315,7 @@ QStringList SoundPlayer::names()
     return l;
 }
 
-void SoundPlayer::play(const QString &name)
+void SoundPlayer::play(const QString &name, int maxAgeMs)
 {
     if (!m_enabled)
         return;
@@ -323,11 +328,16 @@ void SoundPlayer::play(const QString &name)
         QMutexLocker lock(&m_mutex);
         if (m_queue.size() >= 4)
             return;             // backed up: drop rather than play stale
-        m_queue.enqueue(name);
+        Request r;
+        r.name = name;
+        r.maxAgeMs = maxAgeMs;
+        r.age.start();
+        m_queue.enqueue(r);
     }
     m_cond.wakeOne();
 #else
     // macOS / WSL dev builds: no ALSA — just say what would have played.
+    Q_UNUSED(maxAgeMs);
     if (qEnvironmentVariableIntValue("ULTIMA_SOUND_LOG"))
         fprintf(stderr, "[sound] (no ALSA in this build) %s\n", qPrintable(name));
 #endif
@@ -337,25 +347,52 @@ void SoundPlayer::run()
 {
 #ifdef ULTIMA_ALSA
     snd_pcm_t *pcm = nullptr;
-    QElapsedTimer lastActive;
     QElapsedTimer lastOpenFail;
     QHash<QString, std::vector<int32_t>> cache;
     const std::vector<int32_t> silence(size_t(kRate) * kChunkMs / 1000 * 2, 0);
     const std::vector<int32_t> leadIn(size_t(kRate) * kLeadInMs / 1000 * 2, 0);
 
+    // Open the stream (throttled after a failure) and give it its silent
+    // lead-in. Returns false if there is no stream afterwards.
+    auto ensureOpen = [&](bool quiet) -> bool {
+        if (pcm)
+            return true;
+        if (lastOpenFail.isValid() && !lastOpenFail.hasExpired(kRetryOpenMs))
+            return false;
+        pcm = openPcm(m_device, quiet);
+        if (!pcm) {
+            lastOpenFail.restart();
+            return false;
+        }
+        lastOpenFail.invalidate();
+        fprintf(stderr, "[sound] opened %s\n", qPrintable(m_device));
+        if (!writeFrames(pcm, leadIn.data(), leadIn.size() / 2)) {
+            closePcm(pcm, false);
+            return false;
+        }
+        return true;
+    };
+
     for (;;) {
         QString name;
+        qint64 waitedMs = 0;
         {
             QMutexLocker lock(&m_mutex);
-            // Stream closed and nothing to play: sleep until a request.
+            // Stream closed and nothing to play: sleep until a request, or
+            // until it is time to retry the background warm-up open below.
             // (While the stream is open the loop must keep feeding silence,
             // so it never waits.)
             if (!m_stop && m_queue.isEmpty() && !pcm)
-                m_cond.wait(&m_mutex);
+                m_cond.wait(&m_mutex, static_cast<unsigned long>(kRetryOpenMs));
             if (m_stop)
                 break;
-            if (!m_queue.isEmpty())
-                name = m_queue.dequeue();
+            if (!m_queue.isEmpty()) {
+                const Request r = m_queue.dequeue();
+                if (r.maxAgeMs >= 0 && r.age.elapsed() > r.maxAgeMs)
+                    continue;   // stale (worker was stalled): skip rather than play late
+                name = r.name;
+                waitedMs = r.age.elapsed();
+            }
         }
 
         if (!name.isEmpty()) {
@@ -363,28 +400,30 @@ void SoundPlayer::run()
             if (it == cache.end())
                 it = cache.insert(name, loadSound(name, m_volume));
 
-            if (!pcm) {
-                if (lastOpenFail.isValid() && !lastOpenFail.hasExpired(kRetryOpenMs))
-                    continue;   // card still absent; drop this one quietly
-                pcm = openPcm(m_device);
-                if (!pcm) {
-                    lastOpenFail.restart();
-                    continue;
-                }
-                lastOpenFail.invalidate();
-                fprintf(stderr, "[sound] opened %s\n", qPrintable(m_device));
-                if (!writeFrames(pcm, leadIn.data(), leadIn.size() / 2)) {
-                    closePcm(pcm, false);
-                    continue;
-                }
-            }
+            if (!pcm && !ensureOpen(false))
+                continue;       // card still absent; drop this one quietly
+            if (m_log)
+                fprintf(stderr, "[snd-t] t=%lld write %s (queued %lld ms)\n",
+                        qint64(QDateTime::currentMSecsSinceEpoch() % 1000000),
+                        qPrintable(name), waitedMs);
             if (!writeFrames(pcm, it->data(), it->size() / 2))
                 closePcm(pcm, false);
-            lastActive.restart();
-        } else if (pcm) {
-            if (lastActive.hasExpired(kIdleCloseMs))
-                closePcm(pcm, true);
-            else if (!writeFrames(pcm, silence.data(), silence.size() / 2))
+        } else if (!pcm) {
+            // Warm-up: nothing to play and no stream yet — open one in the
+            // background so the first real sound isn't the one that pays for
+            // the HDMI codec's cold start (snd_pcm_prepare takes ~2 s after
+            // the card has been idle; measured on the board). Until the audio
+            // modules load (udev coldplug, after the first frame) this just
+            // fails quietly every kRetryOpenMs.
+            ensureOpen(true);
+        } else {
+            // The stream is deliberately never closed on idle: on this HDMI
+            // card the teardown (HW_FREE + close) takes 0.5-5 s, and doing it
+            // on this thread held up the next tick by that long, after which
+            // the backlog played as a rapid burst. The cost is that the HDMI
+            // audio link stays up (silence) from the warm-up open onwards.
+            // A write error still closes it (and the warm-up reopens).
+            if (!writeFrames(pcm, silence.data(), silence.size() / 2))
                 closePcm(pcm, false);
         }
     }

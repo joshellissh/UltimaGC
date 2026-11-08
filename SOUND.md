@@ -42,7 +42,16 @@ kernel/DT already registers it.
   mono/stereo and 8–96 kHz files (length, level and pitch all preserved). A worker
   thread owns ALSA (`libasound` directly, no QtMultimedia), so
   `play()` is safe from any thread and a stalled device can't hold up a frame.
-  - ALSA opens lazily on the first sound (zero boot cost) and closes after 4 s idle.
+  - The worker opens ALSA in the background as soon as the card exists (retrying
+    quietly every 2 s until the audio modules load) and then **keeps the stream
+    open**, fed with silence. Two measured reasons (`strace -T aplay`, journal):
+    starting a stream on a cold card takes ~2 s (`snd_pcm_prepare`), so opening on
+    the first sound made the first tick late; and teardown (`HW_FREE` + `close`)
+    takes 0.5-5 s, which — when it was done after 4 s idle — blocked the single
+    worker thread, so a blinker started just after the idle close sounded seconds
+    late and the queued ticks then played as a rapid burst. `SoundEvents` also passes
+    a 400 ms max age for ticks, so a stalled worker drops them instead of playing
+    them late. Cost: the HDMI audio link carries silence from boot onwards.
   - HDMI sinks mute/relock when a stream starts and clip the first ~100-250 ms. A fresh
     stream gets a 250 ms silent lead-in, and while open the worker feeds silence so a
     burst (ticks, a repeating alarm) isn't clipped. **Both numbers are a first guess —

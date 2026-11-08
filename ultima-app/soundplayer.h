@@ -1,6 +1,7 @@
 #ifndef SOUNDPLAYER_H
 #define SOUNDPLAYER_H
 
+#include <QElapsedTimer>
 #include <QObject>
 #include <QMutex>
 #include <QQueue>
@@ -26,13 +27,16 @@
 // S32_LE stereo, 32/48 kHz only — see beagley-ai/NOTES.md "HDMI audio"):
 //  - The sink mutes/relocks when the audio stream starts, clipping the first
 //    ~100-250 ms. A freshly opened stream therefore gets a short silent
-//    lead-in, and the stream is then kept alive by feeding silence for a few
-//    seconds after the last sound, so a burst of events (turn-signal ticks,
-//    a repeating alarm) is never clipped. The device is closed once idle, so
-//    the HDMI audio link is quiet when nothing is happening.
-//  - Nothing opens ALSA until the first sound, so this costs nothing at boot.
-//    If the sound card is not up yet (audio modules load at udev coldplug,
-//    after the first frame) the sound is dropped, not queued.
+//    lead-in, and the stream is then kept alive by feeding silence, so a
+//    burst of events (turn-signal ticks, a repeating alarm) is never clipped.
+//    It is never closed on idle: closing this card takes 0.5-5 s (HW_FREE +
+//    close) and, on the worker thread, held up the next tick that long —
+//    the backlog then played as a rapid burst.
+//  - Starting a stream on a cold card takes ~2 s (snd_pcm_prepare), so the
+//    worker opens it in the background as soon as the card exists (retrying
+//    every 2 s, quietly) rather than on the first sound. If a sound arrives
+//    before the card is up (audio modules load at udev coldplug, after the
+//    first frame) it is dropped, not queued.
 //
 // Compiled for real only when ULTIMA_ALSA is defined (qmake CONFIG+=
 // ultima_alsa, set by the Yocto recipe); everywhere else (macOS / WSL dev
@@ -54,8 +58,11 @@ public:
 
     // Queue the named sound. Unknown names and a disabled player are ignored;
     // at most a few sounds wait behind the one playing, extras are dropped
-    // (a stale tick is worse than no tick).
-    Q_INVOKABLE void play(const QString &name);
+    // (a stale tick is worse than no tick). maxAgeMs >= 0 additionally drops
+    // the request if the worker has not reached it within that many ms —
+    // for timing-critical sounds (turn-signal ticks) that would otherwise
+    // play late and bunch up behind a stalled device. -1 = never stale.
+    Q_INVOKABLE void play(const QString &name, int maxAgeMs = -1);
 
     // Every sound name play() accepts (for the test hook / docs).
     static QStringList names();
@@ -65,11 +72,17 @@ private:
 
     bool m_enabled = true;
     float m_volume = 0.6f;
+    bool m_log = false;             // ULTIMA_SOUND_LOG=1: "[snd-t]" timing lines
     QString m_device;
 
     QMutex m_mutex;
     QWaitCondition m_cond;
-    QQueue<QString> m_queue;
+    struct Request {
+        QString name;
+        int maxAgeMs = -1;
+        QElapsedTimer age;
+    };
+    QQueue<Request> m_queue;
     bool m_stop = false;
     std::thread m_thread;
 };
