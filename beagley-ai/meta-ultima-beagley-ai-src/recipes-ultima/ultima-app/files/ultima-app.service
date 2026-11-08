@@ -111,6 +111,9 @@ Environment=XDG_RUNTIME_DIR=/tmp/runtime
 # cover — most likely because not every built-in Qt Quick scenegraph
 # material routes through the cacheable shader path in this Qt version.
 Environment=XDG_CACHE_HOME=/data/qt-shader-cache
+# Alert-sound software gain, 0..1 (the HDMI card has no hardware mixer; the
+# app default is 0.6). See SOUND.md.
+Environment=ULTIMA_SOUND_VOLUME=0.4
 Restart=on-failure
 RestartSec=1
 StandardOutput=journal
